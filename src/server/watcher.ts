@@ -3,7 +3,7 @@ import { watch } from "chokidar";
 import type { AgentBoard, BoardCache } from "./cache.ts";
 import type { FleetEntry } from "./manifest.ts";
 import type { JournalEntry } from "./parsers/journal.ts";
-import { parseJournal } from "./parsers/journal.ts";
+import { deriveSummary, parseJournal } from "./parsers/journal.ts";
 import type { Challenge, ParseError } from "./parsers/ledger.ts";
 import { parseLedgerFile } from "./parsers/ledger.ts";
 
@@ -81,10 +81,17 @@ export async function scanAndUpdateAgent(
 ): Promise<void> {
   const { challenges, journalEntries, parseErrors } = await scanAgent(entry);
 
+  // ホバー要約（FR-08）: journal の該当課題への言及から導出して challenge に載せる。
+  // 導出の責務はこの合流点に一本化する（parser は素材、cache は格納に徹する）
+  const challengesWithSummary = challenges.map((challenge) => ({
+    ...challenge,
+    summary: deriveSummary(journalEntries, challenge.id),
+  }));
+
   cache.replaceAgent({
     name: entry.name,
     path: entry.path,
-    challenges,
+    challenges: challengesWithSummary,
     parseErrors,
   });
   cache.replaceJournal(entry.name, journalEntries);

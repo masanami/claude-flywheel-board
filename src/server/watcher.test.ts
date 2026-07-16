@@ -57,6 +57,27 @@ describe("scanAndUpdateAgent", () => {
       expect.objectContaining({ name: "agent-a", path: entry.path }),
     );
   });
+
+  it("journal に言及がある課題は snapshot の challenge.summary に直近の要約が載る（FR-08 ホバー要約の結線）", async () => {
+    const cache = createMemoryBoardCache();
+    const entry = { name: "agent-a", path: `${FIXTURES_ROOT}agent-a` };
+
+    await scanAndUpdateAgent(entry, cache);
+
+    const challenge = cache.getChallenge("agent-a", "C-100");
+    expect(challenge?.summary).toBe("未着手 → 着手中");
+  });
+
+  it("journal に言及がない課題の summary は undefined のまま", async () => {
+    const cache = createMemoryBoardCache();
+    const entry = { name: "agent-c", path: `${FIXTURES_ROOT}agent-c` };
+
+    await scanAndUpdateAgent(entry, cache);
+
+    const challenge = cache.getChallenge("agent-c", "C-300");
+    expect(challenge).toBeDefined();
+    expect(challenge?.summary).toBeUndefined();
+  });
 });
 
 describe("fullScan", () => {
