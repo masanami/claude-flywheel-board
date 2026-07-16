@@ -25,7 +25,8 @@
       "Bash(gh pr:*)",
       "Bash(gh api:*)",
       "Bash(gh repo view:*)",
-      "Bash(cd:*)"
+      "Bash(cd:*)",
+      "Bash(npm:*)"
     ],
     "deny": [
       "Bash(rm -rf:*)",
