@@ -1,7 +1,11 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentBoard, Challenge, ParseError } from "../board-types.ts";
 import { AgentColumn } from "./AgentColumn.tsx";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 function challenge(
   overrides: Partial<Challenge> & Pick<Challenge, "id">,
@@ -90,5 +94,27 @@ describe("AgentColumn", () => {
       screen.getByText("challenge-ledger.md:3 — 壊れている"),
     ).toBeInTheDocument();
     expect(screen.getByText("raw-line")).toBeInTheDocument();
+  });
+
+  it("カードをクリックすると対応するエージェント名で作業ログを取得する", async () => {
+    const fetchMock = vi.fn().mockReturnValue(new Promise(() => {}));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <AgentColumn
+        agent={agentBoard({
+          name: "medical",
+          challenges: [challenge({ id: "C-001", title: "対象タスク" })],
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("対象タスク"));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/log?agent=medical&challenge=C-001",
+      );
+    });
   });
 });
