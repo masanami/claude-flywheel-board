@@ -5,6 +5,8 @@ import { Hono } from "hono";
 import { attachWebSocketServer, registerApiRoutes } from "./api.ts";
 import type { BoardCache } from "./cache.ts";
 import { createMemoryBoardCache } from "./cache.ts";
+import { loadFleetManifest } from "./manifest.ts";
+import { fullScan, startFleetWatcher } from "./watcher.ts";
 
 // NFR-03 / クリティカル設計決定: サーバは 127.0.0.1 に固定バインドする。
 // 環境変数・起動引数など、外部からホストを上書きできる口は意図的に作らない。
@@ -55,10 +57,26 @@ if (isMainModule) {
       `claude-flywheel-board listening on http://${LISTEN_HOSTNAME}:${info.port}`,
     );
   });
-  attachWebSocketServer(server, cache);
+  const { broadcastAgentUpdate } = attachWebSocketServer(server, cache);
+
+  // fleet マニフェスト読込 → 起動時フルスキャンでキャッシュ構築 → watcher 起動
+  // （FR-06）。fleet.tsv 自体の不正（存在しない・書式違反）は起動を止める致命的
+  // エラーとして扱う（manifest.ts の既存方針）。個々の repo パス不存在等は
+  // scanAgent 側で ParseError 化され、この起動フローは止まらない。
+  const fleetEntries = loadFleetManifest();
+  await fullScan(fleetEntries, cache, broadcastAgentUpdate);
+  const fleetWatcher = startFleetWatcher(
+    fleetEntries,
+    cache,
+    broadcastAgentUpdate,
+  );
 
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.on(signal, () => {
+      // close() は chokidar ハンドルやタイマーの解放を待つ Promise を返すが、
+      // プロセスは直後の process.exit(0) で終了するため意図的に待たない
+      // （fire-and-forget）。OS 側でハンドルは回収されるため実害はない。
+      void fleetWatcher.close();
       server.close();
       process.exit(0);
     });
