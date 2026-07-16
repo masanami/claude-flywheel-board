@@ -1,9 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-
-function App() {
-  return <p>claude-flywheel-board</p>;
-}
+import { Board } from "./components/Board.tsx";
+import "./styles.css";
 
 const container = document.getElementById("root");
 if (!container) {
@@ -12,6 +10,6 @@ if (!container) {
 
 createRoot(container).render(
   <StrictMode>
-    <App />
+    <Board />
   </StrictMode>,
 );
