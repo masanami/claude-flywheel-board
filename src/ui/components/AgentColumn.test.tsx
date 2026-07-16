@@ -29,10 +29,12 @@ function agentBoard(overrides: Partial<AgentBoard> = {}): AgentBoard {
 }
 
 describe("AgentColumn", () => {
-  it("ヘッダにエージェント名のみを表示する", () => {
+  it("ヘッダにエージェント名のみを表示する（見出しレベル2）", () => {
     render(<AgentColumn agent={agentBoard({ name: "medical" })} />);
 
-    expect(screen.getByText("medical")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "medical", level: 2 }),
+    ).toBeInTheDocument();
   });
 
   it("challenges を渡された順にカードとして描画する（再ソートしない）", () => {
@@ -51,7 +53,7 @@ describe("AgentColumn", () => {
     expect(titles).toEqual(["2番目", "1番目"]);
   });
 
-  it("needsHuman な課題の前に「🔔 承認待ち」の小見出しを表示する", () => {
+  it("needsHuman な課題の前に「🔔 承認待ち」の小見出し（見出しレベル3）を表示する", () => {
     render(
       <AgentColumn
         agent={agentBoard({
@@ -63,7 +65,9 @@ describe("AgentColumn", () => {
       />,
     );
 
-    expect(screen.getByText("🔔 承認待ち")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "🔔 承認待ち", level: 3 }),
+    ).toBeInTheDocument();
   });
 
   it("needsHuman な課題が無い場合は小見出しを表示しない", () => {

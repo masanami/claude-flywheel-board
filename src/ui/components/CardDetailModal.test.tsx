@@ -227,7 +227,9 @@ describe("CardDetailModal", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("dialog"));
+    // dialog 要素自体は role="dialog"（オーバーレイ相当）を兼ねるため、
+    // 内側のコンテンツラッパーへのクリックであることを確認する。
+    fireEvent.click(screen.getByTestId("card-detail-content"));
 
     expect(onClose).not.toHaveBeenCalled();
   });
@@ -244,9 +246,9 @@ describe("CardDetailModal", () => {
       />,
     );
 
-    // テキスト選択のドラッグ操作等で mousedown はダイアログ内、
-    // click イベント自体はオーバーレイ上で確定するケースを模す。
-    fireEvent.mouseDown(screen.getByRole("dialog"));
+    // テキスト選択のドラッグ操作等で mousedown はダイアログ内コンテンツ、
+    // click イベント自体はオーバーレイ（dialog 自身）上で確定するケースを模す。
+    fireEvent.mouseDown(screen.getByTestId("card-detail-content"));
     fireEvent.click(screen.getByTestId("modal-overlay"));
 
     expect(onClose).not.toHaveBeenCalled();

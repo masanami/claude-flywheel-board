@@ -12,4 +12,48 @@ if (typeof document !== "undefined") {
   afterEach(() => {
     cleanup();
   });
+
+  // jsdom は HTMLDialogElement の showModal / close / ESC 自動クローズを
+  // 実装していない（2026-07 時点）。CardDetailModal は <dialog> + showModal()
+  // でネイティブのフォーカストラップ・ESC・背景 inert を得る設計のため、
+  // テスト環境限定で実ブラウザの挙動を模した最小限のポリフィルを当てる
+  // （本番コードには一切含めない・テストの土台のみに閉じる）。
+  if (
+    typeof HTMLDialogElement !== "undefined" &&
+    typeof HTMLDialogElement.prototype.showModal !== "function"
+  ) {
+    const escapeHandlers = new WeakMap<
+      HTMLDialogElement,
+      (event: KeyboardEvent) => void
+    >();
+
+    HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) {
+      this.setAttribute("open", "");
+      const focusable = this.querySelector<HTMLElement>(
+        "button, [href], input, select, textarea, [tabindex]",
+      );
+      (focusable ?? this).focus();
+
+      const handleKeyDown = (event: KeyboardEvent) => {
+        if (event.key === "Escape") {
+          this.close();
+        }
+      };
+      escapeHandlers.set(this, handleKeyDown);
+      document.addEventListener("keydown", handleKeyDown);
+    };
+
+    HTMLDialogElement.prototype.close = function (this: HTMLDialogElement) {
+      if (!this.hasAttribute("open")) {
+        return;
+      }
+      this.removeAttribute("open");
+      const handleKeyDown = escapeHandlers.get(this);
+      if (handleKeyDown) {
+        document.removeEventListener("keydown", handleKeyDown);
+        escapeHandlers.delete(this);
+      }
+      this.dispatchEvent(new Event("close"));
+    };
+  }
 }

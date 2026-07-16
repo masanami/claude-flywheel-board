@@ -171,6 +171,30 @@ export function startFleetWatcher(
 
   const debounceTimers = new Map<string, NodeJS.Timeout>();
 
+  // エージェント単位の直列化キュー: debounce 再スキャン・低頻度フル再スキャン・
+  // ready 後の整合スキャンが同一エージェントに対して並行実行されると、
+  // 先に始まった（が遅く終わる）古いスキャンの結果が後発の新しいスキャンの結果を
+  // 上書きしてしまう恐れがある。エージェント名ごとに Promise チェーンを保持し、
+  // 常に「前のスキャンが完了してから次のスキャンを開始する」ことで直列化する。
+  const scanQueues = new Map<string, Promise<void>>();
+
+  function enqueueScan(entry: FleetEntry): Promise<void> {
+    const previous = scanQueues.get(entry.name) ?? Promise.resolve();
+    const next = previous
+      .catch(() => {
+        // 前段の失敗はここで握り潰し、キューを止めない（下の catch で必ずログ済み）。
+      })
+      .then(() => scanAndUpdateAgent(entry, cache, onAgentUpdate))
+      .catch((error: unknown) => {
+        console.error(
+          `[watcher] ${entry.name} のスキャンに失敗しました:`,
+          error,
+        );
+      });
+    scanQueues.set(entry.name, next);
+    return next;
+  }
+
   function scheduleRescan(entry: FleetEntry): void {
     const existingTimer = debounceTimers.get(entry.name);
     if (existingTimer) {
@@ -178,7 +202,7 @@ export function startFleetWatcher(
     }
     const timer = setTimeout(() => {
       debounceTimers.delete(entry.name);
-      void scanAndUpdateAgent(entry, cache, onAgentUpdate);
+      void enqueueScan(entry);
     }, debounceMs);
     debounceTimers.set(entry.name, timer);
   }
@@ -201,9 +225,19 @@ export function startFleetWatcher(
   chokidarWatcher.on("add", handleFsEvent);
   chokidarWatcher.on("change", handleFsEvent);
   chokidarWatcher.on("unlink", handleFsEvent);
+  // chokidar は ignoreInitial: true のため、起動〜ready までに生じた変更が
+  // 見逃される可能性がある（ready 到達までのイベントは初期化中として扱われる）。
+  // ready 後に全 repo を1回スキャンし、見逃しがあっても整合させる。
+  chokidarWatcher.on("ready", () => {
+    for (const entry of entries) {
+      void enqueueScan(entry);
+    }
+  });
 
   const rescanInterval = setInterval(() => {
-    void fullScan(entries, cache, onAgentUpdate);
+    for (const entry of entries) {
+      void enqueueScan(entry);
+    }
   }, fullRescanIntervalMs);
   // board 停止（プロセス終了）を interval が妨げないようにする。
   rescanInterval.unref();
@@ -216,6 +250,8 @@ export function startFleetWatcher(
       }
       debounceTimers.clear();
       await chokidarWatcher.close();
+      // 実行中（キュー待ち含む）のスキャンがすべて完了してから resolve する。
+      await Promise.all(scanQueues.values());
     },
   };
 }

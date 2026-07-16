@@ -67,14 +67,37 @@ const TOUCHED_ISSUE_FIELDS = ["id", "from", "to"] as const;
 const DELEGATION_FIELDS = ["repo", "skill", "session_id", "result"] as const;
 const PENDING_APPROVAL_FIELDS = ["gate", "issue", "summary"] as const;
 
+// date は "YYYY-MM-DD"（ゼロ埋め必須）かつ実在するカレンダー日付のみを受理する
+// （claude-flywheel 側 journal スキーマの正本仕様）。
+const DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+function isValidCalendarDate(value: string): boolean {
+  const match = value.match(DATE_PATTERN);
+  if (!match) {
+    return false;
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (month < 1 || month > 12) {
+    return false;
+  }
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  );
+}
+
 function validateJournalEntry(value: unknown): string | undefined {
   if (typeof value !== "object" || value === null) {
     return "journal entry は JSON オブジェクトである必要があります";
   }
   const record = value as Record<string, unknown>;
 
-  if (typeof record.date !== "string" || record.date === "") {
-    return "date は空でない string である必要があります";
+  if (typeof record.date !== "string" || !isValidCalendarDate(record.date)) {
+    return "date は YYYY-MM-DD 形式の実在するカレンダー日付である必要があります";
   }
   if (typeof record.seq !== "number") {
     return "seq は number である必要があります";

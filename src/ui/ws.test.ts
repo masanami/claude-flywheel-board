@@ -145,6 +145,105 @@ describe("connectBoardSocket", () => {
     expect(onAgentUpdate).not.toHaveBeenCalled();
   });
 
+  it("snapshot メッセージで board.agents が配列でない場合は無視する", () => {
+    const onSnapshot = vi.fn();
+    const onAgentUpdate = vi.fn();
+
+    connectBoardSocket({
+      url: "ws://localhost:1234/ws",
+      onSnapshot,
+      onAgentUpdate,
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+    });
+
+    const socket = FakeWebSocket.instances[0];
+    socket?.dispatch("message", {
+      data: JSON.stringify({
+        type: "snapshot",
+        board: { agents: "not-array" },
+      }),
+    });
+
+    expect(onSnapshot).not.toHaveBeenCalled();
+    expect(onAgentUpdate).not.toHaveBeenCalled();
+  });
+
+  it("agent_update メッセージで agent.name が文字列でない場合は無視する", () => {
+    const onSnapshot = vi.fn();
+    const onAgentUpdate = vi.fn();
+
+    connectBoardSocket({
+      url: "ws://localhost:1234/ws",
+      onSnapshot,
+      onAgentUpdate,
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+    });
+
+    const socket = FakeWebSocket.instances[0];
+    socket?.dispatch("message", {
+      data: JSON.stringify({
+        type: "agent_update",
+        agent: { name: 42, path: "/x", challenges: [], parseErrors: [] },
+      }),
+    });
+
+    expect(onAgentUpdate).not.toHaveBeenCalled();
+  });
+
+  it("agent_update メッセージで challenges が配列でない場合は無視する", () => {
+    const onSnapshot = vi.fn();
+    const onAgentUpdate = vi.fn();
+
+    connectBoardSocket({
+      url: "ws://localhost:1234/ws",
+      onSnapshot,
+      onAgentUpdate,
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+    });
+
+    const socket = FakeWebSocket.instances[0];
+    socket?.dispatch("message", {
+      data: JSON.stringify({
+        type: "agent_update",
+        agent: {
+          name: "medical",
+          path: "/x",
+          challenges: "not-array",
+          parseErrors: [],
+        },
+      }),
+    });
+
+    expect(onAgentUpdate).not.toHaveBeenCalled();
+  });
+
+  it("agent_update メッセージで parseErrors が配列でない場合は無視する", () => {
+    const onSnapshot = vi.fn();
+    const onAgentUpdate = vi.fn();
+
+    connectBoardSocket({
+      url: "ws://localhost:1234/ws",
+      onSnapshot,
+      onAgentUpdate,
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+    });
+
+    const socket = FakeWebSocket.instances[0];
+    socket?.dispatch("message", {
+      data: JSON.stringify({
+        type: "agent_update",
+        agent: {
+          name: "medical",
+          path: "/x",
+          challenges: [],
+          parseErrors: "not-array",
+        },
+      }),
+    });
+
+    expect(onAgentUpdate).not.toHaveBeenCalled();
+  });
+
   it("未知の type のメッセージは無視する", () => {
     const onSnapshot = vi.fn();
     const onAgentUpdate = vi.fn();

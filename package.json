@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "engines": {
+    "node": ">=22.18.0"
+  },
   "scripts": {
     "dev": "concurrently -n server,ui -c blue,green \"npm:dev:server\" \"npm:dev:ui\"",
     "dev:server": "node --watch src/server/index.ts",

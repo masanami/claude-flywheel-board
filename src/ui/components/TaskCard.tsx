@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useRef, useState } from "react";
 import type { Challenge } from "../board-types.ts";
 import { CardDetailModal } from "./CardDetailModal.tsx";
 
@@ -13,6 +13,8 @@ type TaskCardProps = {
 export function TaskCard({ challenge, agentName }: TaskCardProps) {
   const [isTooltipVisible, setIsTooltipVisible] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const tooltipId = useId();
 
   const showTooltip = () => {
     if (challenge.summary) {
@@ -22,14 +24,24 @@ export function TaskCard({ challenge, agentName }: TaskCardProps) {
   const hideTooltip = () => setIsTooltipVisible(false);
 
   const openModal = () => setIsModalOpen(true);
-  const closeModal = () => setIsModalOpen(false);
+  // モーダルを閉じる3経路（閉じるボタン / ESC / バックドロップクリック）は
+  // すべて CardDetailModal の onClose 経由でここへ集約されるため、
+  // トリガー（このカード）へのフォーカス復帰も一箇所にまとめられる。
+  const closeModal = () => {
+    setIsModalOpen(false);
+    triggerRef.current?.focus();
+  };
+
+  const tooltipVisible = isTooltipVisible && Boolean(challenge.summary);
 
   return (
     <>
       <button
+        ref={triggerRef}
         type="button"
         className="task-card"
         data-needs-human={challenge.needsHuman || undefined}
+        aria-describedby={tooltipVisible ? tooltipId : undefined}
         onMouseEnter={showTooltip}
         onMouseLeave={hideTooltip}
         onFocus={showTooltip}
@@ -56,8 +68,8 @@ export function TaskCard({ challenge, agentName }: TaskCardProps) {
             </span>
           )}
         </div>
-        {isTooltipVisible && challenge.summary && (
-          <div className="task-card-tooltip" role="tooltip">
+        {tooltipVisible && (
+          <div id={tooltipId} className="task-card-tooltip" role="tooltip">
             {challenge.summary}
           </div>
         )}

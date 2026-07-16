@@ -25,18 +25,39 @@ type IncomingMessage =
   | { type: "snapshot"; board: BoardSnapshot }
   | { type: "agent_update"; agent: AgentBoard };
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// type 判別だけでなくペイロードの形も検証し、不正なメッセージは破棄する
+// （型アサーションだけに頼らず実行時に確認する）。
+function isValidBoardSnapshot(value: unknown): value is BoardSnapshot {
+  return isPlainObject(value) && Array.isArray(value.agents);
+}
+
+function isValidAgentBoard(value: unknown): value is AgentBoard {
+  return (
+    isPlainObject(value) &&
+    typeof value.name === "string" &&
+    Array.isArray(value.challenges) &&
+    Array.isArray(value.parseErrors)
+  );
+}
+
 function parseMessage(data: unknown): IncomingMessage | undefined {
   if (typeof data !== "string") {
     return undefined;
   }
   try {
-    const parsed = JSON.parse(data);
-    if (
-      parsed &&
-      typeof parsed === "object" &&
-      (parsed.type === "snapshot" || parsed.type === "agent_update")
-    ) {
-      return parsed as IncomingMessage;
+    const parsed: unknown = JSON.parse(data);
+    if (!isPlainObject(parsed)) {
+      return undefined;
+    }
+    if (parsed.type === "snapshot" && isValidBoardSnapshot(parsed.board)) {
+      return { type: "snapshot", board: parsed.board };
+    }
+    if (parsed.type === "agent_update" && isValidAgentBoard(parsed.agent)) {
+      return { type: "agent_update", agent: parsed.agent };
     }
     return undefined;
   } catch {

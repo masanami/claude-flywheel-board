@@ -19,9 +19,7 @@ export function AgentColumn({ agent }: AgentColumnProps) {
         {agent.challenges.map((challenge, index) => (
           <div key={challenge.id}>
             {index === firstNeedsHumanIndex && (
-              <div className="agent-column-needs-human-heading">
-                🔔 承認待ち
-              </div>
+              <h3 className="agent-column-needs-human-heading">🔔 承認待ち</h3>
             )}
             <TaskCard challenge={challenge} agentName={agent.name} />
           </div>

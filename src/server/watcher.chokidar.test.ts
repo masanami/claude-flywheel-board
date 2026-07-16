@@ -200,6 +200,37 @@ describe("startFleetWatcher", () => {
     expect(onAgentUpdate).not.toHaveBeenCalled();
   });
 
+  it("ready イベント発火後、全 repo を1回スキャンする（ignoreInitial による起動直後の変更漏れの整合対策）", async () => {
+    const fake = mockChokidarWatch();
+    const cache = createMemoryBoardCache();
+    const onAgentUpdate = vi.fn();
+
+    const fleetWatcher = startFleetWatcher(
+      [agentA, agentB],
+      cache,
+      onAgentUpdate,
+      { debounceMs: 10, fullRescanIntervalMs: 10 * 60 * 1000 },
+    );
+
+    expect(onAgentUpdate).not.toHaveBeenCalled();
+
+    fake.emit("ready");
+
+    await waitUntil(() => onAgentUpdate.mock.calls.length >= 2);
+
+    expect(
+      onAgentUpdate.mock.calls.map((call) => call[0]?.name).sort(),
+    ).toEqual(["agent-a", "agent-b"]);
+    expect(
+      cache
+        .getSnapshot()
+        .agents.map((a) => a.name)
+        .sort(),
+    ).toEqual(["agent-a", "agent-b"]);
+
+    await fleetWatcher.close();
+  });
+
   it("chokidar の error イベントを受けても例外を投げない（監視失敗が起動全体を止めない）", () => {
     const fake = mockChokidarWatch();
     const cache = createMemoryBoardCache();

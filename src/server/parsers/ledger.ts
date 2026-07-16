@@ -37,11 +37,15 @@ export type ParseError = {
 };
 
 const HEADER_PATTERN = /^###\s*\[([^\]]*)\]\s*(.*)$/;
-const FENCE_PATTERN = /^\s*```/;
+// フェンス開始/終了行の判定に使う: バッククォート3連以上、または波ダッシュ3連以上。
+// キャプチャした文字列の先頭文字（記号）と長さから、閉じ判定（同じ記号・開始以上の長さ）を行う。
+const FENCE_LINE_PATTERN = /^\s*(`{3,}|~{3,})/;
 // 分類欄フィールド行: 行頭 `- key: value`（インデントなし）。
 // 承認チェックボックス行（`  - [ ] ...`）は2階層インデントのため、この正規表現には一致しない。
 const FIELD_LINE_PATTERN = /^- ([^:]+): ?(.*)$/;
-const CHALLENGE_ID_PATTERN = /^C-\d+$/;
+// 課題ID: "C-<数字>" を基本形とし、"C-002-4" のような枝番（ハイフン区切りの追加数字）も
+// 許可する（claude-flywheel 側 journal サンプルに階層課題IDの実例が存在するため）。
+const CHALLENGE_ID_PATTERN = /^C-\d+(?:-\d+)*$/;
 
 type PendingEntry = {
   line: number;
@@ -70,7 +74,8 @@ export function parseLedger(
   const errors: ParseError[] = [];
   const lines = content.split(/\r?\n/);
 
-  let inFence = false;
+  // 現在開いているフェンスの記号（`か~）と長さ。null なら非フェンス中。
+  let fence: { char: string; length: number } | null = null;
   let current: PendingEntry | null = null;
 
   const flush = () => {
@@ -127,11 +132,22 @@ export function parseLedger(
     const line = lines[i] ?? "";
     const lineNo = i + 1;
 
-    if (FENCE_PATTERN.test(line)) {
-      inFence = !inFence;
+    const fenceMatch = line.match(FENCE_LINE_PATTERN);
+    if (fence) {
+      // フェンス中: 同じ記号かつ開始以上の長さのフェンス行だけが閉じフェンスとして扱われる。
+      // それ以外（別記号・より短い入れ子フェンス・通常行）はすべてフェンス内容として無視する。
+      if (
+        fenceMatch &&
+        fenceMatch[1]?.[0] === fence.char &&
+        fenceMatch[1].length >= fence.length
+      ) {
+        fence = null;
+      }
       continue;
     }
-    if (inFence) {
+    if (fenceMatch) {
+      const marker = fenceMatch[1] ?? "";
+      fence = { char: marker[0] ?? "`", length: marker.length };
       continue;
     }
 

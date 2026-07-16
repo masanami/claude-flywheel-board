@@ -66,6 +66,27 @@ describe("parseJournal", () => {
     expect(errors).toEqual([]);
     expect(entries).toHaveLength(2);
   });
+
+  it("date がゼロ埋めされていない形式（2026-7-2）は ParseError になる", async () => {
+    const { entries, errors } = await parseJournal(
+      fixture("invalid-date-index.jsonl"),
+    );
+
+    expect(entries).toHaveLength(0);
+    expect(errors).toHaveLength(2);
+    expect(errors[0]?.raw).toContain("2026-7-2");
+    expect(errors[0]?.message).toMatch(/date/);
+  });
+
+  it("date がカレンダー上存在しない日付（2026-13-99）は ParseError になる", async () => {
+    const { entries, errors } = await parseJournal(
+      fixture("invalid-date-index.jsonl"),
+    );
+
+    expect(entries).toHaveLength(0);
+    expect(errors[1]?.raw).toContain("2026-13-99");
+    expect(errors[1]?.message).toMatch(/date/);
+  });
 });
 
 describe("deriveLogEntries", () => {

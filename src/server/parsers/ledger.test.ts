@@ -94,6 +94,94 @@ describe("parseLedger", () => {
     expect(result.challenges).toHaveLength(1);
     expect(result.challenges[0]?.id).toBe("C-100");
   });
+
+  function minimalEntry(idRaw: string): string {
+    return [
+      `### [${idRaw}] 階層IDのテスト`,
+      "",
+      "**分類欄（エージェントが記入）**",
+      "- ステータス: 未分類",
+      "",
+    ].join("\n");
+  }
+
+  it("階層課題ID（C-002-4 のような枝番付き）を valid として受理する", () => {
+    const content = minimalEntry("C-002-4");
+
+    const result = parseLedger(content, "hierarchical.md");
+
+    expect(result.errors).toEqual([]);
+    expect(result.challenges).toHaveLength(1);
+    expect(result.challenges[0]?.id).toBe("C-002-4");
+  });
+
+  it('id が "C-" のみ（数字なし）の場合は引き続き ParseError になる', () => {
+    const content = minimalEntry("C-");
+
+    const result = parseLedger(content, "invalid-id.md");
+
+    expect(result.challenges).toEqual([]);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]?.message).toMatch(/id が不正です/);
+  });
+
+  it('id が "C-a"（数字以外を含む）の場合は引き続き ParseError になる', () => {
+    const content = minimalEntry("C-a");
+
+    const result = parseLedger(content, "invalid-id.md");
+
+    expect(result.challenges).toEqual([]);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]?.message).toMatch(/id が不正です/);
+  });
+
+  it("4連バッククォートのフェンス内にある3連バッククォート＋見出し行を課題として誤検出しない（フェンスの記号・長さ一致判定）", () => {
+    const content = [
+      "# 課題台帳",
+      "",
+      "````",
+      "```",
+      "### [C-999] フェンス内で誤検出されてはいけない見出し",
+      "```",
+      "````",
+      "",
+      "### [C-100] フェンスの外にある実データ",
+      "",
+      "**分類欄（エージェントが記入）**",
+      "- ステータス: 未分類",
+      "",
+    ].join("\n");
+
+    const result = parseLedger(content, "nested-fence.md");
+
+    expect(result.errors).toEqual([]);
+    expect(result.challenges).toHaveLength(1);
+    expect(result.challenges[0]?.id).toBe("C-100");
+  });
+
+  it("~~~ フェンスも同条件（同じ記号かつ開始以上の長さ）で閉じ判定する", () => {
+    const content = [
+      "# 課題台帳",
+      "",
+      "~~~~",
+      "~~~",
+      "### [C-888] フェンス内で誤検出されてはいけない見出し",
+      "~~~",
+      "~~~~",
+      "",
+      "### [C-100] フェンスの外にある実データ",
+      "",
+      "**分類欄（エージェントが記入）**",
+      "- ステータス: 未分類",
+      "",
+    ].join("\n");
+
+    const result = parseLedger(content, "nested-tilde-fence.md");
+
+    expect(result.errors).toEqual([]);
+    expect(result.challenges).toHaveLength(1);
+    expect(result.challenges[0]?.id).toBe("C-100");
+  });
 });
 
 describe("parseLedgerFile", () => {

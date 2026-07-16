@@ -139,6 +139,30 @@ describe("TaskCard", () => {
 
       expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
     });
+
+    it("ツールチップの id をカードの aria-describedby で参照する", () => {
+      render(
+        <TaskCard
+          challenge={challenge({ summary: "直近の作業要約" })}
+          agentName="medical"
+        />,
+      );
+
+      const card = screen.getByText("課題タイトル").closest(".task-card");
+      if (!card) throw new Error("task-card が見つかりません");
+
+      expect(card).not.toHaveAttribute("aria-describedby");
+
+      fireEvent.mouseEnter(card);
+
+      const tooltip = screen.getByRole("tooltip");
+      expect(tooltip.id).not.toBe("");
+      expect(card).toHaveAttribute("aria-describedby", tooltip.id);
+
+      fireEvent.mouseLeave(card);
+
+      expect(card).not.toHaveAttribute("aria-describedby");
+    });
   });
 
   describe("詳細モーダルを開く操作", () => {
@@ -174,6 +198,51 @@ describe("TaskCard", () => {
       fireEvent.click(screen.getByRole("button", { name: "閉じる" }));
 
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("閉じるボタンでモーダルを閉じるとトリガーのカードへフォーカスが戻る", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+
+      render(<TaskCard challenge={challenge()} agentName="medical" />);
+
+      const card = screen.getByText("課題タイトル").closest(".task-card");
+      if (!card) throw new Error("task-card が見つかりません");
+
+      fireEvent.click(card);
+      fireEvent.click(screen.getByRole("button", { name: "閉じる" }));
+
+      expect(card).toHaveFocus();
+    });
+
+    it("ESC キーでモーダルを閉じるとトリガーのカードへフォーカスが戻る", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+
+      render(<TaskCard challenge={challenge()} agentName="medical" />);
+
+      const card = screen.getByText("課題タイトル").closest(".task-card");
+      if (!card) throw new Error("task-card が見つかりません");
+
+      fireEvent.click(card);
+      fireEvent.keyDown(document, { key: "Escape" });
+
+      expect(card).toHaveFocus();
+    });
+
+    it("バックドロップクリックでモーダルを閉じるとトリガーのカードへフォーカスが戻る", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+
+      render(<TaskCard challenge={challenge()} agentName="medical" />);
+
+      const card = screen.getByText("課題タイトル").closest(".task-card");
+      if (!card) throw new Error("task-card が見つかりません");
+
+      fireEvent.click(card);
+
+      const overlay = screen.getByTestId("modal-overlay");
+      fireEvent.mouseDown(overlay);
+      fireEvent.click(overlay);
+
+      expect(card).toHaveFocus();
     });
   });
 });
