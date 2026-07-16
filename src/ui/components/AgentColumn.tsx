@@ -23,7 +23,7 @@ export function AgentColumn({ agent }: AgentColumnProps) {
                 🔔 承認待ち
               </div>
             )}
-            <TaskCard challenge={challenge} />
+            <TaskCard challenge={challenge} agentName={agent.name} />
           </div>
         ))}
         {agent.parseErrors.map((error) => (

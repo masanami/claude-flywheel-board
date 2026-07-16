@@ -6,3 +6,4 @@
 // server コードがブラウザバンドルへ混入する心配はない。
 export type { AgentBoard, BoardSnapshot } from "../server/cache.ts";
 export type { Challenge, ParseError } from "../server/parsers/ledger.ts";
+export type { LogEntry } from "../server/parsers/journal.ts";

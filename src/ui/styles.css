@@ -17,6 +17,17 @@
   --board-chip-bg: #ffffff;
   --board-chip-active-bg: #1c1c1f;
   --board-chip-active-fg: #ffffff;
+  --board-tooltip-bg: #1c1c1f;
+  --board-tooltip-fg: #ffffff;
+  --board-modal-overlay-bg: rgb(0 0 0 / 45%);
+  --board-modal-bg: #ffffff;
+  --board-modal-border: #e2e2e6;
+  --board-source-journal-bg: #eaf1fb;
+  --board-source-journal-fg: #2f5fa8;
+  --board-source-ledger-bg: #eeeeef;
+  --board-source-ledger-fg: #55555b;
+  --board-source-runs-bg: #eafbf1;
+  --board-source-runs-fg: #2f8a55;
 
   --status-未分類: #9aa0a6;
   --status-分類済: #4a90d9;
@@ -43,6 +54,17 @@
     --board-chip-bg: #24252b;
     --board-chip-active-bg: #e7e7ea;
     --board-chip-active-fg: #17181c;
+    --board-tooltip-bg: #e7e7ea;
+    --board-tooltip-fg: #17181c;
+    --board-modal-overlay-bg: rgb(0 0 0 / 65%);
+    --board-modal-bg: #1e1f24;
+    --board-modal-border: #34353c;
+    --board-source-journal-bg: #24314a;
+    --board-source-journal-fg: #9dc0f5;
+    --board-source-ledger-bg: #2c2d33;
+    --board-source-ledger-fg: #c2c2c8;
+    --board-source-runs-bg: #1f3a2b;
+    --board-source-runs-fg: #8fd6ac;
   }
 }
 
@@ -137,15 +159,45 @@ body {
 }
 
 .task-card {
+  /* TaskCard は <button> 要素（詳細モーダルを開く読み取り専用の唯一の操作）。
+   * ブラウザ既定のボタン装飾をリセットし、既存カードの見た目を保つ。 */
+  display: block;
+  width: 100%;
+  position: relative;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
   background: var(--board-card-bg);
   border: 1px solid var(--board-card-border);
   border-radius: 6px;
   padding: 0.5rem 0.65rem;
 }
 
+.task-card:focus-visible {
+  outline: 2px solid var(--board-needs-human-border);
+  outline-offset: 1px;
+}
+
 .task-card[data-needs-human="true"] {
   background: var(--board-needs-human-bg);
   border-left: 3px solid var(--board-needs-human-border);
+}
+
+.task-card-tooltip {
+  position: absolute;
+  left: 0.65rem;
+  bottom: 100%;
+  margin-bottom: 0.35rem;
+  max-width: 240px;
+  background: var(--board-tooltip-bg);
+  color: var(--board-tooltip-fg);
+  border-radius: 4px;
+  padding: 0.4rem 0.55rem;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  box-shadow: 0 2px 6px rgb(0 0 0 / 20%);
+  z-index: 10;
 }
 
 .task-card-title {
@@ -209,4 +261,134 @@ body {
   font-size: 0.75rem;
   overflow-x: auto;
   white-space: pre;
+}
+
+/* カード詳細モーダル（読み取り専用・NFR-01）。 */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--board-modal-overlay-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  z-index: 100;
+}
+
+.card-detail-modal {
+  background: var(--board-modal-bg);
+  border: 1px solid var(--board-modal-border);
+  border-radius: 8px;
+  padding: 1rem 1.2rem;
+  width: 100%;
+  max-width: 480px;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.card-detail-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.card-detail-modal-title {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.modal-close-button {
+  border: 1px solid var(--board-border);
+  background: var(--board-chip-bg);
+  color: var(--board-fg);
+  border-radius: 6px;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.card-detail-fields {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.3rem 0.75rem;
+  margin: 0 0 1rem;
+  font-size: 0.85rem;
+}
+
+.card-detail-fields dt {
+  color: var(--board-muted-fg);
+}
+
+.card-detail-fields dd {
+  margin: 0;
+}
+
+.card-detail-log-heading {
+  font-size: 0.85rem;
+  margin: 0 0 0.5rem;
+}
+
+.card-detail-log-loading,
+.card-detail-log-error,
+.card-detail-log-empty {
+  font-size: 0.8rem;
+  color: var(--board-muted-fg);
+}
+
+.card-detail-log-error {
+  color: var(--board-needs-human-border);
+}
+
+.card-detail-log-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.log-entry-row {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: start;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+}
+
+.log-entry-ts {
+  color: var(--board-muted-fg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.log-source-badge {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 0.05rem 0.5rem;
+  font-size: 0.7rem;
+  white-space: nowrap;
+  background: var(--board-source-ledger-bg);
+  color: var(--board-source-ledger-fg);
+}
+
+.log-source-badge[data-source="journal"] {
+  background: var(--board-source-journal-bg);
+  color: var(--board-source-journal-fg);
+}
+
+.log-source-badge[data-source="ledger"] {
+  background: var(--board-source-ledger-bg);
+  color: var(--board-source-ledger-fg);
+}
+
+.log-source-badge[data-source="runs"] {
+  background: var(--board-source-runs-bg);
+  color: var(--board-source-runs-fg);
+}
+
+.log-entry-text {
+  overflow-wrap: break-word;
 }
