@@ -20,7 +20,27 @@ export default defineConfig({
     // dev server 用の `root`（src/ui）から独立させ、プロジェクトルート基準で
     // src/server・src/ui 両方のテストを拾う。
     root: fileURLToPath(new URL(".", import.meta.url)),
-    environment: "node",
-    include: ["src/**/*.test.ts"],
+    // server 側（node組込みAPI依存）は node、UI 側（DOM依存）は jsdom を使う。
+    // Vitest 4 では environmentMatchGlobs が廃止されたため、projects でエリアごとに
+    // environment を切り替える（`extends: true` でルート設定を継承）。
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: "server",
+          environment: "node",
+          include: ["src/server/**/*.test.ts"],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: "ui",
+          environment: "jsdom",
+          include: ["src/ui/**/*.test.ts", "src/ui/**/*.test.tsx"],
+          setupFiles: ["src/ui/test-setup.ts"],
+        },
+      },
+    ],
   },
 });

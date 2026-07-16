@@ -1,0 +1,212 @@
+/* CSS カスタムプロパティによるライト/ダークテーマ。
+ * フラットで控えめなデザイン（影の重ね掛け・バッジの多用はしない）。
+ * 承認待ちグループのみ琥珀系の淡いハイライトを使う。
+ */
+:root {
+  --board-bg: #f7f7f8;
+  --board-fg: #1c1c1f;
+  --board-muted-fg: #6b6b70;
+  --board-border: #dcdce0;
+  --board-column-bg: #ffffff;
+  --board-card-bg: #ffffff;
+  --board-card-border: #e2e2e6;
+  --board-needs-human-bg: #fdf3e0;
+  --board-needs-human-border: #e8b93f;
+  --board-error-bg: #fbfbfc;
+  --board-error-border: #b8b8bf;
+  --board-chip-bg: #ffffff;
+  --board-chip-active-bg: #1c1c1f;
+  --board-chip-active-fg: #ffffff;
+
+  --status-未分類: #9aa0a6;
+  --status-分類済: #4a90d9;
+  --status-計画承認待ち: #e8b93f;
+  --status-着手中: #3aa76d;
+  --status-検証中: #8a63d2;
+  --status-完了確認待ち: #e8b93f;
+  --status-完了: #2f9e44;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --board-bg: #17181c;
+    --board-fg: #e7e7ea;
+    --board-muted-fg: #9a9aa2;
+    --board-border: #303138;
+    --board-column-bg: #1e1f24;
+    --board-card-bg: #24252b;
+    --board-card-border: #34353c;
+    --board-needs-human-bg: #3a301a;
+    --board-needs-human-border: #caa03a;
+    --board-error-bg: #201f22;
+    --board-error-border: #45454d;
+    --board-chip-bg: #24252b;
+    --board-chip-active-bg: #e7e7ea;
+    --board-chip-active-fg: #17181c;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--board-bg);
+  color: var(--board-fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Hiragino Kaku
+    Gothic ProN, Meiryo, sans-serif;
+}
+
+.board {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.board-loading {
+  padding: 1rem;
+  color: var(--board-muted-fg);
+}
+
+.filter-bar {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--board-border);
+}
+
+.filter-chip {
+  border: 1px solid var(--board-border);
+  background: var(--board-chip-bg);
+  color: var(--board-fg);
+  border-radius: 999px;
+  padding: 0.35rem 0.9rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.filter-chip[aria-pressed="true"] {
+  background: var(--board-chip-active-bg);
+  color: var(--board-chip-active-fg);
+  border-color: var(--board-chip-active-bg);
+}
+
+.board-columns {
+  flex: 1;
+  display: flex;
+  gap: 1rem;
+  padding: 1rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  align-items: flex-start;
+}
+
+.agent-column {
+  flex: 0 0 280px;
+  background: var(--board-column-bg);
+  border: 1px solid var(--board-border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  max-height: 100%;
+  overflow: hidden;
+}
+
+.agent-column-header {
+  margin: 0;
+  padding: 0.6rem 0.8rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  border-bottom: 1px solid var(--board-border);
+}
+
+.agent-column-body {
+  padding: 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  overflow-y: auto;
+}
+
+.agent-column-needs-human-heading {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--board-needs-human-border);
+  margin: 0.2rem 0;
+}
+
+.task-card {
+  background: var(--board-card-bg);
+  border: 1px solid var(--board-card-border);
+  border-radius: 6px;
+  padding: 0.5rem 0.65rem;
+}
+
+.task-card[data-needs-human="true"] {
+  background: var(--board-needs-human-bg);
+  border-left: 3px solid var(--board-needs-human-border);
+}
+
+.task-card-title {
+  font-size: 0.9rem;
+  margin-bottom: 0.3rem;
+}
+
+.task-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  color: var(--board-muted-fg);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  background: var(--board-muted-fg);
+}
+
+.status-dot[data-status="未分類"] {
+  background: var(--status-未分類);
+}
+.status-dot[data-status="分類済"] {
+  background: var(--status-分類済);
+}
+.status-dot[data-status="計画承認待ち"] {
+  background: var(--status-計画承認待ち);
+}
+.status-dot[data-status="着手中"] {
+  background: var(--status-着手中);
+}
+.status-dot[data-status="検証中"] {
+  background: var(--status-検証中);
+}
+.status-dot[data-status="完了確認待ち"] {
+  background: var(--status-完了確認待ち);
+}
+.status-dot[data-status="完了"] {
+  background: var(--status-完了);
+}
+
+.error-card {
+  background: var(--board-error-bg);
+  border: 1px dashed var(--board-error-border);
+  border-radius: 6px;
+  padding: 0.5rem 0.65rem;
+}
+
+.error-card-summary {
+  font-size: 0.8rem;
+  margin-bottom: 0.3rem;
+}
+
+.error-card-raw {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  overflow-x: auto;
+  white-space: pre;
+}
