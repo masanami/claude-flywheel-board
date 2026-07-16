@@ -114,22 +114,18 @@ infra	/Users/masami/agents/infra-agent
 | ソース | パス（エージェント repo 相対） | 仕様の正本 | board での用途 |
 | --- | --- | --- | --- |
 | 課題台帳 | `challenge-ledger.md` | `challenge-ledger-format.md`（仕様化済み） | タスクカード・承認待ち（FR-03/04） |
-| 実行イベント | `.flywheel/runs.jsonl` | **claude-flywheel P0 で仕様化（未）** | 実行中・応答なし検知（FR-05）、resume 連携（FR-12） |
+| 実行イベント | `.flywheel/runs.jsonl` | **仕様化済み: `templates/runtime/README.md`**（claude-flywheel PR #45） | 実行中・応答なし検知（FR-05）、resume 連携（FR-12）、差し込みの可視化（FR-13） |
 | サイクル履歴 | `journal/index.jsonl` | `templates/journal/README.md`（仕様化済み） | カードのホバー要約・作業ログタイムライン（FR-08）、サイクル状態の補完 |
 
-### 4.1 runs.jsonl（参考ドラフト）
+### 4.1 runs.jsonl（正本参照）
 
-正本仕様は claude-flywheel 側で確定する。board が必要とする最小形の参考ドラフト:
+**正本**: claude-flywheel `templates/runtime/README.md`「実行イベントログ（runs.jsonl）」（PR #45 で確定）。board のパーサは正本に従い、以下は board の消費に関わる要点の抜粋:
 
-```text
-{"ts":"2026-07-16T10:00:00+09:00","event":"cycle_start","cycle":"2026-07-16-cycle"}
-{"ts":"2026-07-16T10:05:12+09:00","event":"delegate_start","challenge":"C-044","repo":"net-config","session_id":"abc-123"}
-{"ts":"2026-07-16T10:42:30+09:00","event":"delegate_end","challenge":"C-044","session_id":"abc-123","result":"reported"}
-{"ts":"2026-07-16T10:45:00+09:00","event":"cycle_end","cycle":"2026-07-16-cycle"}
-```
-
-- board 側の要件: ①append-only の JSONL、②start/end の対応付けキー（session_id）、③challenge と repo への参照。これ以上は要求しない。
-- 確定した仕様と食い違った場合は**正本仕様側を正**とし、board のパーサを追従させる。
+- イベント 6 種: `cycle_start/end`・`delegate_start/end`・`adhoc_start/end`（差し込み作業も記録される）
+- 「実行中」＝対応する `*_end` のない `*_start`。**対応付けキーはイベント種別ごと**: cycle は `cycle`（journal ファイル名 basename と機械突合可）、delegate は `session_id`（事前採番 UUID・小文字正規化）、adhoc は `id`
+- **resume 規則**: 別サイクルへ持ち越した resume は同じ `session_id` の新しい `delegate_start` で挟まれる。対応付けは「同一 `session_id` の**最新の未終了 start**」
+- `cycle_end` の `result` は `completed` / `abandoned`（stale ロック回収時の代筆）。**未終了 `adhoc_start` は代筆回収されない**ため、しきい値超過の要確認表示は board（消費者）の責務
+- 破損行は「消費者がパースエラーとして可視化する前提」（FR-07 と整合）。ファイルは gitignore 対象のローカル実行状態（board は working tree を読むため影響なし）
 
 ## 5. 主要フロー
 
@@ -185,5 +181,5 @@ flowchart TD
 - ~~**AO-01**~~ **確定**: fleet マニフェストは `~/.flywheel/fleet.tsv`・`<name>\t<path>` の 2 列＋`#` コメントのみ（§3.1 の通り）。表示名・アイコン等の追加属性は YAGNI で見送り、必要になったら列追加で対応。requirements.md OQ-01。
 - ~~**AO-02**~~ **確定**: 「応答なし」しきい値は既定 30 分・全体一律。起動引数 / 環境変数で変更可能。エージェントごとの個別指定は必要になったらマニフェスト拡張で対応。requirements.md OQ-02。
 - ~~**AO-03**~~ **確定**: 技術スタックは §6 の通り確定。
-- **AO-04**: runs.jsonl 仕様の確定待ち（claude-flywheel P0）。確定後に §4.1 を正本参照に差し替える。着手前チェックリストは [features/p3-live-runs-panel.md](./features/p3-live-runs-panel.md) を参照。
+- ~~**AO-04**~~ **クローズ**（2026-07-16）: runs.jsonl 仕様は claude-flywheel PR #45 で確定。§4.1 を正本参照に差し替え済み。P3 の残依存は P2 のみ。
 - **AO-05**: journal タイムライン（P4 候補）。requirements.md OQ-03。
