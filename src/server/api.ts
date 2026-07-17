@@ -98,7 +98,8 @@ export function attachWebSocketServer(
     "upgrade",
     (request: IncomingMessage, socket: Socket, head: Buffer) => {
       if (request.url !== "/ws") {
-        socket.destroy();
+        // このハンドラの対象外。/ws/terminal 等、他の upgrade リスナーと共存
+        // させるため socket には触れない（destroy しない）。
         return;
       }
       if (
