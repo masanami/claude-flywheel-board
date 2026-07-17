@@ -6,6 +6,8 @@ import {
 import type { TerminalController } from "../terminal-control.ts";
 import { connectTerminalSocket } from "../terminal-ws.ts";
 import type { TerminalSocket } from "../terminal-ws.ts";
+import { createAttachInputGate } from "./attach-input-gate.ts";
+import type { AttachInputGate } from "./attach-input-gate.ts";
 import { createXtermInstance } from "./xterm-adapter.ts";
 import type { CreateXtermInstance, XtermInstance } from "./xterm-adapter.ts";
 
@@ -55,6 +57,7 @@ export type TerminalPaneProps = {
 type AgentConnection = {
   socket: TerminalSocket;
   xterm: XtermInstance;
+  gate: AttachInputGate;
 };
 
 export function TerminalPane({
@@ -105,6 +108,12 @@ export function TerminalPane({
     }
 
     const xterm = createXterm(container);
+    // tmux は attach のたびに既存ペインの内容（シェル起動時の端末問い合わせ
+    // シーケンスを含み得る）を再生し、xterm.js がそれへ自動応答（DA1/DA2/DSR
+    // 等）してしまうことがある。xterm の onData は自動応答とユーザーの実操作を
+    // 区別できないため、実操作（keydown/paste/IME変換開始）を観測するまで
+    // input 送信を抑止するゲートを挟む（#27 フォローアップ）。
+    const gate = createAttachInputGate(container);
     // 初回の open（接続確立直後）は下の同期呼び出しで既に fit/resize 済みのため
     // 再送しない。2回目以降の open（切断→再接続）でのみ再 fit+resize する。
     // pty は再接続のたびに新規 spawn され既定サイズ（80x24）に戻るため
@@ -119,6 +128,9 @@ export function TerminalPane({
         if (status !== "open") {
           return;
         }
+        // 再接続（＝再 attach）のたびに tmux の再生ノイズが起き得るため、
+        // 初回・再接続を問わず毎回ゲートを閉じ直す。
+        gate.reset();
         if (hasOpenedOnce) {
           const { cols, rows } = xterm.fit();
           socket.resize(cols, rows);
@@ -127,10 +139,13 @@ export function TerminalPane({
       },
     });
     xterm.onData((data) => {
+      if (!gate.isOpen()) {
+        return;
+      }
       socket.sendInput(data);
     });
 
-    const connection: AgentConnection = { socket, xterm };
+    const connection: AgentConnection = { socket, xterm, gate };
     connectionsRef.current.set(agent, connection);
 
     const { cols, rows } = xterm.fit();
@@ -257,6 +272,7 @@ export function TerminalPane({
       for (const connection of connectionsRef.current.values()) {
         connection.socket.close();
         connection.xterm.dispose();
+        connection.gate.dispose();
       }
       connectionsRef.current.clear();
     };
@@ -339,6 +355,7 @@ export function TerminalPane({
           <div
             key={agent}
             className="terminal-pane-panel"
+            data-testid={`terminal-panel-${agent}`}
             style={{ display: agent === activeAgent ? "block" : "none" }}
             ref={getContainerRefCallback(agent)}
           />

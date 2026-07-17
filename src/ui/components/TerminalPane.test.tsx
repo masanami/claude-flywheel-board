@@ -431,6 +431,129 @@ describe("TerminalPane", () => {
     );
   });
 
+  it("attach 直後、実操作（keydown等）を観測する前の onData は sendInput を呼ばない（attach 再生ノイズの抑止）", async () => {
+    const harness = buildHarness(["medical"]);
+
+    render(
+      <TerminalPane
+        connect={harness.connect}
+        createXterm={harness.createXterm}
+        fetchAgents={harness.fetchAgents}
+      />,
+    );
+
+    await screen.findByText("medical");
+    await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(1));
+
+    const xterm = harness.xtermFor("medical");
+    const socket = harness.socketFor("medical");
+    const onDataCallback = xterm.onData.mock.calls[0]?.[0];
+    if (!onDataCallback) throw new Error("onData callback が登録されていない");
+
+    // xterm の自動応答（DA1 等）を模した data。ユーザー操作を一切観測していない
+    // ため、pty へは転送されてはならない。
+    act(() => {
+      onDataCallback("\x1b[?1;2c");
+    });
+
+    expect(socket.sendInput).not.toHaveBeenCalled();
+  });
+
+  it("keydown（実操作）を観測した後の onData は sendInput を呼ぶ", async () => {
+    const harness = buildHarness(["medical"]);
+
+    render(
+      <TerminalPane
+        connect={harness.connect}
+        createXterm={harness.createXterm}
+        fetchAgents={harness.fetchAgents}
+      />,
+    );
+
+    await screen.findByText("medical");
+    await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(1));
+
+    const xterm = harness.xtermFor("medical");
+    const socket = harness.socketFor("medical");
+    const options = harness.optionsFor("medical");
+    const onDataCallback = xterm.onData.mock.calls[0]?.[0];
+    if (!onDataCallback) throw new Error("onData callback が登録されていない");
+
+    // 実フロー同様、WS の open 通知（＝ゲートの reset）が先に起きた後で
+    // ユーザーが実操作するケースを再現する。
+    act(() => {
+      options.onStatusChange?.("open");
+    });
+
+    const panel = screen.getByTestId("terminal-panel-medical");
+    act(() => {
+      fireEvent.keyDown(panel);
+    });
+
+    act(() => {
+      onDataCallback("echo hi");
+    });
+
+    expect(socket.sendInput).toHaveBeenCalledWith("echo hi");
+  });
+
+  it("再接続（closed→open）でゲートがリセットされ、再び実操作を観測するまで onData を抑止する", async () => {
+    const harness = buildHarness(["medical"]);
+
+    render(
+      <TerminalPane
+        connect={harness.connect}
+        createXterm={harness.createXterm}
+        fetchAgents={harness.fetchAgents}
+      />,
+    );
+
+    await screen.findByText("medical");
+    await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(1));
+
+    const xterm = harness.xtermFor("medical");
+    const socket = harness.socketFor("medical");
+    const options = harness.optionsFor("medical");
+    const onDataCallback = xterm.onData.mock.calls[0]?.[0];
+    if (!onDataCallback) throw new Error("onData callback が登録されていない");
+    const panel = screen.getByTestId("terminal-panel-medical");
+
+    // 実操作を観測し、ゲートが開いていることを確認する。
+    act(() => {
+      fireEvent.keyDown(panel);
+    });
+    act(() => {
+      onDataCallback("echo hi");
+    });
+    expect(socket.sendInput).toHaveBeenCalledWith("echo hi");
+
+    // 切断 → 再接続（再 attach）: 再生ノイズが起き得るため、ゲートは再び閉じる。
+    act(() => {
+      options.onStatusChange?.("closed");
+      options.onStatusChange?.("open");
+    });
+
+    const sendInputCallsAfterReconnect = socket.sendInput.mock.calls.length;
+    act(() => {
+      onDataCallback("\x1b[?1;2c");
+    });
+    // 特定引数での不呼び出しだけでなく、抑止中は呼び出し回数自体が
+    // 増えていないことも確認する（引数違いの取りこぼしを防ぐ）。
+    expect(socket.sendInput.mock.calls.length).toBe(
+      sendInputCallsAfterReconnect,
+    );
+    expect(socket.sendInput).not.toHaveBeenCalledWith("\x1b[?1;2c");
+
+    // 再接続後に改めて実操作を観測すれば、また送信されるようになる。
+    act(() => {
+      fireEvent.keyDown(panel);
+    });
+    act(() => {
+      onDataCallback("echo again");
+    });
+    expect(socket.sendInput).toHaveBeenCalledWith("echo again");
+  });
+
   it("window の resize イベントで、表示中のペインを再 fit して resize を送る", async () => {
     const harness = buildHarness(["medical"]);
 
