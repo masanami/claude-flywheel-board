@@ -1,0 +1,45 @@
+{
+  "name": "claude-flywheel-board",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "dev": "concurrently -n server,ui -c blue,green \"npm:dev:server\" \"npm:dev:ui\"",
+    "dev:server": "node --watch src/server/index.ts",
+    "dev:ui": "vite",
+    "build": "vite build",
+    "test": "vitest run",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.7",
+    "chokidar": "^5.0.0",
+    "hono": "^4.6.14",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "ws": "^8.21.1"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^6.0.3",
+    "concurrently": "^9.1.2",
+    "jsdom": "^29.1.1",
+    "typescript": "^5.7.2",
+    "vite": "^8.1.4",
+    "vitest": "^4.1.10"
+  },
+  "allowScripts": {
+    "@biomejs/biome@1.9.4": true
+  }
+}

@@ -1,0 +1,399 @@
+/* CSS カスタムプロパティによるライト/ダークテーマ。
+ * フラットで控えめなデザイン（影の重ね掛け・バッジの多用はしない）。
+ * 承認待ちグループのみ琥珀系の淡いハイライトを使う。
+ */
+:root {
+  --board-bg: #f7f7f8;
+  --board-fg: #1c1c1f;
+  --board-muted-fg: #6b6b70;
+  --board-border: #dcdce0;
+  --board-column-bg: #ffffff;
+  --board-card-bg: #ffffff;
+  --board-card-border: #e2e2e6;
+  --board-needs-human-bg: #fdf3e0;
+  --board-needs-human-border: #e8b93f;
+  --board-error-bg: #fbfbfc;
+  --board-error-border: #b8b8bf;
+  --board-chip-bg: #ffffff;
+  --board-chip-active-bg: #1c1c1f;
+  --board-chip-active-fg: #ffffff;
+  --board-tooltip-bg: #1c1c1f;
+  --board-tooltip-fg: #ffffff;
+  --board-modal-overlay-bg: rgb(0 0 0 / 45%);
+  --board-modal-bg: #ffffff;
+  --board-modal-border: #e2e2e6;
+  --board-source-journal-bg: #eaf1fb;
+  --board-source-journal-fg: #2f5fa8;
+  --board-source-ledger-bg: #eeeeef;
+  --board-source-ledger-fg: #55555b;
+  --board-source-runs-bg: #eafbf1;
+  --board-source-runs-fg: #2f8a55;
+
+  --status-未分類: #9aa0a6;
+  --status-分類済: #4a90d9;
+  --status-計画承認待ち: #e8b93f;
+  --status-着手中: #3aa76d;
+  --status-検証中: #8a63d2;
+  --status-完了確認待ち: #e8b93f;
+  --status-完了: #2f9e44;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --board-bg: #17181c;
+    --board-fg: #e7e7ea;
+    --board-muted-fg: #9a9aa2;
+    --board-border: #303138;
+    --board-column-bg: #1e1f24;
+    --board-card-bg: #24252b;
+    --board-card-border: #34353c;
+    --board-needs-human-bg: #3a301a;
+    --board-needs-human-border: #caa03a;
+    --board-error-bg: #201f22;
+    --board-error-border: #45454d;
+    --board-chip-bg: #24252b;
+    --board-chip-active-bg: #e7e7ea;
+    --board-chip-active-fg: #17181c;
+    --board-tooltip-bg: #e7e7ea;
+    --board-tooltip-fg: #17181c;
+    --board-modal-overlay-bg: rgb(0 0 0 / 65%);
+    --board-modal-bg: #1e1f24;
+    --board-modal-border: #34353c;
+    --board-source-journal-bg: #24314a;
+    --board-source-journal-fg: #9dc0f5;
+    --board-source-ledger-bg: #2c2d33;
+    --board-source-ledger-fg: #c2c2c8;
+    --board-source-runs-bg: #1f3a2b;
+    --board-source-runs-fg: #8fd6ac;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--board-bg);
+  color: var(--board-fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "Hiragino Kaku Gothic ProN", Meiryo, sans-serif;
+}
+
+.board {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.board-loading {
+  padding: 1rem;
+  color: var(--board-muted-fg);
+}
+
+.filter-bar {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--board-border);
+}
+
+.filter-chip {
+  border: 1px solid var(--board-border);
+  background: var(--board-chip-bg);
+  color: var(--board-fg);
+  border-radius: 999px;
+  padding: 0.35rem 0.9rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.filter-chip[aria-pressed="true"] {
+  background: var(--board-chip-active-bg);
+  color: var(--board-chip-active-fg);
+  border-color: var(--board-chip-active-bg);
+}
+
+.board-columns {
+  flex: 1;
+  display: flex;
+  gap: 1rem;
+  padding: 1rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  align-items: flex-start;
+}
+
+.agent-column {
+  flex: 0 0 280px;
+  background: var(--board-column-bg);
+  border: 1px solid var(--board-border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  max-height: 100%;
+  overflow: hidden;
+}
+
+.agent-column-header {
+  margin: 0;
+  padding: 0.6rem 0.8rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  border-bottom: 1px solid var(--board-border);
+}
+
+.agent-column-body {
+  padding: 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  overflow-y: auto;
+}
+
+.agent-column-needs-human-heading {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--board-needs-human-border);
+  margin: 0.2rem 0;
+}
+
+.task-card {
+  /* TaskCard は <button> 要素（詳細モーダルを開く読み取り専用の唯一の操作）。
+   * ブラウザ既定のボタン装飾をリセットし、既存カードの見た目を保つ。 */
+  display: block;
+  width: 100%;
+  position: relative;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  background: var(--board-card-bg);
+  border: 1px solid var(--board-card-border);
+  border-radius: 6px;
+  padding: 0.5rem 0.65rem;
+}
+
+.task-card:focus-visible {
+  outline: 2px solid var(--board-needs-human-border);
+  outline-offset: 1px;
+}
+
+.task-card[data-needs-human="true"] {
+  background: var(--board-needs-human-bg);
+  border-left: 3px solid var(--board-needs-human-border);
+}
+
+.task-card-tooltip {
+  position: absolute;
+  left: 0.65rem;
+  bottom: 100%;
+  margin-bottom: 0.35rem;
+  max-width: 240px;
+  background: var(--board-tooltip-bg);
+  color: var(--board-tooltip-fg);
+  border-radius: 4px;
+  padding: 0.4rem 0.55rem;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  box-shadow: 0 2px 6px rgb(0 0 0 / 20%);
+  z-index: 10;
+}
+
+.task-card-title {
+  font-size: 0.9rem;
+  margin-bottom: 0.3rem;
+}
+
+.task-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  color: var(--board-muted-fg);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  background: var(--board-muted-fg);
+}
+
+.status-dot[data-status="未分類"] {
+  background: var(--status-未分類);
+}
+.status-dot[data-status="分類済"] {
+  background: var(--status-分類済);
+}
+.status-dot[data-status="計画承認待ち"] {
+  background: var(--status-計画承認待ち);
+}
+.status-dot[data-status="着手中"] {
+  background: var(--status-着手中);
+}
+.status-dot[data-status="検証中"] {
+  background: var(--status-検証中);
+}
+.status-dot[data-status="完了確認待ち"] {
+  background: var(--status-完了確認待ち);
+}
+.status-dot[data-status="完了"] {
+  background: var(--status-完了);
+}
+
+.error-card {
+  background: var(--board-error-bg);
+  border: 1px dashed var(--board-error-border);
+  border-radius: 6px;
+  padding: 0.5rem 0.65rem;
+}
+
+.error-card-summary {
+  font-size: 0.8rem;
+  margin-bottom: 0.3rem;
+}
+
+.error-card-raw {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+/* カード詳細モーダル（読み取り専用・NFR-01）。
+ * ネイティブ <dialog> + showModal() を使用する。dialog 自身が中央寄せされた
+ * ボックス（旧オーバーレイ+コンテンツの一体化）を兼ね、背景の暗幕は
+ * ::backdrop 疑似要素で表現する（トップレイヤーに載るため z-index 指定は不要）。
+ */
+
+.card-detail-modal {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  background: var(--board-modal-bg);
+  border: 1px solid var(--board-modal-border);
+  border-radius: 8px;
+  padding: 0;
+  width: 100%;
+  max-width: 480px;
+  max-height: 80vh;
+}
+
+.card-detail-modal::backdrop {
+  background: var(--board-modal-overlay-bg);
+}
+
+.card-detail-modal-content {
+  padding: 1rem 1.2rem;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.card-detail-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.card-detail-modal-title {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.modal-close-button {
+  border: 1px solid var(--board-border);
+  background: var(--board-chip-bg);
+  color: var(--board-fg);
+  border-radius: 6px;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.card-detail-fields {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.3rem 0.75rem;
+  margin: 0 0 1rem;
+  font-size: 0.85rem;
+}
+
+.card-detail-fields dt {
+  color: var(--board-muted-fg);
+}
+
+.card-detail-fields dd {
+  margin: 0;
+}
+
+.card-detail-log-heading {
+  font-size: 0.85rem;
+  margin: 0 0 0.5rem;
+}
+
+.card-detail-log-loading,
+.card-detail-log-error,
+.card-detail-log-empty {
+  font-size: 0.8rem;
+  color: var(--board-muted-fg);
+}
+
+.card-detail-log-error {
+  color: var(--board-needs-human-border);
+}
+
+.card-detail-log-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.log-entry-row {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: start;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+}
+
+.log-entry-ts {
+  color: var(--board-muted-fg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.log-source-badge {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 0.05rem 0.5rem;
+  font-size: 0.7rem;
+  white-space: nowrap;
+  background: var(--board-source-ledger-bg);
+  color: var(--board-source-ledger-fg);
+}
+
+.log-source-badge[data-source="journal"] {
+  background: var(--board-source-journal-bg);
+  color: var(--board-source-journal-fg);
+}
+
+.log-source-badge[data-source="ledger"] {
+  background: var(--board-source-ledger-bg);
+  color: var(--board-source-ledger-fg);
+}
+
+.log-source-badge[data-source="runs"] {
+  background: var(--board-source-runs-bg);
+  color: var(--board-source-runs-fg);
+}
+
+.log-entry-text {
+  overflow-wrap: break-word;
+}

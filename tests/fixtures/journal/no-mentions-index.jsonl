@@ -1,0 +1,2 @@
+{"date":"2026-07-10","seq":1,"touched_issues":[{"id":"C-001","from":"未着手","to":"着手中"}],"delegations":[],"pr_urls":[],"pending_approvals":[],"decisions":[]}
+{"date":"2026-07-11","seq":1,"touched_issues":[],"delegations":[],"pr_urls":[],"pending_approvals":[{"gate":"FR-01","issue":"C-001","summary":"レビュー待ち"}],"decisions":["進捗共有"]}

@@ -1,0 +1,7 @@
+{"date":"2026-07-05","seq":1,"touched_issues":[{"id":"C-002-4","from":"未着手","to":"着手中"}],"delegations":[],"pr_urls":[],"pending_approvals":[],"decisions":[]}
+{"date":"2026-07-06","seq":1,"touched_issues":[{"id":"C-010","from":"未着手","to":"着手中"}]
+
+{"seq":"1","touched_issues":[],"delegations":[],"pr_urls":[],"pending_approvals":[],"decisions":[]}
+{"date":"2026-07-07","seq":1,"touched_issues":[{"id":"C-002-4","from":"着手中","to":"検証中"}],"delegations":[],"pr_urls":[],"pending_approvals":[],"decisions":[]}
+{"date":"2026-07-08","seq":1,"touched_issues":[{"id":"C-020"}],"delegations":[],"pr_urls":[],"pending_approvals":[],"decisions":[]}
+{"date":"2026-07-09","seq":1,"touched_issues":[null],"delegations":[],"pr_urls":[],"pending_approvals":[],"decisions":[]}

@@ -1,0 +1,4 @@
+{"date":"2026-07-01","seq":1,"touched_issues":[{"id":"C-002-4","from":"未着手","to":"着手中"}],"delegations":[],"pr_urls":[],"pending_approvals":[],"decisions":[]}
+{"date":"2026-07-02","seq":1,"touched_issues":[{"id":"C-010","from":"未着手","to":"着手中"}],"delegations":[],"pr_urls":[],"pending_approvals":[{"gate":"FR-13","issue":"C-002-4","summary":"設計レビュー待ち"}],"decisions":[]}
+{"date":"2026-07-03","seq":1,"touched_issues":[{"id":"C-002-4","from":"着手中","to":"検証中"}],"delegations":[],"pr_urls":[],"pending_approvals":[{"gate":"FR-20","issue":"C-010","summary":"完了確認待ち"}],"decisions":[]}
+{"date":"2026-07-03","seq":2,"touched_issues":[{"id":"C-002-4","from":"検証中","to":"完了"}],"delegations":[{"repo":"service-a","skill":"tdd-impl","session_id":"550e8400-e29b-41d4-a716-446655440000","result":"実装完了・PR起票"}],"pr_urls":["https://github.com/org/service-a/pull/12"],"pending_approvals":[],"decisions":["既存パターンに合わせフォールバック処理を追加"]}

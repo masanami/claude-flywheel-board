@@ -1,0 +1,5 @@
+# fleet manifest（コメント行はこのように # で始まる）
+medical	/repos/medical-agent
+
+# 空行を挟んでも読み飛ばされる
+bi	/repos/bi-agent
