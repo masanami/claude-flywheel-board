@@ -132,15 +132,17 @@ describeIfTmux("pty ブリッジ 実 tmux 結合テスト", () => {
     // シェルへの通常のタイピングを模しており、プリフィル API とは別経路）。
     //
     // 検証値は「コマンド文字列そのもの」ではなく「実行結果でしか現れない値」を
-    // 使う（マーカー文字列 + 算術式の計算結果を分割して組み立てる）。tmux は
+    // 使う（マーカー文字列 + printf の書式展開結果を分割して組み立てる）。tmux は
     // 送信したキー入力をそのまま画面にエコーするため、コマンド文字列自体を
     // 待ち受けると、実際にはコマンドが実行されず入力が画面に表示されただけでも
-    // 誤って成功と判定してしまう（$((6*7)) は echo コマンドが実際に評価・展開
-    // しない限り "42" という文字列には絶対にならないため、実行結果の検証になる）。
+    // 誤って成功と判定してしまう。算術展開（$((...))）はシェル実装への依存が
+    // あるため、POSIX 標準の printf 書式展開（%s → 42）でシェル非依存にしつつ、
+    // 「実行結果でしか現れない値」という性質は保つ（タイプされた生の文字列には
+    // "%s" が残ったままで、"42" にはならない）。
     ws.send(
       JSON.stringify({
         type: "input",
-        data: "echo PTY_BRIDGE_IT_MARKER=$((6*7))\n",
+        data: "printf 'PTY_BRIDGE_IT_MARKER=%s\\n' 42\n",
       }),
     );
 
@@ -153,7 +155,7 @@ describeIfTmux("pty ブリッジ 実 tmux 結合テスト", () => {
 
     // WS 切断後も tmux セッションは残っている（pty だけが kill される）。
     expect(await tmuxSessionExists(sessionName)).toBe(true);
-  }, 15000);
+  }, 20000);
 
   // #27 症状1（attach 直後のターミナル1行目の文字化けノイズ）の回帰固定テスト。
   //
@@ -264,7 +266,10 @@ describeIfTmux("pty ブリッジ 実 tmux 結合テスト", () => {
     expect(pane).not.toMatch(/\d;276;\d/);
 
     // pty 自体は健全なまま（自動応答の書き込みで壊れていない）ことを、
-    // 実際にコマンドを実行させて確認する。
+    // 実際にコマンドを実行させて確認する。検証値は「実行結果でしか現れない
+    // 値」を保ちつつ、算術展開（$((...))）のシェル依存を避けるため、POSIX
+    // 標準の printf 書式展開（%s → 42）を使う（タイプされた生の文字列には
+    // "%s" が残ったままで、実行されない限り "42" にはならない）。
     let received = "";
     ws.on("message", (data) => {
       received += data.toString();
@@ -272,7 +277,7 @@ describeIfTmux("pty ブリッジ 実 tmux 結合テスト", () => {
     ws.send(
       JSON.stringify({
         type: "input",
-        data: "echo PTY_BRIDGE_NOISE_IT_MARKER=$((6*7))\n",
+        data: "printf 'PTY_BRIDGE_NOISE_IT_MARKER=%s\\n' 42\n",
       }),
     );
     await waitUntil(() => received.includes("PTY_BRIDGE_NOISE_IT_MARKER=42"), {
@@ -280,5 +285,11 @@ describeIfTmux("pty ブリッジ 実 tmux 結合テスト", () => {
     });
 
     ws.close();
-  }, 15000);
+    // このテストの内側待機（tmuxSessionExists のデフォルト5000ms＋pane 安定化
+    // 8000ms＋実行結果確認8000ms）の合計は最大21000msに達し得る。テスト全体の
+    // タイムアウトが15000msのままだと、内側の直列待機だけでタイムアウトを
+    // 超えてしまう可能性がある（直列 waitUntil のフレーク要因）。サーバ起動・
+    // WS接続・capture-pane 呼び出し等のオーバーヘッド分の余裕も見込み、
+    // 内側待機の合計より十分長い30000msに設定する。
+  }, 30000);
 });

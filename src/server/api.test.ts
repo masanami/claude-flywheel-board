@@ -271,7 +271,12 @@ describe("attachWebSocketServer 統合テスト", () => {
     const parsed = JSON.parse(message);
     expect(parsed.type).toBe("snapshot");
 
-    ws.close();
+    // close イベントを待ってから終える（切断処理が残ったまま次の後始末
+    // （afterEach の server.close()）に進まないようにするため）。
+    await new Promise<void>((resolve) => {
+      ws.once("close", () => resolve());
+      ws.close();
+    });
   });
 
   it("/ws 以外の URL の upgrade リクエストはソケットに触れない（/ws/terminal 等、別ハンドラとの共存のため）", async () => {

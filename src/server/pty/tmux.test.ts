@@ -162,6 +162,17 @@ describe("ensureTmuxSession", () => {
       ensureTmuxSession(tmux, "flywheel-medical", "/repos/medical-agent"),
     ).resolves.toBeUndefined();
 
+    // 「再確認だけ」で newSession を一切呼ばない実装でも hasSession の呼び出し
+    // 回数だけを見れば通ってしまうため、newSession が実際に呼ばれ、かつ
+    // （mockRejectedValue により）失敗した上で回復していることまで検証する。
+    expect(tmux.newSession).toHaveBeenCalledTimes(1);
+    expect(tmux.newSession).toHaveBeenCalledWith(
+      "flywheel-medical",
+      "/repos/medical-agent",
+    );
+    await expect(tmux.newSession.mock.results[0]?.value).rejects.toThrow(
+      "duplicate session: flywheel-medical",
+    );
     expect(tmux.hasSession).toHaveBeenCalledTimes(2);
   });
 
