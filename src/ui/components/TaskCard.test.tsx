@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Challenge } from "../board-types.ts";
-import { TaskCard } from "./TaskCard.tsx";
+import { CHALLENGE_DRAG_MIME, TaskCard } from "./TaskCard.tsx";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -79,6 +79,31 @@ describe("TaskCard", () => {
 
     const buttons = screen.getAllByRole("button");
     expect(buttons).toHaveLength(1);
+  });
+
+  describe("D&D 並べ替え（#16）", () => {
+    it("draggable 属性を持つ", () => {
+      render(<TaskCard challenge={challenge()} agentName="medical" />);
+
+      const card = screen.getByText("課題タイトル").closest(".task-card");
+      expect(card).toHaveAttribute("draggable", "true");
+    });
+
+    it("dragstart で dataTransfer に課題IDをセットする", () => {
+      render(
+        <TaskCard challenge={challenge({ id: "C-042" })} agentName="medical" />,
+      );
+
+      const card = screen.getByText("課題タイトル").closest(".task-card");
+      if (!card) throw new Error("task-card が見つかりません");
+
+      const setData = vi.fn();
+      fireEvent.dragStart(card, {
+        dataTransfer: { setData, effectAllowed: "" },
+      });
+
+      expect(setData).toHaveBeenCalledWith(CHALLENGE_DRAG_MIME, "C-042");
+    });
   });
 
   describe("ホバー・フォーカスによるツールチップ", () => {
