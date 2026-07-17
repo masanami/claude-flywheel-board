@@ -79,11 +79,14 @@ export function createTmuxClient(deps: TmuxClientDeps = {}): TmuxClient {
     },
     sendKeysLiteral(sessionName, command) {
       // -l（literal）フラグのみを付与し、Enter に相当する追加キー送信は行わない。
+      // `--` で以降をオプションとして解釈させないガードを挟む（command が
+      // `-` で始まっていても tmux 側のフラグとして誤解釈されない defense-in-depth）。
       return runCommand("tmux", [
         "send-keys",
         "-t",
         sessionName,
         "-l",
+        "--",
         stripNewlines(command),
       ]);
     },

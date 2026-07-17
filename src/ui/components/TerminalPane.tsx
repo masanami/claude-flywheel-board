@@ -19,11 +19,6 @@ const MIN_HEIGHT_PX = 120;
 const MAX_HEIGHT_PX = 800;
 const DEFAULT_HEIGHT_PX = 320;
 
-/** tmux セッション名の規約: `flywheel-<agent-name>`（src/server/pty/session.ts の terminalSessionName と同一規約）。 */
-function terminalSessionName(agentName: string): string {
-  return `flywheel-${agentName}`;
-}
-
 function buildTerminalWebSocketUrl(agent: string): string {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${protocol}//${window.location.host}/ws/terminal?agent=${encodeURIComponent(agent)}`;
@@ -207,6 +202,9 @@ export function TerminalPane({
           // タブ一覧に無い agent 名は無視する（不明な接続を作らない）。
           return;
         }
+        // 折りたたみ中は対象ペインが不可視のため、流し込む前に必ず展開する
+        // （D&D・差し込みの指示文が不可視ペインへ流れて「無反応に見える」問題の回避）。
+        setCollapsed(false);
         setActiveAgent(agent);
         openAgent(agent);
         const existing = connectionsRef.current.get(agent);
@@ -308,7 +306,7 @@ export function TerminalPane({
               aria-selected={agent === activeAgent}
               onClick={() => handleTabClick(agent)}
             >
-              {terminalSessionName(agent)}
+              {agent}
             </button>
           ))}
         </div>

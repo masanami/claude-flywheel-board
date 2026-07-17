@@ -242,6 +242,38 @@ describe("attachWebSocketServer 統合テスト", () => {
     expect(result).not.toBe("open");
   });
 
+  it("クエリ付きの /ws?x への upgrade も pathname 一致で処理される（半開き接続で残さない）", async () => {
+    const cache = createMemoryBoardCache();
+    const app = new Hono();
+    registerApiRoutes(app, cache);
+
+    await new Promise<void>((resolve, reject) => {
+      server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: 0 }, () =>
+        resolve(),
+      );
+      server.on("error", reject);
+    });
+    if (!server) {
+      throw new Error("server が起動していない");
+    }
+    attachWebSocketServer(server, cache);
+
+    const address = server.address() as AddressInfo;
+    const ws = new WebSocket(`ws://127.0.0.1:${address.port}/ws?x`, {
+      headers: { origin: "http://localhost:5173" },
+    });
+
+    const message = await new Promise<string>((resolve, reject) => {
+      ws.on("message", (data) => resolve(data.toString()));
+      ws.on("error", reject);
+    });
+
+    const parsed = JSON.parse(message);
+    expect(parsed.type).toBe("snapshot");
+
+    ws.close();
+  });
+
   it("/ws 以外の URL の upgrade リクエストはソケットに触れない（/ws/terminal 等、別ハンドラとの共存のため）", async () => {
     const cache = createMemoryBoardCache();
     const app = new Hono();

@@ -6,8 +6,18 @@
 // literal 文字列流し込み）の 3 つのみである。4 つ目の種別（例: 「送信して実行
 // する」種別）を安易に追加しないこと。
 
-function isPositiveInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value > 0;
+// pty のサイズとして非現実的な巨大値（例: cols: 1e9）を受け取ると node-pty が
+// 例外を throw しうる（未捕捉だと board プロセス全体が落ちる）。プロトコルの
+// 型レベルで上限を設け、そもそも巨大値が ClientMessage として成立しないようにする。
+const MAX_PTY_DIMENSION = 1000;
+
+function isValidPtyDimension(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value > 0 &&
+    value <= MAX_PTY_DIMENSION
+  );
 }
 
 export type ClientMessage =
@@ -40,7 +50,8 @@ export function parseClientMessage(raw: string): ClientMessage | undefined {
         ? { type: "input", data: record.data }
         : undefined;
     case "resize":
-      return isPositiveInteger(record.cols) && isPositiveInteger(record.rows)
+      return isValidPtyDimension(record.cols) &&
+        isValidPtyDimension(record.rows)
         ? { type: "resize", cols: record.cols, rows: record.rows }
         : undefined;
     case "prefill":

@@ -69,6 +69,27 @@ describe("parseClientMessage", () => {
     ).toBeUndefined();
   });
 
+  it("resize で cols/rows が上限（1000）を超える場合は undefined を返す（node-pty への巨大値渡しを防ぐ）", () => {
+    expect(
+      parseClientMessage(
+        JSON.stringify({ type: "resize", cols: 1_000_000_000, rows: 24 }),
+      ),
+    ).toBeUndefined();
+    expect(
+      parseClientMessage(
+        JSON.stringify({ type: "resize", cols: 80, rows: 1001 }),
+      ),
+    ).toBeUndefined();
+  });
+
+  it("resize で cols/rows が上限ちょうど（1000）は許可する", () => {
+    expect(
+      parseClientMessage(
+        JSON.stringify({ type: "resize", cols: 1000, rows: 1000 }),
+      ),
+    ).toEqual({ type: "resize", cols: 1000, rows: 1000 });
+  });
+
   it("prefill で command が文字列でない場合は undefined を返す", () => {
     expect(
       parseClientMessage(JSON.stringify({ type: "prefill", command: null })),

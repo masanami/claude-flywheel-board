@@ -57,7 +57,7 @@ describe("createTmuxClient", () => {
     ]);
   });
 
-  it("sendKeysLiteral は send-keys -t <name> -l <command> を実行する（literal・改行なし）", async () => {
+  it("sendKeysLiteral は send-keys -t <name> -l -- <command> を実行する（literal・改行なし・-- ガード付き）", async () => {
     const runCommand = vi.fn().mockResolvedValue(undefined);
     const tmux = createTmuxClient({ runCommand });
 
@@ -68,7 +68,24 @@ describe("createTmuxClient", () => {
       "-t",
       "flywheel-medical",
       "-l",
+      "--",
       "git status",
+    ]);
+  });
+
+  it("sendKeysLiteral は '-' 始まりの command でもフラグとして解釈されないよう -- を挟む", async () => {
+    const runCommand = vi.fn().mockResolvedValue(undefined);
+    const tmux = createTmuxClient({ runCommand });
+
+    await tmux.sendKeysLiteral("flywheel-medical", "--help");
+
+    expect(runCommand).toHaveBeenCalledWith("tmux", [
+      "send-keys",
+      "-t",
+      "flywheel-medical",
+      "-l",
+      "--",
+      "--help",
     ]);
   });
 
@@ -80,23 +97,24 @@ describe("createTmuxClient", () => {
 
     const call = runCommand.mock.calls[0];
     expect(call?.[1]).not.toContain("Enter");
-    expect(call?.[1]?.[4]).not.toMatch(/[\r\n]/);
+    expect(call?.[1]?.[5]).not.toMatch(/[\r\n]/);
     expect(call?.[1]).toEqual([
       "send-keys",
       "-t",
       "flywheel-medical",
       "-l",
+      "--",
       "git status ",
     ]);
   });
 
-  it("sendKeysLiteral が組み立てる引数配列は常に5要素（余分な Enter 引数を追加しない）", async () => {
+  it("sendKeysLiteral が組み立てる引数配列は常に6要素（余分な Enter 引数を追加しない）", async () => {
     const runCommand = vi.fn().mockResolvedValue(undefined);
     const tmux = createTmuxClient({ runCommand });
 
     await tmux.sendKeysLiteral("flywheel-medical", "ls");
 
-    expect(runCommand.mock.calls[0]?.[1]).toHaveLength(5);
+    expect(runCommand.mock.calls[0]?.[1]).toHaveLength(6);
   });
 });
 

@@ -144,10 +144,20 @@ async function startTerminalSession(
     }
     switch (message.type) {
       case "input":
-        ptyProcess.write(message.data);
+        // node-pty のネイティブ層が同期的に throw するケース（fd が既に閉じている等）
+        // を捕捉し、この接続だけに影響を閉じる（board プロセス全体を落とさない）。
+        try {
+          ptyProcess.write(message.data);
+        } catch {
+          // 該当タブでの入力が失われるのみ。board 全体を巻き込む必要は無い。
+        }
         break;
       case "resize":
-        ptyProcess.resize(message.cols, message.rows);
+        try {
+          ptyProcess.resize(message.cols, message.rows);
+        } catch {
+          // 該当タブでのリサイズが失われるのみ。board 全体を巻き込む必要は無い。
+        }
         break;
       case "prefill":
         // tmux send-keys -l（literal・改行なし）で流し込む。pty.write は使わない

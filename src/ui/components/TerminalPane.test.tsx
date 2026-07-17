@@ -110,7 +110,7 @@ afterEach(() => {
 });
 
 describe("TerminalPane", () => {
-  it("agent 一覧を flywheel-<agent> 表記のタブとして表示する", async () => {
+  it("agent 一覧を agent 名そのままのタブとして表示する（内部命名規約は露出しない）", async () => {
     const harness = buildHarness(["medical", "bi"]);
 
     render(
@@ -121,8 +121,8 @@ describe("TerminalPane", () => {
       />,
     );
 
-    expect(await screen.findByText("flywheel-medical")).toBeInTheDocument();
-    expect(screen.getByText("flywheel-bi")).toBeInTheDocument();
+    expect(await screen.findByText("medical")).toBeInTheDocument();
+    expect(screen.getByText("bi")).toBeInTheDocument();
   });
 
   it("初回は先頭タブのみ接続され、他のタブは未接続である", async () => {
@@ -136,7 +136,7 @@ describe("TerminalPane", () => {
       />,
     );
 
-    await screen.findByText("flywheel-medical");
+    await screen.findByText("medical");
 
     await waitFor(() => {
       expect(harness.connect).toHaveBeenCalledTimes(1);
@@ -156,12 +156,12 @@ describe("TerminalPane", () => {
       />,
     );
 
-    await screen.findByText("flywheel-medical");
+    await screen.findByText("medical");
     await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(1));
     const medicalSocket = harness.socketFor("medical");
 
     act(() => {
-      fireEvent.click(screen.getByText("flywheel-bi"));
+      fireEvent.click(screen.getByText("bi"));
     });
 
     await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(2));
@@ -180,7 +180,7 @@ describe("TerminalPane", () => {
       />,
     );
 
-    await screen.findByText("flywheel-medical");
+    await screen.findByText("medical");
     await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(1));
     const socket = harness.socketFor("medical");
     const xterm = harness.xtermFor("medical");
@@ -196,7 +196,7 @@ describe("TerminalPane", () => {
     const body = screen.getByTestId("terminal-pane-body");
     expect(body).toBeInTheDocument();
     expect(body.style.display).toBe("none");
-    expect(screen.getByText("flywheel-medical")).toBeInTheDocument();
+    expect(screen.getByText("medical")).toBeInTheDocument();
     expect(socket.close).not.toHaveBeenCalled();
     expect(xterm.dispose).not.toHaveBeenCalled();
 
@@ -224,7 +224,7 @@ describe("TerminalPane", () => {
       />,
     );
 
-    await screen.findByText("flywheel-medical");
+    await screen.findByText("medical");
 
     const pane = screen.getByTestId("terminal-pane");
     const handle = screen.getByTestId("terminal-resize-handle");
@@ -265,7 +265,7 @@ describe("TerminalPane", () => {
       />,
     );
 
-    await screen.findByText("flywheel-medical");
+    await screen.findByText("medical");
     await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(1));
 
     act(() => {
@@ -274,8 +274,38 @@ describe("TerminalPane", () => {
 
     await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(2));
     expect(harness.socketFor("bi").prefill).toHaveBeenCalledWith("echo hi");
-    expect(screen.getByText("flywheel-bi").getAttribute("aria-selected")).toBe(
-      "true",
+    expect(screen.getByText("bi").getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("折りたたみ中に prefill を呼ぶとペインが展開される（不可視のペインへ流し込まない）", async () => {
+    const harness = buildHarness(["medical"]);
+
+    render(
+      <TerminalPane
+        connect={harness.connect}
+        createXterm={harness.createXterm}
+        fetchAgents={harness.fetchAgents}
+      />,
+    );
+
+    await screen.findByText("medical");
+    await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(1));
+
+    const collapseButton = screen.getByRole("button", { name: /折りたたむ/ });
+    act(() => {
+      fireEvent.click(collapseButton);
+    });
+    expect(screen.getByTestId("terminal-pane-body").style.display).toBe("none");
+
+    act(() => {
+      prefill("medical", "echo hi");
+    });
+
+    expect(screen.getByTestId("terminal-pane-body").style.display).toBe(
+      "block",
+    );
+    expect(harness.socketFor("medical").prefill).toHaveBeenCalledWith(
+      "echo hi",
     );
   });
 
@@ -290,7 +320,7 @@ describe("TerminalPane", () => {
       />,
     );
 
-    await screen.findByText("flywheel-medical");
+    await screen.findByText("medical");
     await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(1));
 
     act(() => {
@@ -298,9 +328,7 @@ describe("TerminalPane", () => {
     });
 
     expect(harness.connect).toHaveBeenCalledTimes(1);
-    expect(
-      screen.queryByText("flywheel-unknown-agent"),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText("unknown-agent")).not.toBeInTheDocument();
   });
 
   it("アンマウント時に開いている全ての接続を close/dispose する", async () => {
@@ -314,11 +342,11 @@ describe("TerminalPane", () => {
       />,
     );
 
-    await screen.findByText("flywheel-medical");
+    await screen.findByText("medical");
     await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(1));
 
     act(() => {
-      fireEvent.click(screen.getByText("flywheel-bi"));
+      fireEvent.click(screen.getByText("bi"));
     });
     await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(2));
 
@@ -346,7 +374,7 @@ describe("TerminalPane", () => {
       />,
     );
 
-    await screen.findByText("flywheel-medical");
+    await screen.findByText("medical");
     await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(1));
 
     const xterm = harness.xtermFor("medical");
@@ -385,7 +413,7 @@ describe("TerminalPane", () => {
       />,
     );
 
-    await screen.findByText("flywheel-medical");
+    await screen.findByText("medical");
     await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(1));
 
     const xterm = harness.xtermFor("medical");
