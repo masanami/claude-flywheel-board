@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AgentBoard } from "../board-types.ts";
 import {
   type AdjacentChallenge,
@@ -44,6 +44,18 @@ export function AgentColumn({ agent }: AgentColumnProps) {
   const [isInsertOpen, setIsInsertOpen] = useState(false);
   const [insertContent, setInsertContent] = useState("");
   const [dropTargetKey, setDropTargetKey] = useState<DropTargetKey>(null);
+  const ghostInputRef = useRef<HTMLInputElement | null>(null);
+
+  // ゴースト表示直後、フォーカスが直前の要素（ターミナル等）に残ったままだと
+  // タイプした文字がそちらへ流れてしまう（#27）。表示された瞬間に入力欄へ
+  // フォーカスを移すことで、素直にタイプを続けられるようにする。
+  // 注: JSX の autoFocus 属性は biome の a11y ルールでエラーになるため、
+  // useEffect + ref で明示的に focus() する。
+  useEffect(() => {
+    if (isInsertOpen) {
+      ghostInputRef.current?.focus();
+    }
+  }, [isInsertOpen]);
 
   const closeGhost = () => {
     setIsInsertOpen(false);
@@ -155,6 +167,7 @@ export function AgentColumn({ agent }: AgentColumnProps) {
             onDragEnd={() => setDropTargetKey(null)}
           >
             <input
+              ref={ghostInputRef}
               type="text"
               className="agent-column-ghost-input"
               placeholder="課題の内容"

@@ -156,6 +156,14 @@ describe("AgentColumn", () => {
       ).toBeInTheDocument();
     });
 
+    it("「＋ 差し込み」をクリックした直後、内容入力欄へ自動的にフォーカスする（誤入力がターミナルへ流れる #27 対応）", () => {
+      render(<AgentColumn agent={agentBoard({ challenges: [] })} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "＋ 差し込み" }));
+
+      expect(screen.getByPlaceholderText("課題の内容")).toHaveFocus();
+    });
+
     it("内容入力欄への入力が反映される", () => {
       render(<AgentColumn agent={agentBoard({ challenges: [] })} />);
       fireEvent.click(screen.getByRole("button", { name: "＋ 差し込み" }));
