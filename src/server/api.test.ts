@@ -1,4 +1,5 @@
 import type { AddressInfo } from "node:net";
+import * as net from "node:net";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { afterEach, describe, expect, it } from "vitest";
@@ -239,5 +240,86 @@ describe("attachWebSocketServer 統合テスト", () => {
     });
 
     expect(result).not.toBe("open");
+  });
+
+  it("クエリ付きの /ws?x への upgrade も pathname 一致で処理される（半開き接続で残さない）", async () => {
+    const cache = createMemoryBoardCache();
+    const app = new Hono();
+    registerApiRoutes(app, cache);
+
+    await new Promise<void>((resolve, reject) => {
+      server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: 0 }, () =>
+        resolve(),
+      );
+      server.on("error", reject);
+    });
+    if (!server) {
+      throw new Error("server が起動していない");
+    }
+    attachWebSocketServer(server, cache);
+
+    const address = server.address() as AddressInfo;
+    const ws = new WebSocket(`ws://127.0.0.1:${address.port}/ws?x`, {
+      headers: { origin: "http://localhost:5173" },
+    });
+
+    const message = await new Promise<string>((resolve, reject) => {
+      ws.on("message", (data) => resolve(data.toString()));
+      ws.on("error", reject);
+    });
+
+    const parsed = JSON.parse(message);
+    expect(parsed.type).toBe("snapshot");
+
+    // close イベントを待ってから終える（切断処理が残ったまま次の後始末
+    // （afterEach の server.close()）に進まないようにするため）。
+    await new Promise<void>((resolve) => {
+      ws.once("close", () => resolve());
+      ws.close();
+    });
+  });
+
+  it("/ws 以外の URL の upgrade リクエストはソケットに触れない（/ws/terminal 等、別ハンドラとの共存のため）", async () => {
+    const cache = createMemoryBoardCache();
+    const app = new Hono();
+    registerApiRoutes(app, cache);
+
+    await new Promise<void>((resolve, reject) => {
+      server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: 0 }, () =>
+        resolve(),
+      );
+      server.on("error", reject);
+    });
+    if (!server) {
+      throw new Error("server が起動していない");
+    }
+    attachWebSocketServer(server, cache);
+
+    const address = server.address() as AddressInfo;
+    const socket = net.connect(address.port, "127.0.0.1");
+    await new Promise<void>((resolve, reject) => {
+      socket.once("connect", () => resolve());
+      socket.once("error", reject);
+    });
+
+    const closedWithinTimeout = await new Promise<boolean>((resolve) => {
+      socket.once("close", () => resolve(true));
+      socket.write(
+        [
+          "GET /ws/terminal?agent=medical HTTP/1.1",
+          "Host: localhost",
+          "Upgrade: websocket",
+          "Connection: Upgrade",
+          "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+          "Sec-WebSocket-Version: 13",
+          "",
+          "",
+        ].join("\r\n"),
+      );
+      setTimeout(() => resolve(false), 200);
+    });
+
+    expect(closedWithinTimeout).toBe(false);
+    socket.destroy();
   });
 });

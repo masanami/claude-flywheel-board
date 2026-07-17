@@ -29,6 +29,16 @@
   --board-source-runs-bg: #eafbf1;
   --board-source-runs-fg: #2f8a55;
 
+  /* ターミナル領域はライト/ダークテーマに関わらずダーク固定（要件どおり）。 */
+  --terminal-bg: #17181c;
+  --terminal-fg: #e7e7ea;
+  --terminal-border: #303138;
+  --terminal-header-bg: #1e1f24;
+  --terminal-tab-fg: #9a9aa2;
+  --terminal-tab-active-bg: #24252b;
+  --terminal-tab-active-fg: #e7e7ea;
+  --terminal-resize-handle-bg: #303138;
+
   --status-未分類: #9aa0a6;
   --status-分類済: #4a90d9;
   --status-計画承認待ち: #e8b93f;
@@ -80,10 +90,17 @@ body {
     "Hiragino Kaku Gothic ProN", Meiryo, sans-serif;
 }
 
-.board {
+.app-layout {
   display: flex;
   flex-direction: column;
   height: 100vh;
+}
+
+.board {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
 }
 
 .board-loading {
@@ -136,11 +153,29 @@ body {
 }
 
 .agent-column-header {
-  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
   padding: 0.6rem 0.8rem;
+  border-bottom: 1px solid var(--board-border);
+}
+
+.agent-column-title {
+  margin: 0;
   font-size: 0.95rem;
   font-weight: 600;
-  border-bottom: 1px solid var(--board-border);
+}
+
+.agent-column-insert-button {
+  flex-shrink: 0;
+  border: 1px solid var(--board-border);
+  background: var(--board-chip-bg);
+  color: var(--board-fg);
+  border-radius: 6px;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.75rem;
+  cursor: pointer;
 }
 
 .agent-column-body {
@@ -158,6 +193,38 @@ body {
   margin: 0.2rem 0;
 }
 
+/* D&D 並べ替え・差し込み（#16）: 行ラッパーはドロップ先の判定にのみ使う
+ * （台帳の並び替え自体は行わず、指示文生成→prefill のみ）。ドラッグ中の
+ * 対象行にはアクセント色の上辺インジケータを表示する。 */
+.agent-column-row[data-drop-target="true"] {
+  box-shadow: inset 0 2px 0 0 var(--board-needs-human-border);
+}
+
+.agent-column-ghost-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  border: 1px dashed var(--board-muted-fg);
+  border-radius: 6px;
+  padding: 0.5rem 0.65rem;
+  cursor: grab;
+}
+
+.agent-column-ghost-input {
+  font: inherit;
+  color: inherit;
+  background: var(--board-card-bg);
+  border: 1px solid var(--board-card-border);
+  border-radius: 4px;
+  padding: 0.3rem 0.5rem;
+}
+
+.agent-column-ghost-hint {
+  margin: 0;
+  font-size: 0.7rem;
+  color: var(--board-muted-fg);
+}
+
 .task-card {
   /* TaskCard は <button> 要素（詳細モーダルを開く読み取り専用の唯一の操作）。
    * ブラウザ既定のボタン装飾をリセットし、既存カードの見た目を保つ。 */
@@ -167,7 +234,7 @@ body {
   font: inherit;
   color: inherit;
   text-align: left;
-  cursor: pointer;
+  cursor: grab;
   background: var(--board-card-bg);
   border: 1px solid var(--board-card-border);
   border-radius: 6px;
@@ -396,4 +463,78 @@ body {
 
 .log-entry-text {
   overflow-wrap: break-word;
+}
+
+/* 常設ターミナル領域（P2）。ボードは残り高さに追従し（.board 参照）、
+ * ここは flex-shrink しない固定高さのボックスとして下部を占有する。
+ * ダーク固定背景（ライト/ダークテーマの影響を受けない）。
+ */
+.terminal-pane {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--terminal-bg);
+  color: var(--terminal-fg);
+  border-top: 1px solid var(--terminal-border);
+}
+
+.terminal-pane-resize-handle {
+  height: 4px;
+  flex-shrink: 0;
+  cursor: row-resize;
+  background: var(--terminal-resize-handle-bg);
+}
+
+.terminal-pane-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--terminal-header-bg);
+  border-bottom: 1px solid var(--terminal-border);
+}
+
+.terminal-tabs {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.35rem 0.5rem;
+  overflow-x: auto;
+}
+
+.terminal-tab {
+  border: none;
+  background: transparent;
+  color: var(--terminal-tab-fg);
+  border-radius: 6px 6px 0 0;
+  padding: 0.3rem 0.75rem;
+  font-size: 0.8rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.terminal-tab[aria-selected="true"] {
+  background: var(--terminal-tab-active-bg);
+  color: var(--terminal-tab-active-fg);
+}
+
+.terminal-collapse-button {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--terminal-tab-fg);
+  font-size: 0.85rem;
+  padding: 0.3rem 0.75rem;
+  cursor: pointer;
+}
+
+.terminal-pane-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+.terminal-pane-panel {
+  position: absolute;
+  inset: 0;
 }

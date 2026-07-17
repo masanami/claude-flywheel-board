@@ -7,9 +7,23 @@ type TaskCardProps = {
   agentName: string;
 };
 
+// D&D 並べ替え（#16）でドラッグ中の課題IDを伝搬するための dataTransfer キー。
+// AgentColumn 側のドロップハンドラも同じキーで読み取る。
+export const CHALLENGE_DRAG_MIME = "application/x-flywheel-challenge-id";
+
+// ドラッグ元エージェント名を伝搬する dataTransfer キー。課題IDはエージェント内
+// でのみ一意（architecture.md §3.3）なため、ドロップ先カラムのエージェント名と
+// 突き合わせて「別カラムへの誤ドロップ」を弾く判定に使う。
+export const AGENT_NAME_DRAG_MIME = "application/x-flywheel-agent-name";
+
 // 観測専用カード（NFR-01）: 状態を変更する実ボタン・書き込み系の操作は一切持たない。
 // ホバー/フォーカスで summary をツールチップ表示し、クリック/Enter で読み取り専用の
 // 詳細モーダル（CardDetailModal）を開く（#8）。
+//
+// draggable（#16）: ドラッグ操作自体は「並べ替えの指示文生成 → prefill」の
+// 起点にすぎず、台帳を書き換えるものではない（NFR-01）。承認待ちカード
+// （needsHuman）も観測対象として draggable にするが、新規のクリック可能な
+// ボタン要素は増やさない（FR-20 の趣旨＝承認は対話のみ、を維持）。
 export function TaskCard({ challenge, agentName }: TaskCardProps) {
   const [isTooltipVisible, setIsTooltipVisible] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -40,12 +54,18 @@ export function TaskCard({ challenge, agentName }: TaskCardProps) {
         ref={triggerRef}
         type="button"
         className="task-card"
+        draggable
         data-needs-human={challenge.needsHuman || undefined}
         aria-describedby={tooltipVisible ? tooltipId : undefined}
         onMouseEnter={showTooltip}
         onMouseLeave={hideTooltip}
         onFocus={showTooltip}
         onBlur={hideTooltip}
+        onDragStart={(event) => {
+          event.dataTransfer.setData(CHALLENGE_DRAG_MIME, challenge.id);
+          event.dataTransfer.setData(AGENT_NAME_DRAG_MIME, agentName);
+          event.dataTransfer.effectAllowed = "move";
+        }}
         onClick={openModal}
         onKeyDown={(event) => {
           if (event.key === "Enter") {

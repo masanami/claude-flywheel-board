@@ -1,4 +1,7 @@
+import type { IncomingMessage } from "node:http";
+import type { Socket } from "node:net";
 import { fileURLToPath } from "node:url";
+import type { ServerType } from "@hono/node-server";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
@@ -6,6 +9,11 @@ import { attachWebSocketServer, registerApiRoutes } from "./api.ts";
 import type { BoardCache } from "./cache.ts";
 import { createMemoryBoardCache } from "./cache.ts";
 import { loadFleetManifest } from "./manifest.ts";
+import {
+  TERMINAL_WS_PATH,
+  createTerminalWebSocketServer,
+} from "./pty/bridge.ts";
+import type { TerminalWebSocketServer } from "./pty/bridge.ts";
 import { fullScan, startFleetWatcher } from "./watcher.ts";
 
 // NFR-03 / クリティカル設計決定: サーバは 127.0.0.1 に固定バインドする。
@@ -47,6 +55,37 @@ export function getServeOptions(
   };
 }
 
+/**
+ * `/ws/terminal` の upgrade ルーティングを既存の `/ws`（attachWebSocketServer が
+ * 自ら登録する upgrade リスナー）と共存させる形で server へ追加登録する。
+ *
+ * - attachWebSocketServer 側の upgrade リスナーは `/ws` 以外の URL では
+ *   何もしない（socket に触れない）よう変更済みのため、ここで追加する
+ *   terminalWebSocketServer.handleUpgrade（`/ws/terminal` 以外は何もしない）と
+ *   お互いに干渉しない。
+ * - どちらの pathname にも一致しない upgrade リクエストは、最後に登録する
+ *   catch-all リスナーで destroy する（従来 attachWebSocketServer 単体が
+ *   担っていた「未知の upgrade パスは拒否する」という安全側の挙動を維持する）。
+ */
+export function attachTerminalUpgradeRouting(
+  server: ServerType,
+  terminalWebSocketServer: TerminalWebSocketServer,
+): void {
+  server.on(
+    "upgrade",
+    (request: IncomingMessage, socket: Socket, head: Buffer) => {
+      terminalWebSocketServer.handleUpgrade(request, socket, head);
+    },
+  );
+
+  server.on("upgrade", (request: IncomingMessage, socket: Socket) => {
+    const pathname = new URL(request.url ?? "", "http://localhost").pathname;
+    if (pathname !== "/ws" && pathname !== TERMINAL_WS_PATH) {
+      socket.destroy();
+    }
+  });
+}
+
 const isMainModule = process.argv[1] === fileURLToPath(import.meta.url);
 
 if (isMainModule) {
@@ -64,6 +103,13 @@ if (isMainModule) {
   // エラーとして扱う（manifest.ts の既存方針）。個々の repo パス不存在等は
   // scanAgent 側で ParseError 化され、この起動フローは止まらない。
   const fleetEntries = loadFleetManifest();
+
+  // pty ブリッジ（P2-1）: /ws/terminal を既存の /ws と共存させる形で追加登録する。
+  const terminalWebSocketServer = createTerminalWebSocketServer({
+    getFleetEntries: () => fleetEntries,
+  });
+  attachTerminalUpgradeRouting(server, terminalWebSocketServer);
+
   await fullScan(fleetEntries, cache, broadcastAgentUpdate);
   const fleetWatcher = startFleetWatcher(
     fleetEntries,

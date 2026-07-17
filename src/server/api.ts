@@ -97,8 +97,13 @@ export function attachWebSocketServer(
   server.on(
     "upgrade",
     (request: IncomingMessage, socket: Socket, head: Buffer) => {
-      if (request.url !== "/ws") {
-        socket.destroy();
+      // pathname のみを厳密一致で判定する（bridge.ts の /ws/terminal 判定と統一）。
+      // request.url の完全一致だと `/ws?x` のようなクエリ付き URL がどちらの
+      // upgrade ハンドラにも一致せず、半開き接続のまま残ってしまうため。
+      const pathname = new URL(request.url ?? "", "http://localhost").pathname;
+      if (pathname !== "/ws") {
+        // このハンドラの対象外。/ws/terminal 等、他の upgrade リスナーと共存
+        // させるため socket には触れない（destroy しない）。
         return;
       }
       if (

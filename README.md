@@ -29,6 +29,42 @@ flowchart LR
 | [docs/requirements.md](docs/requirements.md) | 要件定義（What） |
 | [docs/architecture.md](docs/architecture.md) | アーキテクチャ（How） |
 
+## セットアップ
+
+### 前提
+
+| 依存 | 必須 | 用途 |
+| --- | --- | --- |
+| Node.js **22.18 以上** | ✅ | サーバ実行（TypeScript を直接実行するため type stripping が必要） |
+| **tmux** | ✅（ターミナル機能に） | 埋め込みターミナルのバックエンド。`brew install tmux`。**未インストールだとボード表示は動くが、ターミナルタブの接続が失敗する** |
+| npm | ✅ | 依存インストール |
+
+> tmux を採用している理由: board やブラウザを閉じても Claude Code セッションが生存し（re-attach 可能）、`tmux attach -t flywheel-<agent>` で手元のネイティブターミナルからも同じセッションを併用できるため。
+
+### 手順
+
+```bash
+npm install
+
+# fleet マニフェストを作成（既定パス。1 行 = <エージェント名><TAB><repo ローカルパス>）
+mkdir -p ~/.flywheel
+cat > ~/.flywheel/fleet.tsv <<'EOF'
+# <name>	<path>
+medical	/path/to/medical-agent
+bi	/path/to/bi-agent
+EOF
+
+# 起動（開発）
+npm run dev
+
+# 起動（ビルド済みを配信）
+npm run build
+node src/server/index.ts
+```
+
+- ブラウザで http://127.0.0.1:4317 を開く（サーバは 127.0.0.1 にのみバインドされます）
+- マニフェストのパスは環境変数 `FLYWHEEL_FLEET_MANIFEST` で上書きできます
+
 ## claude-flywheel との関係
 
 - 本リポジトリは **claude-flywheel 本体（プラグイン）とは別配布**。プラグインは全エージェント repo に install されるが、board は人間が 1 箇所で起動する。
@@ -36,4 +72,6 @@ flowchart LR
 
 ## ステータス
 
-🌱 立ち上げ期。要件・設計ドキュメントを整備中です。
+- ✅ **P1 fleet ボード（観測）**: main にマージ済み — カラム表示・承認待ちハイライト・カード詳細/作業ログ・ライブ反映・パースエラー可視化
+- 🚧 **P2 常設ターミナル（操縦）**: 実装完了・レビュー対応中 — tmux 永続セッション・タブ切替・D&D/差し込み → 指示プリフィル
+- ⏳ **P3 実行中パネル**: 未着手（runs.jsonl 仕様は確定済み。P2 完了後に着手可能）

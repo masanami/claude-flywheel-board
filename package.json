@@ -18,8 +18,11 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "chokidar": "^5.0.0",
     "hono": "^4.6.14",
+    "node-pty": "^1.1.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "ws": "^8.21.1"
@@ -33,6 +36,7 @@
     "@types/react-dom": "^18.3.5",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^6.0.3",
+    "@xterm/headless": "^6.0.0",
     "concurrently": "^9.1.2",
     "jsdom": "^29.1.1",
     "typescript": "^5.7.2",
@@ -40,6 +44,7 @@
     "vitest": "^4.1.10"
   },
   "allowScripts": {
-    "@biomejs/biome@1.9.4": true
+    "@biomejs/biome@1.9.4": true,
+    "node-pty@1.1.0": true
   }
 }
