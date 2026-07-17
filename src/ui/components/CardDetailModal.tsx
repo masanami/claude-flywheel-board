@@ -44,7 +44,12 @@ export function CardDetailModal({
     if (!dialog) {
       return;
     }
-    dialog.showModal();
+    // StrictMode では effect が setup → cleanup → setup と 2 回走るため、
+    // open 済みの dialog に showModal() を再度呼ばないようガードする
+    // （open 済みへの呼び出しは InvalidStateError になる）
+    if (!dialog.open) {
+      dialog.showModal();
+    }
 
     const handleClose = () => {
       onCloseRef.current();

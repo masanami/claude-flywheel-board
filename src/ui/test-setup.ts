@@ -28,6 +28,14 @@ if (typeof document !== "undefined") {
     >();
 
     HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) {
+      // 実ブラウザ同様、open 済みへの showModal() は InvalidStateError
+      // （StrictMode の setup → cleanup → setup 二重実行の回帰を検出するため）
+      if (this.hasAttribute("open")) {
+        throw new DOMException(
+          "Failed to execute 'showModal' on 'HTMLDialogElement': The dialog is already open.",
+          "InvalidStateError",
+        );
+      }
       this.setAttribute("open", "");
       const focusable = this.querySelector<HTMLElement>(
         "button, [href], input, select, textarea, [tabindex]",

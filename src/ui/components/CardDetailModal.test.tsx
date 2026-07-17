@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Challenge, LogEntry } from "../board-types.ts";
 import { CardDetailModal } from "./CardDetailModal.tsx";
@@ -30,6 +31,23 @@ afterEach(() => {
 });
 
 describe("CardDetailModal", () => {
+  it("StrictMode（effect の setup → cleanup → setup 二重実行）でも InvalidStateError にならず開く", () => {
+    vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+
+    expect(() =>
+      render(
+        <StrictMode>
+          <CardDetailModal
+            challenge={challenge()}
+            agentName="medical"
+            onClose={vi.fn()}
+          />
+        </StrictMode>,
+      ),
+    ).not.toThrow();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
   it("台帳の全項目を表示する", () => {
     vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
 
