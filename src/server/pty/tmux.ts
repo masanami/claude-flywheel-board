@@ -96,6 +96,14 @@ export function createTmuxClient(deps: TmuxClientDeps = {}): TmuxClient {
 /**
  * `tmux has-session` → 無ければ `tmux new-session -d -s <name> -c <cwd>` の
  * オーケストレーション（architecture.md §3.5 のセッションライフサイクル）。
+ *
+ * 並行接続時の競合吸収: 複数の WS 接続がほぼ同時に `hasSession` を呼ぶと、
+ * 双方が「無い」を見た直後に片方が先に `newSession` を成功させ、後発の
+ * `newSession` は tmux の "duplicate session" エラーで失敗し得る。この場合、
+ * newSession 失敗を即座に呼び出し元へ伝播させず、hasSession を再確認して
+ * セッションが実在すれば（先発の newSession が成功した結果とみなし）成功扱いに
+ * する。再確認しても存在しない場合（tmux バイナリ不在等、本当の失敗）は元の
+ * エラーをそのまま rethrow する。
  */
 export async function ensureTmuxSession(
   tmux: TmuxClient,
@@ -103,7 +111,16 @@ export async function ensureTmuxSession(
   cwd: string,
 ): Promise<void> {
   const exists = await tmux.hasSession(sessionName);
-  if (!exists) {
+  if (exists) {
+    return;
+  }
+
+  try {
     await tmux.newSession(sessionName, cwd);
+  } catch (error) {
+    const existsAfterFailure = await tmux.hasSession(sessionName);
+    if (!existsAfterFailure) {
+      throw error;
+    }
   }
 }

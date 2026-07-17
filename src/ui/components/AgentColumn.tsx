@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { AgentBoard } from "../board-types.ts";
 import {
   type AdjacentChallenge,
+  type Placement,
   buildInsertInstruction,
   buildReorderInstruction,
 } from "../lib/instruction.ts";
@@ -19,14 +20,16 @@ type AgentColumnProps = {
 
 // ゴーストカードのドラッグを識別する dataTransfer キー
 // （既存カードの CHALLENGE_DRAG_MIME と区別するため別キーにする）。
-// Firefox は dragstart ハンドラ内で setData を呼ばないとドラッグ操作自体が
-// 開始されないため、このキー自体は handleDrop 側で読み取って分岐には使わない
-// （分岐は isInsertOpen で行う）が、ドラッグ開始の実ブラウザ挙動保証として残す。
+// handleDrop 側でもこのキーの有無を分岐に使う（isInsertOpen だけで分岐すると、
+// ゴーストを開いた状態のまま外部テキスト/ファイル等の無関係なドラッグがドロップ
+// された場合にも誤って prefill してしまうため、GHOST_DRAG_MIME の有無で
+// 「実際にこのゴースト行から開始されたドラッグか」を確認する）。
 const GHOST_DRAG_MIME = "application/x-flywheel-ghost";
 
 // ドラッグ中の要素がどの行に重なっているかを示す識別子。
-// "ghost" はゴーストカード自身の行、それ以外は課題ID。
-type DropTargetKey = string | "ghost" | null;
+// "ghost" はゴーストカード自身の行、"bottom" はスタック末尾のドロップ領域、
+// それ以外は課題ID。
+type DropTargetKey = string | "ghost" | "bottom" | null;
 
 // カラム＝1エージェント。ヘッダはエージェント名のみ（サイクル状態・実行中段は
 // P3 スコープのためここでは実装しない）。challenges は既に呼び出し元
@@ -59,9 +62,22 @@ export function AgentColumn({ agent }: AgentColumnProps) {
     return { id: target.id, priority: target.priority };
   };
 
+  // スタック末尾のドロップ領域（#16 最下位への配置）向けの隣接カード。
+  // 現在の最下位カードを指す。challenges が空の場合は隣接カードなし（最上位と
+  // 同じ唯一の枠）として扱う。
+  const lastChallenge = agent.challenges[agent.challenges.length - 1];
+  const bottomAdjacent: AdjacentChallenge | undefined = lastChallenge
+    ? { id: lastChallenge.id, priority: lastChallenge.priority }
+    : undefined;
+
+  const handleBottomDrop = (event: React.DragEvent<HTMLElement>) => {
+    handleDrop(event, bottomAdjacent, bottomAdjacent ? "bottom" : "before");
+  };
+
   const handleDrop = (
     event: React.DragEvent<HTMLElement>,
     adjacent: AdjacentChallenge | undefined,
+    placement: Placement = "before",
   ) => {
     event.preventDefault();
     event.stopPropagation();
@@ -82,13 +98,23 @@ export function AgentColumn({ agent }: AgentColumnProps) {
       }
       prefill(
         agent.name,
-        buildReorderInstruction(draggedChallengeId, adjacent),
+        buildReorderInstruction(draggedChallengeId, adjacent, placement),
       );
       return;
     }
 
-    if (isInsertOpen) {
-      prefill(agent.name, buildInsertInstruction(insertContent, adjacent));
+    // ゴースト由来のドロップかどうかは isInsertOpen だけでなく GHOST_DRAG_MIME
+    // の有無でも確認する。ゴーストを開いた状態のまま外部テキスト/ファイル等の
+    // 無関係なドラッグがドロップされても prefill してしまわないようにするため。
+    if (isInsertOpen && event.dataTransfer.getData(GHOST_DRAG_MIME)) {
+      // 空内容（trim 後に空文字）での差し込みは中止し、ゴーストを維持する。
+      if (!insertContent.trim()) {
+        return;
+      }
+      prefill(
+        agent.name,
+        buildInsertInstruction(insertContent, adjacent, placement),
+      );
       closeGhost();
     }
   };
@@ -167,6 +193,22 @@ export function AgentColumn({ agent }: AgentColumnProps) {
             <TaskCard challenge={challenge} agentName={agent.name} />
           </div>
         ))}
+        <div
+          className="agent-column-row agent-column-bottom-drop-zone"
+          data-testid="agent-column-bottom-drop-zone"
+          data-drop-target={dropTargetKey === "bottom" || undefined}
+          onDragOver={(event) => {
+            event.preventDefault();
+            setDropTargetKey("bottom");
+          }}
+          onDragLeave={() =>
+            setDropTargetKey((current) =>
+              current === "bottom" ? null : current,
+            )
+          }
+          onDrop={handleBottomDrop}
+          onDragEnd={() => setDropTargetKey(null)}
+        />
         {agent.parseErrors.map((error) => (
           <ErrorCard
             key={`${error.file}:${error.line ?? "?"}:${error.raw}`}

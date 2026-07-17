@@ -29,6 +29,32 @@ describe("buildReorderInstruction", () => {
 
     expect(instruction).toBe("課題 C-047 の優先度を最上位に変更してください");
   });
+
+  it("placement が bottom の場合、対象カードより下（最低優先度）への変更を指示する文言を生成する", () => {
+    const instruction = buildReorderInstruction(
+      "C-047",
+      { id: "C-099" },
+      "bottom",
+    );
+
+    expect(instruction).toBe(
+      "課題 C-047 の優先度を C-099 より下（最低優先度）に変更してください",
+    );
+  });
+
+  it("placement を省略した場合は既定で before（隣接カードより上）として扱う", () => {
+    const withPlacement = buildReorderInstruction(
+      "C-047",
+      { id: "C-044", priority: "P1" },
+      "before",
+    );
+    const withoutPlacement = buildReorderInstruction("C-047", {
+      id: "C-044",
+      priority: "P1",
+    });
+
+    expect(withoutPlacement).toBe(withPlacement);
+  });
 });
 
 describe("buildInsertInstruction", () => {
@@ -58,6 +84,18 @@ describe("buildInsertInstruction", () => {
 
     expect(instruction).toBe(
       "差し込み: 「新しい課題の内容」を課題台帳に追加してください。優先度は最上位でお願いします",
+    );
+  });
+
+  it("placement が bottom の場合、対象カードより下（最低優先度）への追加を指示する文言を生成する", () => {
+    const instruction = buildInsertInstruction(
+      "新しい課題の内容",
+      { id: "C-099" },
+      "bottom",
+    );
+
+    expect(instruction).toBe(
+      "差し込み: 「新しい課題の内容」を課題台帳に追加してください。優先度は C-099 より下（最低優先度）でお願いします",
     );
   });
 });

@@ -76,7 +76,9 @@ export function TerminalPane({
   >(new Map());
   // agent がまだ opened になっていないうちに呼ばれた prefill を、
   // 接続確立（container mount）まで一時的に保持する。
-  const pendingPrefillsRef = useRef<Map<string, string>>(new Map());
+  // 単一の値ではなく配列キューにしているのは、接続確立前に連続して prefill が
+  // 呼ばれた場合に後勝ちで上書きせず、全件を届いた順番のまま流し込むため。
+  const pendingPrefillsRef = useRef<Map<string, string[]>>(new Map());
   // terminal-control 経由の prefill が、タブ一覧に無い agent 名を受け取った場合に
   // 弾くためのガード（サーバ側 resolveAgentEntry も未登録名を拒否するが、
   // クライアント側で無用な再接続ループを作らないよう二重に防御する）。
@@ -134,9 +136,11 @@ export function TerminalPane({
     const { cols, rows } = xterm.fit();
     socket.resize(cols, rows);
 
-    const pendingCommand = pendingPrefillsRef.current.get(agent);
-    if (pendingCommand !== undefined) {
-      socket.prefill(pendingCommand);
+    const pendingCommands = pendingPrefillsRef.current.get(agent);
+    if (pendingCommands !== undefined) {
+      for (const command of pendingCommands) {
+        socket.prefill(command);
+      }
       pendingPrefillsRef.current.delete(agent);
     }
 
@@ -211,7 +215,9 @@ export function TerminalPane({
         if (existing) {
           existing.socket.prefill(command);
         } else {
-          pendingPrefillsRef.current.set(agent, command);
+          const pending = pendingPrefillsRef.current.get(agent) ?? [];
+          pending.push(command);
+          pendingPrefillsRef.current.set(agent, pending);
         }
       },
     };

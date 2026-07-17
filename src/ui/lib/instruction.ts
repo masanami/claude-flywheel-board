@@ -10,6 +10,13 @@ export type AdjacentChallenge = {
   priority?: string;
 };
 
+// カード（またはゴースト）の配置先を表す。
+// - "before": 隣接カード（targetChallenge）の直前（＝より上位）に置く。
+//   隣接カードが無い（undefined）場合は最上位を意味する（従来からの契約）。
+// - "bottom": スタック末尾のドロップ領域へのドロップ。targetChallenge には
+//   現在の最下位カードを渡す（#16 最下位への配置）。
+export type Placement = "before" | "bottom";
+
 function priorityLabel(
   adjacent: AdjacentChallenge,
   suffixWhenSpecified: string,
@@ -29,9 +36,13 @@ function priorityLabel(
 export function buildReorderInstruction(
   challengeId: string,
   targetChallenge: AdjacentChallenge | undefined,
+  placement: Placement = "before",
 ): string {
   if (!targetChallenge) {
     return `課題 ${challengeId} の優先度を最上位に変更してください`;
+  }
+  if (placement === "bottom") {
+    return `課題 ${challengeId} の優先度を ${targetChallenge.id} より下（最低優先度）に変更してください`;
   }
   return `課題 ${challengeId} の優先度を ${targetChallenge.id} より上（${priorityLabel(targetChallenge, "以上")}）に変更してください`;
 }
@@ -46,9 +57,13 @@ export function buildReorderInstruction(
 export function buildInsertInstruction(
   content: string,
   targetChallenge: AdjacentChallenge | undefined,
+  placement: Placement = "before",
 ): string {
   if (!targetChallenge) {
     return `差し込み: 「${content}」を課題台帳に追加してください。優先度は最上位でお願いします`;
+  }
+  if (placement === "bottom") {
+    return `差し込み: 「${content}」を課題台帳に追加してください。優先度は ${targetChallenge.id} より下（最低優先度）でお願いします`;
   }
   return `差し込み: 「${content}」を課題台帳に追加してください。優先度は ${targetChallenge.id} より上（${priorityLabel(targetChallenge, "相当")}）でお願いします`;
 }

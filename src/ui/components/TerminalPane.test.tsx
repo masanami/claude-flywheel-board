@@ -309,6 +309,35 @@ describe("TerminalPane", () => {
     );
   });
 
+  it("未接続の agent に対して連続で prefill を呼んだ場合、接続確立後に全件が呼んだ順番通り送られる（後勝ち上書きしない）", async () => {
+    const harness = buildHarness(["medical", "bi"]);
+
+    render(
+      <TerminalPane
+        connect={harness.connect}
+        createXterm={harness.createXterm}
+        fetchAgents={harness.fetchAgents}
+      />,
+    );
+
+    await screen.findByText("medical");
+    await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(1));
+
+    // "bi" はまだ未接続（タブを開いていない）。この状態で連続して prefill を
+    // 呼ぶと、どちらも接続確立前のキューに積まれる。
+    act(() => {
+      prefill("bi", "echo 1");
+      prefill("bi", "echo 2");
+    });
+
+    await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(2));
+
+    const biSocket = harness.socketFor("bi");
+    expect(biSocket.prefill).toHaveBeenNthCalledWith(1, "echo 1");
+    expect(biSocket.prefill).toHaveBeenNthCalledWith(2, "echo 2");
+    expect(biSocket.prefill).toHaveBeenCalledTimes(2);
+  });
+
   it("agents 一覧に無い agent への prefill は無視する（不明な接続を作らない）", async () => {
     const harness = buildHarness(["medical"]);
 

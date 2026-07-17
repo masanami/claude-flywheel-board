@@ -20,6 +20,18 @@ function isValidPtyDimension(value: unknown): value is number {
   );
 }
 
+/**
+ * prefill の command が「改行を含まない文字列」であることを検証する。
+ *
+ * クリティカル設計決定（親 Issue #2 / #14）: prefill は Enter を送るコードパスを
+ * 一切作らない契約のため、改行を含む command はプロトコルの型レベルで拒否する
+ * （belt-and-braces）。tmux 層の stripNewlines（tmux.ts）は送信直前の第 2 層の
+ * 防御として引き続き維持する。
+ */
+function isValidPrefillCommand(value: unknown): value is string {
+  return typeof value === "string" && !/[\r\n]/.test(value);
+}
+
 export type ClientMessage =
   | { type: "input"; data: string }
   | { type: "resize"; cols: number; rows: number }
@@ -55,7 +67,7 @@ export function parseClientMessage(raw: string): ClientMessage | undefined {
         ? { type: "resize", cols: record.cols, rows: record.rows }
         : undefined;
     case "prefill":
-      return typeof record.command === "string"
+      return isValidPrefillCommand(record.command)
         ? { type: "prefill", command: record.command }
         : undefined;
     default:

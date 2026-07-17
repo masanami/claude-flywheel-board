@@ -168,6 +168,16 @@ describe("AgentColumn", () => {
       expect(input.value).toBe("新しい課題");
     });
 
+    // ゴーストの D&D は実ブラウザ同様、dragStart で GHOST_DRAG_MIME を積んだ
+    // DataTransfer を、そのまま drop まで使い回す（同一ドラッグ操作内では
+    // ブラウザは同じ DataTransfer インスタンスを維持するため）。
+    function dragStartFromGhost() {
+      const dataTransfer = makeDataTransfer();
+      const ghostRow = screen.getByTestId("agent-column-ghost-row");
+      fireEvent.dragStart(ghostRow, { dataTransfer });
+      return dataTransfer;
+    }
+
     it("既存カードが無い状態でゴーストをドロップすると、隣接カードなしとして prefill が呼ばれゴーストが消える", () => {
       render(<AgentColumn agent={agentBoard({ challenges: [] })} />);
       fireEvent.click(screen.getByRole("button", { name: "＋ 差し込み" }));
@@ -175,8 +185,9 @@ describe("AgentColumn", () => {
         target: { value: "新しい課題" },
       });
 
+      const dataTransfer = dragStartFromGhost();
       const ghostRow = screen.getByTestId("agent-column-ghost-row");
-      fireEvent.drop(ghostRow, { dataTransfer: makeDataTransfer() });
+      fireEvent.drop(ghostRow, { dataTransfer });
 
       expect(prefill).toHaveBeenCalledWith(
         "medical",
@@ -202,8 +213,9 @@ describe("AgentColumn", () => {
         target: { value: "新しい課題" },
       });
 
+      const dataTransfer = dragStartFromGhost();
       const row = screen.getByTestId("agent-column-row-C-044");
-      fireEvent.drop(row, { dataTransfer: makeDataTransfer() });
+      fireEvent.drop(row, { dataTransfer });
 
       expect(prefill).toHaveBeenCalledWith(
         "medical",
@@ -227,12 +239,94 @@ describe("AgentColumn", () => {
         target: { value: "新しい課題" },
       });
 
+      const dataTransfer = dragStartFromGhost();
       fireEvent.drop(screen.getByTestId("agent-column-row-C-002"), {
-        dataTransfer: makeDataTransfer(),
+        dataTransfer,
       });
 
       const titles = screen.getAllByText(/番目/).map((el) => el.textContent);
       expect(titles).toEqual(["2番目", "1番目"]);
+    });
+
+    it("ゴースト由来ではない（GHOST_DRAG_MIME を伴わない）ドロップでは、ゴーストが開いていても prefill されない（無関係な外部テキスト/ファイルのドロップ誤爆防止）", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            challenges: [challenge({ id: "C-044", title: "先頭タスク" })],
+          })}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "＋ 差し込み" }));
+      fireEvent.change(screen.getByPlaceholderText("課題の内容"), {
+        target: { value: "新しい課題" },
+      });
+
+      // dragStart を経由せず、外部テキストのドラッグを模した DataTransfer を
+      // 直接 drop する（GHOST_DRAG_MIME は積まれていない）。
+      const externalDataTransfer = makeDataTransfer({
+        "text/plain": "何か無関係なテキスト",
+      });
+      fireEvent.drop(screen.getByTestId("agent-column-row-C-044"), {
+        dataTransfer: externalDataTransfer,
+      });
+
+      expect(prefill).not.toHaveBeenCalled();
+      // ゴーストは維持されたまま（誤って閉じられない）。
+      expect(screen.getByPlaceholderText("課題の内容")).toBeInTheDocument();
+    });
+
+    it("内容が空（trim 後に空文字）の状態でゴーストをドロップしても、prefill されずゴーストは維持される", () => {
+      render(<AgentColumn agent={agentBoard({ challenges: [] })} />);
+      fireEvent.click(screen.getByRole("button", { name: "＋ 差し込み" }));
+      // 内容入力欄には何も入力しない（初期値は空文字）。
+
+      const dataTransfer = dragStartFromGhost();
+      const ghostRow = screen.getByTestId("agent-column-ghost-row");
+      fireEvent.drop(ghostRow, { dataTransfer });
+
+      expect(prefill).not.toHaveBeenCalled();
+      expect(screen.getByPlaceholderText("課題の内容")).toBeInTheDocument();
+    });
+
+    it("内容が空白文字のみの状態でゴーストをドロップしても、prefill されずゴーストは維持される", () => {
+      render(<AgentColumn agent={agentBoard({ challenges: [] })} />);
+      fireEvent.click(screen.getByRole("button", { name: "＋ 差し込み" }));
+      fireEvent.change(screen.getByPlaceholderText("課題の内容"), {
+        target: { value: "   " },
+      });
+
+      const dataTransfer = dragStartFromGhost();
+      const ghostRow = screen.getByTestId("agent-column-ghost-row");
+      fireEvent.drop(ghostRow, { dataTransfer });
+
+      expect(prefill).not.toHaveBeenCalled();
+      expect(screen.getByPlaceholderText("課題の内容")).toBeInTheDocument();
+    });
+
+    it("最下位ドロップゾーンにゴーストをドロップすると、最下位カードより下（最低優先度）への追加として prefill が呼ばれる", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            challenges: [
+              challenge({ id: "C-002", title: "2番目" }),
+              challenge({ id: "C-001", title: "1番目（最下位）" }),
+            ],
+          })}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "＋ 差し込み" }));
+      fireEvent.change(screen.getByPlaceholderText("課題の内容"), {
+        target: { value: "新しい課題" },
+      });
+
+      const dataTransfer = dragStartFromGhost();
+      const bottomZone = screen.getByTestId("agent-column-bottom-drop-zone");
+      fireEvent.drop(bottomZone, { dataTransfer });
+
+      expect(prefill).toHaveBeenCalledWith(
+        "medical",
+        "差し込み: 「新しい課題」を課題台帳に追加してください。優先度は C-001 より下（最低優先度）でお願いします",
+      );
     });
   });
 
@@ -359,6 +453,52 @@ describe("AgentColumn", () => {
       fireEvent.dragLeave(targetRow);
 
       expect(targetRow).not.toHaveAttribute("data-drop-target");
+    });
+
+    it("最下位ドロップゾーンにカードをドロップすると、現在の最下位カードより下（最低優先度）への変更として prefill が呼ばれる", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            challenges: [
+              challenge({ id: "C-047", title: "移動対象" }),
+              challenge({ id: "C-044", title: "移動先隣接" }),
+              challenge({ id: "C-100", title: "現在の最下位" }),
+            ],
+          })}
+        />,
+      );
+
+      const dataTransfer = makeDataTransfer();
+      const draggedCard = screen.getByText("移動対象").closest(".task-card");
+      if (!draggedCard) throw new Error("task-card が見つかりません");
+      fireEvent.dragStart(draggedCard, { dataTransfer });
+      fireEvent.drop(screen.getByTestId("agent-column-bottom-drop-zone"), {
+        dataTransfer,
+      });
+
+      expect(prefill).toHaveBeenCalledWith(
+        "medical",
+        "課題 C-047 の優先度を C-100 より下（最低優先度）に変更してください",
+      );
+    });
+
+    it("最下位ドロップゾーンでもドロップインジケータを表示し、dragLeave で消える", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            challenges: [challenge({ id: "C-047", title: "移動対象" })],
+          })}
+        />,
+      );
+
+      const bottomZone = screen.getByTestId("agent-column-bottom-drop-zone");
+      fireEvent.dragOver(bottomZone, { dataTransfer: makeDataTransfer() });
+
+      expect(bottomZone).toHaveAttribute("data-drop-target", "true");
+
+      fireEvent.dragLeave(bottomZone);
+
+      expect(bottomZone).not.toHaveAttribute("data-drop-target");
     });
   });
 

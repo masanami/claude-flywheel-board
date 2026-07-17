@@ -52,6 +52,18 @@ class FakeWebSocket {
     this.readyState = FakeWebSocket.OPEN;
     this.dispatch("open", {});
   }
+
+  /**
+   * テスト補助: サーバ側／ネットワーク起因の切断（クライアントの close() 呼び出し
+   * を経ない）を模す。実ブラウザ・実 WebSocket も readyState は close イベント
+   * 発火前に CLOSED へ遷移するため、それに合わせて readyState を更新してから
+   * dispatch する（readyState を更新しないと、切断後に呼ばれた send() が
+   * 「まだ OPEN」と誤判定してキューされずに直接送信されてしまう）。
+   */
+  simulateServerClose(): void {
+    this.readyState = FakeWebSocket.CLOSED;
+    this.dispatch("close", {});
+  }
 }
 
 function sentJson(socket: FakeWebSocket, index = 0): unknown {
@@ -276,6 +288,54 @@ describe("connectTerminalSocket", () => {
     vi.advanceTimersByTime(5000);
 
     expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  it("再接続時、切断中にキューされた古い resize より、再接続直後に onStatusChange('open') 内で送る最新の resize が後に送信される（PTY サイズの巻き戻り防止）", () => {
+    vi.useFakeTimers();
+
+    const socketApi: ReturnType<typeof connectTerminalSocket> =
+      connectTerminalSocket({
+        url: "ws://localhost:1234/ws/terminal?agent=medical",
+        onData: vi.fn(),
+        reconnectDelayMs: 100,
+        WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+        onStatusChange: (status) => {
+          if (status === "open") {
+            // TerminalPane の再 fit と同様、再接続直後に「現在の最新サイズ」を
+            // 送り直す。
+            socketApi.resize(120, 40);
+          }
+        },
+      });
+
+    const firstSocket = FakeWebSocket.instances[0] as FakeWebSocket;
+    firstSocket.simulateOpen();
+
+    // 切断（サーバ／ネットワーク起因。readyState は CLOSED へ遷移する）。
+    firstSocket.simulateServerClose();
+
+    // 切断中（次の接続がまだ open していない間）に古い resize がキューされる。
+    socketApi.resize(80, 24);
+
+    // 再接続。
+    vi.advanceTimersByTime(100);
+    const secondSocket = FakeWebSocket.instances[1] as FakeWebSocket;
+    secondSocket.simulateOpen();
+
+    const resizeMessages = secondSocket.sentMessages
+      .map((raw) => JSON.parse(raw))
+      .filter(
+        (message): message is { type: "resize"; cols: number; rows: number } =>
+          (message as { type?: string }).type === "resize",
+      );
+
+    // 最終的にサーバへ反映されるサイズ（＝最後に送られた resize）が、
+    // 巻き戻った古い値（80x24）ではなく最新値（120x40）であること。
+    expect(resizeMessages.at(-1)).toEqual({
+      type: "resize",
+      cols: 120,
+      rows: 40,
+    });
   });
 
   it("onStatusChange に connecting → open → closed → connecting の順で通知する", () => {

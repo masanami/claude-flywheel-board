@@ -38,3 +38,16 @@ export function unregisterTerminalController(
 export function prefill(agent: string, command: string): void {
   currentController?.prefill(agent, command);
 }
+
+/**
+ * テスト専用: 現在の登録内容を問わず、レジストリを強制的に空にする。
+ *
+ * unregisterTerminalController は「現在登録中のものと一致する場合のみ
+ * クリアする」契約のため、呼び出し元が登録済みインスタンスの参照を
+ * 持たない afterEach 等からは確実にクリアできない（一致しない別インスタンスを
+ * 渡しても無視されるだけで、レジストリの汚染がテスト間に漏れ得る）。
+ * 本番コードから呼ばれることは想定しない。
+ */
+export function resetTerminalControllerForTest(): void {
+  currentController = undefined;
+}

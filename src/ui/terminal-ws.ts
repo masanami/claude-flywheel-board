@@ -76,8 +76,15 @@ export function connectTerminalSocket(
     ws.addEventListener("open", () => {
       // 再接続に成功した合図として、バックオフ時間を初期値へ戻す。
       nextReconnectDelayMs = initialReconnectDelayMs;
-      setStatus("open");
+      // 切断中に積まれた保留メッセージ（古い resize を含み得る）を先に flush し、
+      // その後で setStatus("open") を呼ぶ。呼び出し元（TerminalPane）は
+      // onStatusChange("open") の中で「現在の最新サイズ」の resize を送り直す
+      // ことがあり、その送信は既にソケットが OPEN のため即座に（キューを経由せず）
+      // 送られる。先に flush することで、再送された「最新の resize」が必ず
+      // 保留中の「古い resize」より後に送信され、PTY サイズが古い値へ
+      // 巻き戻ることを防ぐ。
       flushPendingMessages();
+      setStatus("open");
     });
 
     ws.addEventListener("message", (event: unknown) => {

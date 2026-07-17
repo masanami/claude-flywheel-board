@@ -96,6 +96,30 @@ describe("parseClientMessage", () => {
     ).toBeUndefined();
   });
 
+  it("prefill で command に改行 (\\n) が含まれる場合は undefined を返す（belt-and-braces。tmux 層の stripNewlines とは別に、プロトコル層でも拒否する）", () => {
+    expect(
+      parseClientMessage(
+        JSON.stringify({ type: "prefill", command: "git status\n" }),
+      ),
+    ).toBeUndefined();
+  });
+
+  it("prefill で command に CRLF (\\r\\n) が含まれる場合は undefined を返す", () => {
+    expect(
+      parseClientMessage(
+        JSON.stringify({ type: "prefill", command: "git status\r\n" }),
+      ),
+    ).toBeUndefined();
+  });
+
+  it("prefill で command の途中に単独の \\r が含まれる場合も undefined を返す", () => {
+    expect(
+      parseClientMessage(
+        JSON.stringify({ type: "prefill", command: "git\rstatus" }),
+      ),
+    ).toBeUndefined();
+  });
+
   it("配列やプリミティブなど object でない JSON は undefined を返す", () => {
     expect(parseClientMessage(JSON.stringify(["input"]))).toBeUndefined();
     expect(parseClientMessage(JSON.stringify("input"))).toBeUndefined();

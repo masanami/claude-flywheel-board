@@ -145,4 +145,39 @@ describe("ensureTmuxSession", () => {
       "/repos/medical-agent",
     );
   });
+
+  it("newSession が失敗しても、再確認で既にセッションが存在すれば成功扱いにする（並行接続時の hasSession→newSession 競合吸収）", async () => {
+    const tmux = {
+      hasSession: vi
+        .fn()
+        .mockResolvedValueOnce(false) // 1回目: まだ無い → newSession を試みる
+        .mockResolvedValueOnce(true), // newSession 失敗後の再確認: 先発の接続が作成済みだった
+      newSession: vi
+        .fn()
+        .mockRejectedValue(new Error("duplicate session: flywheel-medical")),
+      sendKeysLiteral: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await expect(
+      ensureTmuxSession(tmux, "flywheel-medical", "/repos/medical-agent"),
+    ).resolves.toBeUndefined();
+
+    expect(tmux.hasSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("newSession が失敗し、再確認でもセッションが存在しない場合は元のエラーを rethrow する", async () => {
+    const originalError = new Error("tmux binary not found");
+    const tmux = {
+      hasSession: vi
+        .fn()
+        .mockResolvedValueOnce(false)
+        .mockResolvedValueOnce(false),
+      newSession: vi.fn().mockRejectedValue(originalError),
+      sendKeysLiteral: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await expect(
+      ensureTmuxSession(tmux, "flywheel-medical", "/repos/medical-agent"),
+    ).rejects.toBe(originalError);
+  });
 });

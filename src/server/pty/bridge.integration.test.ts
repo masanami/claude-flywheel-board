@@ -111,9 +111,21 @@ describeIfTmux("pty ブリッジ 実 tmux 結合テスト", () => {
 
     // 通常のキー入力としてコマンド＋改行を送る（プリフィルではなく input。
     // シェルへの通常のタイピングを模しており、プリフィル API とは別経路）。
-    ws.send(JSON.stringify({ type: "input", data: "echo PTY_BRIDGE_IT_OK\n" }));
+    //
+    // 検証値は「コマンド文字列そのもの」ではなく「実行結果でしか現れない値」を
+    // 使う（マーカー文字列 + 算術式の計算結果を分割して組み立てる）。tmux は
+    // 送信したキー入力をそのまま画面にエコーするため、コマンド文字列自体を
+    // 待ち受けると、実際にはコマンドが実行されず入力が画面に表示されただけでも
+    // 誤って成功と判定してしまう（$((6*7)) は echo コマンドが実際に評価・展開
+    // しない限り "42" という文字列には絶対にならないため、実行結果の検証になる）。
+    ws.send(
+      JSON.stringify({
+        type: "input",
+        data: "echo PTY_BRIDGE_IT_MARKER=$((6*7))\n",
+      }),
+    );
 
-    await waitUntil(() => received.includes("PTY_BRIDGE_IT_OK"), {
+    await waitUntil(() => received.includes("PTY_BRIDGE_IT_MARKER=42"), {
       timeoutMs: 8000,
     });
 

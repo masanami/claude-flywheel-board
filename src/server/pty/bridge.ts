@@ -97,6 +97,11 @@ export function createTerminalWebSocketServer(
   return { wss, handleUpgrade };
 }
 
+// 接続直後（tmux セッション確保待ち・pty 起動待ち）に届いたメッセージを溜めておく
+// キューの上限。この上限を超えた分は古い順に破棄する（無制限に溜めて board の
+// メモリを圧迫しないため）。
+const PRE_READY_MESSAGE_QUEUE_LIMIT = 100;
+
 async function startTerminalSession(
   ws: WebSocket,
   entry: FleetEntry,
@@ -105,40 +110,20 @@ async function startTerminalSession(
 ): Promise<void> {
   const sessionName = terminalSessionName(entry.name);
 
-  try {
-    await ensureTmuxSession(tmux, sessionName, entry.path);
-  } catch {
-    ws.close(1011, "tmux セッションの確保に失敗しました");
-    return;
-  }
+  // ensureTmuxSession（tmux セッション確保）・pty spawn が完了する前に届いた
+  // input/resize/prefill を、ここで一旦キューに溜める。接続直後から購読を
+  // 始めることで、pty 起動前のメッセージが黙って失われる（"message" リスナー
+  // 未登録のまま Receiver がフレームを parse・emit してしまう）ことを防ぐ。
+  let ptyProcess: PtyProcess | undefined;
+  const pendingRawMessages: string[] = [];
 
-  if (ws.readyState !== WebSocket.OPEN) {
-    // セッション確保待ちの間に切断済みなら pty を spawn しない。
-    return;
-  }
-
-  let ptyProcess: PtyProcess;
-  try {
-    ptyProcess = spawnPty(sessionName, entry.path);
-  } catch {
-    ws.close(1011, "pty の起動に失敗しました");
-    return;
-  }
-
-  ptyProcess.onData((data) => {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(data);
+  function processRawMessage(raw: string): void {
+    if (!ptyProcess) {
+      // まだ pty が起動していない場合はここには来ない想定（呼び出し側で
+      // ptyProcess の有無により振り分けている）が、念のためのガード。
+      return;
     }
-  });
-
-  ptyProcess.onExit(() => {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.close();
-    }
-  });
-
-  ws.on("message", (raw) => {
-    const message = parseClientMessage(raw.toString());
+    const message = parseClientMessage(raw);
     if (!message) {
       return;
     }
@@ -169,13 +154,65 @@ async function startTerminalSession(
         });
         break;
     }
+  }
+
+  // 接続直後から購読を開始する。pty 起動前は上限付きキューへ貯め、
+  // 起動後は即座に処理する（ptyProcess の有無で振り分ける）。
+  ws.on("message", (raw) => {
+    const rawString = raw.toString();
+    if (ptyProcess) {
+      processRawMessage(rawString);
+      return;
+    }
+    pendingRawMessages.push(rawString);
+    if (pendingRawMessages.length > PRE_READY_MESSAGE_QUEUE_LIMIT) {
+      // 上限超過分は古い順に破棄する。
+      pendingRawMessages.shift();
+    }
   });
+
+  try {
+    await ensureTmuxSession(tmux, sessionName, entry.path);
+  } catch {
+    ws.close(1011, "tmux セッションの確保に失敗しました");
+    return;
+  }
+
+  if (ws.readyState !== WebSocket.OPEN) {
+    // セッション確保待ちの間に切断済みなら pty を spawn しない。
+    return;
+  }
+
+  try {
+    ptyProcess = spawnPty(sessionName, entry.path);
+  } catch {
+    ws.close(1011, "pty の起動に失敗しました");
+    return;
+  }
+
+  ptyProcess.onData((data) => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(data);
+    }
+  });
+
+  ptyProcess.onExit(() => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.close();
+    }
+  });
+
+  // pty 起動待ちの間に溜まっていたメッセージを、届いた順のまま処理する。
+  const queued = pendingRawMessages.splice(0, pendingRawMessages.length);
+  for (const raw of queued) {
+    processRawMessage(raw);
+  }
 
   // WS 切断時は pty プロセスのみ kill する。tmux セッションは残す
   // （TmuxClient に kill-session 相当のメソッドが無いため、ここから tmux を
   // 終了させることはそもそもできない）。
   const killPtyOnly = () => {
-    ptyProcess.kill();
+    ptyProcess?.kill();
   };
   ws.on("close", killPtyOnly);
   ws.on("error", killPtyOnly);
