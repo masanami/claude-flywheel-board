@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { Board } from "./components/Board.tsx";
+import { TerminalPane } from "./components/TerminalPane.tsx";
 import "./styles.css";
 
 const container = document.getElementById("root");
@@ -10,6 +11,9 @@ if (!container) {
 
 createRoot(container).render(
   <StrictMode>
-    <Board />
+    <div className="app-layout">
+      <Board />
+      <TerminalPane />
+    </div>
   </StrictMode>,
 );
