@@ -60,11 +60,20 @@ export function spawnPtyProcess(
 }
 
 /**
- * `tmux attach -t <sessionName>` を spawn する（cwd＝エージェント repo ルート）。
- * WS `/ws/terminal` 接続確立後、node-pty で pty ⇔ WS の双方向ストリームを開始する
- * ために使う（architecture.md §3.5）。
+ * `tmux attach -t <sessionName> \; refresh-client` を spawn する
+ * （cwd＝エージェント repo ルート）。WS `/ws/terminal` 接続確立後、node-pty で
+ * pty ⇔ WS の双方向ストリームを開始するために使う（architecture.md §3.5）。
+ *
+ * `refresh-client` を続けるのは、attach 直後のハンドシェイク中に xterm.js 側へ
+ * 部分的な制御列が描画残骸（文字化け行）として残ることがあるため。attach 完了後に
+ * tmux へ全画面再描画を要求して残骸を上書きする（tmux コマンドであり、シェルへの
+ * 入力・実行は一切発生しない）。
  */
 export function createNodePtySpawner(): SpawnTerminalPty {
   return (sessionName, cwd) =>
-    spawnPtyProcess("tmux", ["attach", "-t", sessionName], { cwd });
+    spawnPtyProcess(
+      "tmux",
+      ["attach", "-t", sessionName, ";", "refresh-client"],
+      { cwd },
+    );
 }
