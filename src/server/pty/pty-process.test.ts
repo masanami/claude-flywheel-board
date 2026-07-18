@@ -48,4 +48,15 @@ describe("spawnPtyProcess", () => {
     expect(() => ptyProcess.write("hello\n")).not.toThrow();
     expect(() => ptyProcess.kill()).not.toThrow();
   });
+
+  it("pause / resume が例外を投げずに呼び出せる（バックプレッシャー制御。Issue #26）", async () => {
+    const ptyProcess = spawnPtyProcess("/bin/cat", [], {
+      cwd: process.cwd(),
+    });
+
+    expect(() => ptyProcess.pause()).not.toThrow();
+    expect(() => ptyProcess.resume()).not.toThrow();
+
+    ptyProcess.kill();
+  });
 });
