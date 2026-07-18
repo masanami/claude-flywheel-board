@@ -130,7 +130,7 @@ describe("CardDetailModal", () => {
     expect(screen.getByText("着手中 → 検証中")).toBeInTheDocument();
   });
 
-  it("source バッジは data-source 属性で journal / ledger を出し分ける", async () => {
+  it("source バッジは data-source 属性で journal / ledger / runs を出し分ける", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -139,6 +139,7 @@ describe("CardDetailModal", () => {
           Promise.resolve([
             logEntry({ source: "journal", text: "journal 由来" }),
             logEntry({ source: "ledger", text: "ledger 由来" }),
+            logEntry({ source: "runs", text: "runs 由来" }),
           ]),
       }),
     );
@@ -152,7 +153,7 @@ describe("CardDetailModal", () => {
     );
 
     await waitFor(() => {
-      expect(container.querySelectorAll("[data-source]")).toHaveLength(2);
+      expect(container.querySelectorAll("[data-source]")).toHaveLength(3);
     });
     expect(
       container.querySelector('[data-source="journal"]'),
@@ -160,6 +161,8 @@ describe("CardDetailModal", () => {
     expect(
       container.querySelector('[data-source="ledger"]'),
     ).toBeInTheDocument();
+    expect(container.querySelector('[data-source="runs"]')).toBeInTheDocument();
+    expect(screen.getByText("runs 由来")).toBeInTheDocument();
   });
 
   it("フェッチ失敗時にエラー表示をする", async () => {
