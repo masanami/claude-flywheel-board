@@ -7,6 +7,10 @@ import {
   buildInsertInstruction,
   buildReorderInstruction,
 } from "../lib/instruction.ts";
+import {
+  buildResumeCommand,
+  isResumableDelegateRun,
+} from "../lib/resume-command.ts";
 import { prefill } from "../terminal-control.ts";
 import { ErrorCard } from "./ErrorCard.tsx";
 import {
@@ -39,9 +43,17 @@ function CycleStatusIndicator({
 
 // 実行中セクション（P3-2）: runningRuns（kind: delegate | adhoc の実行中 Run
 // のみ。cycle は cycleStatus 側で表現するためサーバ側で除外済み）を表示する。
-// 実行中カードに操作ボタンは一切置かない（resume ボタン等は別チケット #31）。
-function RunningRunRow({ run }: { run: Run }) {
+// 実行中カードに操作ボタンは基本置かないが、応答なし（stale）の delegate
+// 実行中セッションに限り「再開コマンドを挿入」ボタンを表示する（#31・FR-12）。
+// クリティカル設計決定（親 #28 / #2）: prefill するのみで Enter 送信・自動実行
+// はしない。
+function RunningRunRow({ run, agentName }: { run: Run; agentName: string }) {
   const elapsed = formatElapsed(run.startedAt, new Date());
+  // 再開ボタンの対象判定は isResumableDelegateRun に一元化する
+  // （CardDetailModal 側の findStaleDelegateRun と判定基準を共有）。
+  // resumeRepo に代入することで、以降の JSX では repo の truthy チェックが
+  // そのまま TypeScript の型絞り込みとしても機能する（as string キャスト不要）。
+  const resumeRepo = isResumableDelegateRun(run) ? run.repo : undefined;
   return (
     <div
       className="agent-column-running-run"
@@ -65,6 +77,17 @@ function RunningRunRow({ run }: { run: Run }) {
         <div className="agent-column-running-run-stale-warning">
           ⚠ 応答なし（要確認）
         </div>
+      )}
+      {resumeRepo && (
+        <button
+          type="button"
+          className="agent-column-running-run-resume-button"
+          onClick={() =>
+            prefill(agentName, buildResumeCommand(resumeRepo, run.key))
+          }
+        >
+          再開コマンドを挿入
+        </button>
       )}
     </div>
   );
@@ -205,7 +228,11 @@ export function AgentColumn({ agent }: AgentColumnProps) {
           <section className="agent-column-running-section">
             <h3 className="agent-column-running-heading">⚡ 実行中</h3>
             {agent.runningRuns.map((run) => (
-              <RunningRunRow key={`${run.kind}:${run.key}`} run={run} />
+              <RunningRunRow
+                key={`${run.kind}:${run.key}`}
+                run={run}
+                agentName={agent.name}
+              />
             ))}
           </section>
         )}
@@ -268,7 +295,11 @@ export function AgentColumn({ agent }: AgentColumnProps) {
               onDrop={(event) => handleDrop(event, adjacentChallengeAt(index))}
               onDragEnd={() => setDropTargetKey(null)}
             >
-              <TaskCard challenge={challenge} agentName={agent.name} />
+              <TaskCard
+                challenge={challenge}
+                agentName={agent.name}
+                runningRuns={agent.runningRuns}
+              />
             </div>
           </div>
         ))}

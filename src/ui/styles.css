@@ -309,6 +309,19 @@ body {
   font-size: 0.75rem;
 }
 
+/* 再開コマンドを挿入ボタン（#31・FR-12）: stale な delegate run にのみ表示。 */
+.agent-column-running-run-resume-button {
+  grid-column: 1 / -1;
+  justify-self: start;
+  border: 1px dashed var(--running-section-stale-border);
+  border-radius: 4px;
+  padding: 0.2rem 0.5rem;
+  background: transparent;
+  color: var(--running-section-stale-fg);
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+
 /* D&D 並べ替え・差し込み（#16）: 行ラッパーはドロップ先の判定にのみ使う
  * （台帳の並び替え自体は行わず、指示文生成→prefill のみ）。ドラッグ中の
  * 対象行にはアクセント色の上辺インジケータを表示する。 */
@@ -513,6 +526,47 @@ body {
 
 .card-detail-fields dd {
   margin: 0;
+}
+
+/* resumebox（#31・FR-12）: 応答なし（stale）の delegate 実行中セッションの
+ * 再開コマンドを表示する箱。実行中セクションと同じ青系のアクセントだが、
+ * 「未実行のコマンド」であることを視覚的に区別するため破線ボーダーにする。 */
+.resumebox {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  border: 1px dashed var(--running-section-border);
+  border-radius: 6px;
+  padding: 0.6rem 0.75rem;
+  margin: 0 0 1rem;
+  font-size: 0.8rem;
+}
+
+.resumebox-heading {
+  margin: 0;
+  color: var(--running-section-border);
+}
+
+.resumebox-command {
+  width: 100%;
+  border: 1px solid var(--board-card-border);
+  border-radius: 4px;
+  padding: 0.3rem 0.5rem;
+  background: var(--board-card-bg);
+  color: var(--board-fg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+}
+
+.resumebox-prefill-button {
+  align-self: flex-start;
+  border: 1px solid var(--running-section-border);
+  border-radius: 4px;
+  padding: 0.3rem 0.6rem;
+  background: transparent;
+  color: var(--running-section-border);
+  font-size: 0.75rem;
+  cursor: pointer;
 }
 
 .card-detail-log-heading {

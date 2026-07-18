@@ -1,10 +1,13 @@
 import { useId, useRef, useState } from "react";
-import type { Challenge } from "../board-types.ts";
+import type { Challenge, Run } from "../board-types.ts";
 import { CardDetailModal } from "./CardDetailModal.tsx";
 
 type TaskCardProps = {
   challenge: Challenge;
   agentName: string;
+  // AgentColumn の agent.runningRuns をそのまま中継する（#31・FR-12）。
+  // CardDetailModal 側で対象課題に stale な delegate run があるかを判定する。
+  runningRuns?: Run[];
 };
 
 // D&D 並べ替え（#16）でドラッグ中の課題IDを伝搬するための dataTransfer キー。
@@ -24,7 +27,7 @@ export const AGENT_NAME_DRAG_MIME = "application/x-flywheel-agent-name";
 // 起点にすぎず、台帳を書き換えるものではない（NFR-01）。承認待ちカード
 // （needsHuman）も観測対象として draggable にするが、新規のクリック可能な
 // ボタン要素は増やさない（FR-20 の趣旨＝承認は対話のみ、を維持）。
-export function TaskCard({ challenge, agentName }: TaskCardProps) {
+export function TaskCard({ challenge, agentName, runningRuns }: TaskCardProps) {
   const [isTooltipVisible, setIsTooltipVisible] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -99,6 +102,7 @@ export function TaskCard({ challenge, agentName }: TaskCardProps) {
           challenge={challenge}
           agentName={agentName}
           onClose={closeModal}
+          runningRuns={runningRuns}
         />
       )}
     </>
