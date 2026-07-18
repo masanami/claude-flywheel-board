@@ -55,7 +55,7 @@ beforeEach(() => {
 });
 
 describe("startFleetWatcher", () => {
-  it("chokidar.watch を全 repo の challenge-ledger.md / journal/index.jsonl パスで呼び出す", () => {
+  it("chokidar.watch を全 repo の challenge-ledger.md / journal/index.jsonl / .flywheel/runs.jsonl パスで呼び出す", () => {
     const fake = mockChokidarWatch();
     const cache = createMemoryBoardCache();
     const onAgentUpdate = vi.fn();
@@ -71,8 +71,10 @@ describe("startFleetWatcher", () => {
     expect(watchedPaths).toEqual([
       path.join(agentA.path, "challenge-ledger.md"),
       path.join(agentA.path, "journal", "index.jsonl"),
+      path.join(agentA.path, ".flywheel", "runs.jsonl"),
       path.join(agentB.path, "challenge-ledger.md"),
       path.join(agentB.path, "journal", "index.jsonl"),
+      path.join(agentB.path, ".flywheel", "runs.jsonl"),
     ]);
 
     void fleetWatcher.close();

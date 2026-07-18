@@ -6,10 +6,13 @@ import type { JournalEntry } from "./parsers/journal.ts";
 import { deriveSummary, parseJournal } from "./parsers/journal.ts";
 import type { Challenge, ParseError } from "./parsers/ledger.ts";
 import { parseLedgerFile } from "./parsers/ledger.ts";
+import type { MatchedRun } from "./parsers/runs.ts";
+import { matchRuns, parseRuns } from "./parsers/runs.ts";
 
 // 監視対象ファイル名（P3 で runs.jsonl を追加できるよう、ここに集約する）。
 export const LEDGER_FILE_NAME = "challenge-ledger.md";
 export const JOURNAL_FILE_NAME = path.join("journal", "index.jsonl");
+export const RUNS_FILE_NAME = path.join(".flywheel", "runs.jsonl");
 
 export function ledgerPathFor(entry: FleetEntry): string {
   return path.join(entry.path, LEDGER_FILE_NAME);
@@ -19,9 +22,14 @@ export function journalPathFor(entry: FleetEntry): string {
   return path.join(entry.path, JOURNAL_FILE_NAME);
 }
 
+export function runsPathFor(entry: FleetEntry): string {
+  return path.join(entry.path, RUNS_FILE_NAME);
+}
+
 export type ScanResult = {
   challenges: Challenge[];
   journalEntries: JournalEntry[];
+  matchedRuns: MatchedRun[];
   parseErrors: ParseError[];
 };
 
@@ -40,6 +48,7 @@ export async function scanAgent(entry: FleetEntry): Promise<ScanResult> {
   const parseErrors: ParseError[] = [];
   let challenges: Challenge[] = [];
   let journalEntries: JournalEntry[] = [];
+  let matchedRuns: MatchedRun[] = [];
 
   const ledgerPath = ledgerPathFor(entry);
   try {
@@ -67,7 +76,20 @@ export async function scanAgent(entry: FleetEntry): Promise<ScanResult> {
     });
   }
 
-  return { challenges, journalEntries, parseErrors };
+  const runsPath = runsPathFor(entry);
+  try {
+    const result = await parseRuns(runsPath);
+    matchedRuns = matchRuns(result.events);
+    parseErrors.push(...result.errors);
+  } catch (error) {
+    parseErrors.push({
+      file: runsPath,
+      message: `.flywheel/runs.jsonl の読み込みに失敗しました: ${toErrorMessage(error)}`,
+      raw: "",
+    });
+  }
+
+  return { challenges, journalEntries, matchedRuns, parseErrors };
 }
 
 /**
@@ -79,7 +101,8 @@ export async function scanAndUpdateAgent(
   cache: BoardCache,
   onAgentUpdate?: (agent: AgentBoard) => void,
 ): Promise<void> {
-  const { challenges, journalEntries, parseErrors } = await scanAgent(entry);
+  const { challenges, journalEntries, matchedRuns, parseErrors } =
+    await scanAgent(entry);
 
   // ホバー要約（FR-08）: journal の該当課題への言及から導出して challenge に載せる。
   // 導出の責務はこの合流点に一本化する（parser は素材、cache は格納に徹する）
@@ -95,6 +118,7 @@ export async function scanAndUpdateAgent(
     parseErrors,
   });
   cache.replaceJournal(entry.name, journalEntries);
+  cache.replaceRuns(entry.name, matchedRuns);
 
   if (!onAgentUpdate) {
     return;
@@ -164,9 +188,11 @@ export function startFleetWatcher(
   for (const entry of entries) {
     const ledgerPath = ledgerPathFor(entry);
     const journalPath = journalPathFor(entry);
+    const runsPath = runsPathFor(entry);
     entryByWatchedPath.set(path.resolve(ledgerPath), entry);
     entryByWatchedPath.set(path.resolve(journalPath), entry);
-    watchedPaths.push(ledgerPath, journalPath);
+    entryByWatchedPath.set(path.resolve(runsPath), entry);
+    watchedPaths.push(ledgerPath, journalPath, runsPath);
   }
 
   const debounceTimers = new Map<string, NodeJS.Timeout>();
