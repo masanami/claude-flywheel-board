@@ -200,9 +200,13 @@ export type StaleReevaluationOptions = {
 
 /**
  * cycleStatus + runningRuns（の stale 値等）の変化を検知するための署名。
- * 変化検知に十分な情報（kind/key/endedAt/stale の組み合わせ）だけを比較対象にする。
+ * 変化検知に十分な情報（kind/key/endedAt/stale）に加え、実行中 run の
+ * 経過分バケット（elapsedMinutes）を含める — UI の経過時間表示は
+ * クライアント側タイマーを持たず agent_update の再描画でのみ更新されるため、
+ * 分が進むごとに署名が変わって push が発生することが表示更新の前提になる
+ * （実行中 run が無いエージェントは従来どおり変化時のみ push）。
  */
-function computeAgentSignature(agent: AgentBoard): string {
+function computeAgentSignature(agent: AgentBoard, nowMs: number): string {
   return JSON.stringify({
     cycleStatus: agent.cycleStatus,
     runningRuns: (agent.runningRuns ?? []).map((run) => ({
@@ -210,6 +214,9 @@ function computeAgentSignature(agent: AgentBoard): string {
       key: run.key,
       endedAt: run.endedAt,
       stale: run.stale,
+      elapsedMinutes: run.endedAt
+        ? null
+        : Math.floor((nowMs - Date.parse(run.startedAt)) / 60_000),
     })),
   });
 }
@@ -235,14 +242,16 @@ export function startStaleReevaluation(
 
   const lastSignatureByAgent = new Map<string, string>();
   // 起動時点のスナップショットを基準にしておく（初回 tick で無変化なら push しない）。
-  for (const agent of cache.getSnapshot(now()).agents) {
-    lastSignatureByAgent.set(agent.name, computeAgentSignature(agent));
+  const initialNow = now().getTime();
+  for (const agent of cache.getSnapshot(new Date(initialNow)).agents) {
+    lastSignatureByAgent.set(agent.name, computeAgentSignature(agent, initialNow));
   }
 
   const timer = setIntervalFn(() => {
-    const snapshot = cache.getSnapshot(now());
+    const tickNow = now();
+    const snapshot = cache.getSnapshot(tickNow);
     for (const agent of snapshot.agents) {
-      const signature = computeAgentSignature(agent);
+      const signature = computeAgentSignature(agent, tickNow.getTime());
       if (lastSignatureByAgent.get(agent.name) !== signature) {
         lastSignatureByAgent.set(agent.name, signature);
         onAgentUpdate(agent);
