@@ -1,9 +1,11 @@
 import type { JournalEntry } from "./parsers/journal.ts";
 import { deriveLogEntries } from "./parsers/journal.ts";
 import type { Challenge } from "./parsers/ledger.ts";
-import type { MatchedRun, Run } from "./parsers/runs.ts";
+import type { AgentCycleStatus, MatchedRun, Run } from "./parsers/runs.ts";
 import {
+  deriveCycleStatus,
   deriveRunLogEntries,
+  deriveRunningRuns,
   deriveRuns,
   mergeLogEntries,
   resolveStaleMinutes,
@@ -18,7 +20,10 @@ import type { LogEntry, ParseError } from "./parsers/types.ts";
 // 必須性質とする。実装は本ファイルに閉じ、呼び出し側（api.ts 等）は
 // BoardCache インターフェースにのみ依存する（§3.3 SQLite 移行トリガー対応）。
 
-export type AgentCycleStatus = "running" | "idle" | "stale";
+// AgentCycleStatus の単一定義は parsers/runs.ts（deriveCycleStatus の戻り値型
+// として自然な置き場所のため。Issue #36 項目2）。board-types.ts の既存 import
+// パス（`../server/cache.ts` から取得できること）を壊さないよう re-export する。
+export type { AgentCycleStatus } from "./parsers/runs.ts";
 
 export type AgentBoard = {
   name: string;
@@ -60,7 +65,8 @@ export interface BoardCache {
   /**
    * 全エージェントのスナップショットを返す。cycleStatus/runningRuns は now 時点で
    * 都度再計算する（先に stale を確定させて保存しない）ため、定期再評価
-   * （startStaleReevaluation）や API 呼び出しのたびに正しい経過時間で導出される。
+   * （stale-reevaluation.ts の startStaleReevaluation）や API 呼び出しのたびに
+   * 正しい経過時間で導出される。
    */
   getSnapshot(now?: Date): BoardSnapshot;
 }
@@ -110,24 +116,6 @@ export type MemoryBoardCacheOptions = {
 
 // getSnapshot の内部保持用。cycleStatus/runningRuns は都度算出するため保持しない。
 type StoredAgentBoard = Omit<AgentBoard, "cycleStatus" | "runningRuns">;
-
-function deriveCycleStatus(runs: Run[]): AgentCycleStatus {
-  const openCycles = runs.filter(
-    (run) =>
-      run.kind === "cycle" && run.endedAt === undefined && !run.superseded,
-  );
-  if (openCycles.length === 0) {
-    return "idle";
-  }
-  return openCycles.some((run) => run.stale) ? "stale" : "running";
-}
-
-function deriveRunningRuns(runs: Run[]): Run[] {
-  return runs.filter(
-    (run) =>
-      run.kind !== "cycle" && run.endedAt === undefined && !run.superseded,
-  );
-}
 
 export function createMemoryBoardCache(
   options: MemoryBoardCacheOptions = {},
@@ -190,98 +178,6 @@ export function createMemoryBoardCache(
           };
         }),
       };
-    },
-  };
-}
-
-export type StaleReevaluationTimer = { close(): void };
-
-export type StaleReevaluationOptions = {
-  /** 再評価間隔（ミリ秒）。既定 60_000（1分）。 */
-  intervalMs?: number;
-  /** 現在時刻を返す関数。既定 () => new Date()（テストで時刻を Mock するための DI）。 */
-  now?: () => Date;
-  /** setInterval の DI 用。既定 global setInterval。 */
-  setIntervalFn?: (handler: () => void, timeoutMs: number) => NodeJS.Timeout;
-  /** clearInterval の DI 用。既定 global clearInterval。 */
-  clearIntervalFn?: (handle: NodeJS.Timeout) => void;
-};
-
-/**
- * cycleStatus + runningRuns（の stale 値等）の変化を検知するための署名。
- * 変化検知に十分な情報（kind/key/endedAt/stale）に加え、実行中 run の
- * 経過分バケット（elapsedMinutes）を含める — UI の経過時間表示は
- * クライアント側タイマーを持たず agent_update の再描画でのみ更新されるため、
- * 分が進むごとに署名が変わって push が発生することが表示更新の前提になる
- * （実行中 run が無いエージェントは従来どおり変化時のみ push）。
- */
-function computeAgentSignature(agent: AgentBoard, nowMs: number): string {
-  return JSON.stringify({
-    cycleStatus: agent.cycleStatus,
-    runningRuns: (agent.runningRuns ?? []).map((run) => ({
-      kind: run.kind,
-      key: run.key,
-      endedAt: run.endedAt,
-      stale: run.stale,
-      elapsedMinutes: run.endedAt
-        ? null
-        : Math.floor((nowMs - Date.parse(run.startedAt)) / 60_000),
-    })),
-  });
-}
-
-const DEFAULT_STALE_REEVALUATION_INTERVAL_MS = 60_000;
-
-/**
- * intervalMs（既定1分）ごとに cache.getSnapshot(now) を再計算し、前回 push した
- * cycleStatus/runningRuns から変化があったエージェントのみ onAgentUpdate を呼ぶ
- * （無変化なら push せず、無駄な WS broadcast を避ける）。fs イベントも API 呼び出しも
- * 起きない間に stale へ変わったことへ誰も気づけない問題を解消するための定期タイマー。
- */
-export function startStaleReevaluation(
-  cache: BoardCache,
-  onAgentUpdate: (agent: AgentBoard) => void,
-  options: StaleReevaluationOptions = {},
-): StaleReevaluationTimer {
-  const intervalMs =
-    options.intervalMs ?? DEFAULT_STALE_REEVALUATION_INTERVAL_MS;
-  const now = options.now ?? (() => new Date());
-  const setIntervalFn = options.setIntervalFn ?? setInterval;
-  const clearIntervalFn = options.clearIntervalFn ?? clearInterval;
-
-  const lastSignatureByAgent = new Map<string, string>();
-  // 起動時点のスナップショットを基準にしておく（初回 tick で無変化なら push しない）。
-  const initialNow = now().getTime();
-  for (const agent of cache.getSnapshot(new Date(initialNow)).agents) {
-    lastSignatureByAgent.set(
-      agent.name,
-      computeAgentSignature(agent, initialNow),
-    );
-  }
-
-  const timer = setIntervalFn(() => {
-    const tickNow = now();
-    const snapshot = cache.getSnapshot(tickNow);
-    for (const agent of snapshot.agents) {
-      const signature = computeAgentSignature(agent, tickNow.getTime());
-      if (lastSignatureByAgent.get(agent.name) !== signature) {
-        lastSignatureByAgent.set(agent.name, signature);
-        onAgentUpdate(agent);
-      }
-    }
-  }, intervalMs);
-
-  // board 停止（プロセス終了）をタイマーが妨げないようにする（watcher.ts の
-  // rescanInterval.unref() と同様）。DI 注入されたテストダブルには unref が
-  // 無い可能性があるため、存在チェックしてから呼ぶ。
-  const maybeUnref = (timer as unknown as { unref?: () => void }).unref;
-  if (typeof maybeUnref === "function") {
-    maybeUnref.call(timer);
-  }
-
-  return {
-    close() {
-      clearIntervalFn(timer);
     },
   };
 }
