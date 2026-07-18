@@ -54,9 +54,12 @@ describe("spawnPtyProcess", () => {
       cwd: process.cwd(),
     });
 
-    expect(() => ptyProcess.pause()).not.toThrow();
-    expect(() => ptyProcess.resume()).not.toThrow();
-
-    ptyProcess.kill();
+    // アサーション失敗時にも /bin/cat を残さないよう、kill は finally で保証する
+    try {
+      expect(() => ptyProcess.pause()).not.toThrow();
+      expect(() => ptyProcess.resume()).not.toThrow();
+    } finally {
+      ptyProcess.kill();
+    }
   });
 });
