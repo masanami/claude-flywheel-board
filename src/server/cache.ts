@@ -244,7 +244,10 @@ export function startStaleReevaluation(
   // 起動時点のスナップショットを基準にしておく（初回 tick で無変化なら push しない）。
   const initialNow = now().getTime();
   for (const agent of cache.getSnapshot(new Date(initialNow)).agents) {
-    lastSignatureByAgent.set(agent.name, computeAgentSignature(agent, initialNow));
+    lastSignatureByAgent.set(
+      agent.name,
+      computeAgentSignature(agent, initialNow),
+    );
   }
 
   const timer = setIntervalFn(() => {
