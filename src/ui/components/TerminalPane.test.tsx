@@ -239,6 +239,129 @@ describe("TerminalPane", () => {
     expect(pane.style.height).not.toBe(heightBefore);
   });
 
+  describe("キーボードでのリサイズ（#25）", () => {
+    it("リサイズハンドルに role=separator と関連 aria 属性を持つ", async () => {
+      const harness = buildHarness(["medical"]);
+
+      render(
+        <TerminalPane
+          connect={harness.connect}
+          createXterm={harness.createXterm}
+          fetchAgents={harness.fetchAgents}
+        />,
+      );
+
+      await screen.findByText("medical");
+
+      const handle = screen.getByTestId("terminal-resize-handle");
+      expect(handle).toHaveAttribute("role", "separator");
+      expect(handle).toHaveAttribute("aria-orientation", "horizontal");
+      expect(handle).toHaveAttribute("aria-valuenow", "320");
+      expect(handle).toHaveAttribute("aria-valuemin", "120");
+      expect(handle).toHaveAttribute("aria-valuemax", "800");
+      expect(handle).toHaveAttribute("aria-label", "ターミナルパネルの高さ");
+      expect(handle).toHaveAttribute("tabIndex", "0");
+    });
+
+    it("ArrowUp キーで高さが32px増える", async () => {
+      const harness = buildHarness(["medical"]);
+
+      render(
+        <TerminalPane
+          connect={harness.connect}
+          createXterm={harness.createXterm}
+          fetchAgents={harness.fetchAgents}
+        />,
+      );
+
+      await screen.findByText("medical");
+
+      const pane = screen.getByTestId("terminal-pane");
+      const handle = screen.getByTestId("terminal-resize-handle");
+
+      act(() => {
+        fireEvent.keyDown(handle, { key: "ArrowUp" });
+      });
+
+      expect(pane.style.height).toBe("352px");
+      expect(handle).toHaveAttribute("aria-valuenow", "352");
+    });
+
+    it("ArrowDown キーで高さが32px減る", async () => {
+      const harness = buildHarness(["medical"]);
+
+      render(
+        <TerminalPane
+          connect={harness.connect}
+          createXterm={harness.createXterm}
+          fetchAgents={harness.fetchAgents}
+        />,
+      );
+
+      await screen.findByText("medical");
+
+      const pane = screen.getByTestId("terminal-pane");
+      const handle = screen.getByTestId("terminal-resize-handle");
+
+      act(() => {
+        fireEvent.keyDown(handle, { key: "ArrowDown" });
+      });
+
+      expect(pane.style.height).toBe("288px");
+      expect(handle).toHaveAttribute("aria-valuenow", "288");
+    });
+
+    it("上限（800px）到達後は ArrowUp を押しても超えない", async () => {
+      const harness = buildHarness(["medical"]);
+
+      render(
+        <TerminalPane
+          connect={harness.connect}
+          createXterm={harness.createXterm}
+          fetchAgents={harness.fetchAgents}
+        />,
+      );
+
+      await screen.findByText("medical");
+
+      const pane = screen.getByTestId("terminal-pane");
+      const handle = screen.getByTestId("terminal-resize-handle");
+
+      act(() => {
+        for (let i = 0; i < 20; i += 1) {
+          fireEvent.keyDown(handle, { key: "ArrowUp" });
+        }
+      });
+
+      expect(pane.style.height).toBe("800px");
+    });
+
+    it("下限（120px）到達後は ArrowDown を押しても下回らない", async () => {
+      const harness = buildHarness(["medical"]);
+
+      render(
+        <TerminalPane
+          connect={harness.connect}
+          createXterm={harness.createXterm}
+          fetchAgents={harness.fetchAgents}
+        />,
+      );
+
+      await screen.findByText("medical");
+
+      const pane = screen.getByTestId("terminal-pane");
+      const handle = screen.getByTestId("terminal-resize-handle");
+
+      act(() => {
+        for (let i = 0; i < 20; i += 1) {
+          fireEvent.keyDown(handle, { key: "ArrowDown" });
+        }
+      });
+
+      expect(pane.style.height).toBe("120px");
+    });
+  });
+
   it("fetchAgents が失敗した場合はタブなしで表示する", async () => {
     const fetchAgents = vi.fn(() => Promise.reject(new Error("network error")));
 

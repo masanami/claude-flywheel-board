@@ -315,7 +315,26 @@ export function TerminalPane({
       <div
         className="terminal-pane-resize-handle"
         data-testid="terminal-resize-handle"
+        role="separator"
+        aria-orientation="horizontal"
+        aria-valuenow={height}
+        aria-valuemin={MIN_HEIGHT_PX}
+        aria-valuemax={MAX_HEIGHT_PX}
+        aria-label="ターミナルパネルの高さ"
+        tabIndex={0}
         onMouseDown={handleResizeMouseDown}
+        onKeyDown={(event) => {
+          // マウスドラッグの代替経路（#25）。ArrowUp/Down で32pxずつ増減し、
+          // 既存の clamp で範囲内に収める。setHeight を呼べば再fit用
+          // useEffect（[height, refitActiveConnection] 依存）が自動的に走る。
+          if (event.key === "ArrowUp") {
+            event.preventDefault();
+            setHeight((prev) => clamp(prev + 32, MIN_HEIGHT_PX, MAX_HEIGHT_PX));
+          } else if (event.key === "ArrowDown") {
+            event.preventDefault();
+            setHeight((prev) => clamp(prev - 32, MIN_HEIGHT_PX, MAX_HEIGHT_PX));
+          }
+        }}
       />
       <div className="terminal-pane-header">
         <div className="terminal-tabs" role="tablist">
