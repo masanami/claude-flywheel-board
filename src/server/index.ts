@@ -7,13 +7,14 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import { attachWebSocketServer, registerApiRoutes } from "./api.ts";
 import type { BoardCache } from "./cache.ts";
-import { createMemoryBoardCache, startStaleReevaluation } from "./cache.ts";
+import { createMemoryBoardCache } from "./cache.ts";
 import { loadFleetManifest } from "./manifest.ts";
 import {
   TERMINAL_WS_PATH,
   createTerminalWebSocketServer,
 } from "./pty/bridge.ts";
 import type { TerminalWebSocketServer } from "./pty/bridge.ts";
+import { startStaleReevaluation } from "./stale-reevaluation.ts";
 import { fullScan, startFleetWatcher } from "./watcher.ts";
 
 // NFR-03 / クリティカル設計決定: サーバは 127.0.0.1 に固定バインドする。

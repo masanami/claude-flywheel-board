@@ -418,6 +418,16 @@ export function matchRuns(events: RunEvent[]): MatchedRun[] {
 export type Run = MatchedRun & { stale: boolean };
 
 /**
+ * startedAt（ISO 8601）から nowMs 時点までの経過ミリ秒を計算する共有ヘルパー。
+ * stale 判定（deriveRuns）と実行中シグネチャの経過分バケット計算
+ * （stale-reevaluation.ts の computeAgentSignature）の両方が「now - Date.parse(startedAt)」
+ * を個別に計算していたのを集約する（Issue #36 項目2）。
+ */
+export function computeElapsedMs(startedAt: string, nowMs: number): number {
+  return nowMs - Date.parse(startedAt);
+}
+
+/**
  * stale を付与する純粋関数。now を引数で受け取ることでテストが時刻を Mock
  * できるようにする（実行中 かつ 経過時間 > しきい値 なら stale）。
  */
@@ -430,9 +440,38 @@ export function deriveRuns(
     if (run.endedAt !== undefined) {
       return { ...run, stale: false };
     }
-    const elapsedMs = now.getTime() - Date.parse(run.startedAt);
+    const elapsedMs = computeElapsedMs(run.startedAt, now.getTime());
     return { ...run, stale: elapsedMs > staleMinutes * 60_000 };
   });
+}
+
+export type AgentCycleStatus = "running" | "idle" | "stale";
+
+/**
+ * runs.jsonl 由来の Run[] から、エージェントの現在の cycle 状態を導出する
+ * 純粋関数（cache.ts から移設。Issue #36 項目2: parser は素材・cache は格納
+ * という役割分担に合わせ、deriveRuns 等の仲間として同居させる）。
+ */
+export function deriveCycleStatus(runs: Run[]): AgentCycleStatus {
+  const openCycles = runs.filter(
+    (run) =>
+      run.kind === "cycle" && run.endedAt === undefined && !run.superseded,
+  );
+  if (openCycles.length === 0) {
+    return "idle";
+  }
+  return openCycles.some((run) => run.stale) ? "stale" : "running";
+}
+
+/**
+ * runs.jsonl 由来の Run[] から、実行中の delegate/adhoc Run のみを導出する
+ * 純粋関数（cache.ts から移設。cycle は cycleStatus 側で表現するため除外）。
+ */
+export function deriveRunningRuns(runs: Run[]): Run[] {
+  return runs.filter(
+    (run) =>
+      run.kind !== "cycle" && run.endedAt === undefined && !run.superseded,
+  );
 }
 
 export const DEFAULT_STALE_MINUTES = 30;
