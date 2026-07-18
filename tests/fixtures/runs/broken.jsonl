@@ -1,0 +1,6 @@
+{"ts":"2026-07-16T10:00:00+09:00","event":"cycle_start","cycle":"2026-07-16-cycle"}
+{"ts":"2026-07-16T10:05:12+09:00","event":"delegate_start","challenge":"C-044","repo":"net-config","session_id":
+
+{"ts":"2026-07-16T10:10:00+09:00","event":"delegate_start","challenge":"C-045","repo":"net-config"}
+{"ts":"2026-07-16T10:20:00+09:00","event":"unknown_event","foo":"bar"}
+{"ts":"2026-07-16T10:45:00+09:00","event":"cycle_end","cycle":"2026-07-16-cycle","result":"completed"}

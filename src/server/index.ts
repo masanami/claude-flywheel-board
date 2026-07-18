@@ -7,7 +7,7 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import { attachWebSocketServer, registerApiRoutes } from "./api.ts";
 import type { BoardCache } from "./cache.ts";
-import { createMemoryBoardCache } from "./cache.ts";
+import { createMemoryBoardCache, startStaleReevaluation } from "./cache.ts";
 import { loadFleetManifest } from "./manifest.ts";
 import {
   TERMINAL_WS_PATH,
@@ -117,12 +117,21 @@ if (isMainModule) {
     broadcastAgentUpdate,
   );
 
+  // P3: fs イベントも API 呼び出しも起きない間に stale へ変わったことへ誰も
+  // 気づけない問題を解消するための定期再評価（既定1分間隔）。
+  // staleMinutes は cache 側の既定（resolveStaleMinutes()）をそのまま使う。
+  const staleReevaluationTimer = startStaleReevaluation(
+    cache,
+    broadcastAgentUpdate,
+  );
+
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.on(signal, () => {
       // close() は chokidar ハンドルやタイマーの解放を待つ Promise を返すが、
       // プロセスは直後の process.exit(0) で終了するため意図的に待たない
       // （fire-and-forget）。OS 側でハンドルは回収されるため実害はない。
       void fleetWatcher.close();
+      staleReevaluationTimer.close();
       server.close();
       process.exit(0);
     });
