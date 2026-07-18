@@ -8,6 +8,14 @@ export type PtyProcess = {
   write(data: string): void;
   resize(cols: number, rows: number): void;
   kill(): void;
+  /**
+   * pty からのデータ出力（onData）を一時停止する（node-pty の flow control API）。
+   * バックプレッシャー制御（Issue #26）: WS 送信バッファ（ws.bufferedAmount）が
+   * 高水位を超えた際、呼び出し側（bridge.ts）がこれを呼ぶ。
+   */
+  pause(): void;
+  /** pause() で止めた pty からのデータ出力を再開する。 */
+  resume(): void;
 };
 
 export type SpawnTerminalPty = (sessionName: string, cwd: string) => PtyProcess;
@@ -55,6 +63,12 @@ export function spawnPtyProcess(
     },
     kill() {
       ptyProcess.kill();
+    },
+    pause() {
+      ptyProcess.pause();
+    },
+    resume() {
+      ptyProcess.resume();
     },
   };
 }

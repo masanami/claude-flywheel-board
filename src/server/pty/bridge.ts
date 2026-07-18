@@ -21,6 +21,10 @@ export type TerminalBridgeDeps = {
   getFleetEntries: () => readonly FleetEntry[];
   tmux?: TmuxClient;
   spawnPty?: SpawnTerminalPty;
+  /** バックプレッシャー制御（低水位監視）の setInterval DI 用。既定 global setInterval。 */
+  setIntervalFn?: (handler: () => void, timeoutMs: number) => NodeJS.Timeout;
+  /** バックプレッシャー制御（低水位監視）の clearInterval DI 用。既定 global clearInterval。 */
+  clearIntervalFn?: (handle: NodeJS.Timeout) => void;
 };
 
 export type TerminalWebSocketServer = {
@@ -47,6 +51,8 @@ export function createTerminalWebSocketServer(
 ): TerminalWebSocketServer {
   const tmux = deps.tmux ?? createTmuxClient();
   const spawnPty = deps.spawnPty ?? createNodePtySpawner();
+  const setIntervalFn = deps.setIntervalFn ?? setInterval;
+  const clearIntervalFn = deps.clearIntervalFn ?? clearInterval;
   const wss = new WebSocketServer({ noServer: true });
 
   function handleUpgrade(
@@ -90,7 +96,14 @@ export function createTerminalWebSocketServer(
   wss.on(
     "connection",
     (ws: WebSocket, _request: IncomingMessage, entry: FleetEntry) => {
-      void startTerminalSession(ws, entry, tmux, spawnPty);
+      void startTerminalSession(
+        ws,
+        entry,
+        tmux,
+        spawnPty,
+        setIntervalFn,
+        clearIntervalFn,
+      );
     },
   );
 
@@ -102,11 +115,32 @@ export function createTerminalWebSocketServer(
 // メモリを圧迫しないため）。
 const PRE_READY_MESSAGE_QUEUE_LIMIT = 100;
 
+// バックプレッシャー制御（Issue #26 / PR #24 CodeRabbit 指摘）:
+// board は 127.0.0.1 限定・単一ユーザーで、xterm.js は通常同一マシン上で高速に
+// 出力を消費するため、ws.send を無条件に続けても実害は薄い。ただし「ターミナル
+// 内で大量出力を出す暴走プロセス＋描画停滞」が重なると ws の送信バッファが
+// 際限なく膨らみうる。node-pty の flow control API（pause/resume）で pty 側の
+// 出力そのものを止め、切断せずに操作継続性を保ったまま抑制する。
+//
+// 高水位: ws.bufferedAmount がこれを超えたら pty からの出力を一時停止する。
+const HIGH_WATERMARK_BYTES = 1_048_576; // 1MB
+// 低水位: 一時停止後、ここまでバッファが捌けたら再開する。高水位と同値にすると
+// 再開直後に即座に再一時停止するハンチングが起きうるため、意図的に低い値にして
+// ヒステリシスを持たせる。
+const LOW_WATERMARK_BYTES = 262_144; // 256KB
+// 一時停止中、ws.bufferedAmount が低水位を下回ったかを確認するポーリング間隔。
+// pause 中は pty からの onData が止まる（＝低水位到達を検知する自然なトリガーが
+// 無くなる）ため、pause している間だけこのタイマーを起動して監視する
+// （通常時は常時ポーリングしない。YAGNI）。
+const RESUME_CHECK_INTERVAL_MS = 200;
+
 async function startTerminalSession(
   ws: WebSocket,
   entry: FleetEntry,
   tmux: TmuxClient,
   spawnPty: SpawnTerminalPty,
+  setIntervalFn: (handler: () => void, timeoutMs: number) => NodeJS.Timeout,
+  clearIntervalFn: (handle: NodeJS.Timeout) => void,
 ): Promise<void> {
   const sessionName = terminalSessionName(entry.name);
 
@@ -190,13 +224,66 @@ async function startTerminalSession(
     return;
   }
 
+  // pause 中かどうかの状態フラグ。pause/resume の呼び出しを冪等にし、
+  // 高水位超過が続く間に pause() を多重発火させない・ポーリングタイマーを
+  // 二重起動しないために使う。
+  let paused = false;
+  let resumeCheckTimer: NodeJS.Timeout | undefined;
+
+  function clearResumeCheckTimer(): void {
+    if (resumeCheckTimer !== undefined) {
+      clearIntervalFn(resumeCheckTimer);
+      resumeCheckTimer = undefined;
+    }
+  }
+
+  function pausePty(): void {
+    if (paused) {
+      return;
+    }
+    paused = true;
+    ptyProcess?.pause();
+    resumeCheckTimer = setIntervalFn(() => {
+      if (ws.bufferedAmount < LOW_WATERMARK_BYTES) {
+        resumePty();
+      }
+    }, RESUME_CHECK_INTERVAL_MS);
+    // board 停止（プロセス終了）をこのタイマーが妨げないようにする
+    // （cache.ts の startStaleReevaluation と同様）。DI 注入されたテストダブルには
+    // unref が無い可能性があるため、存在チェックしてから呼ぶ。
+    const maybeUnref = (resumeCheckTimer as unknown as { unref?: () => void })
+      .unref;
+    if (typeof maybeUnref === "function") {
+      maybeUnref.call(resumeCheckTimer);
+    }
+  }
+
+  function resumePty(): void {
+    if (!paused) {
+      return;
+    }
+    paused = false;
+    clearResumeCheckTimer();
+    ptyProcess?.resume();
+  }
+
   ptyProcess.onData((data) => {
+    // 高水位チェックは ws が OPEN の場合のみ行う。非 OPEN（CLOSING/CLOSED）の
+    // ソケットに対して pausePty() を呼んでも無意味な上、close/error のクリーン
+    // アップと競合してタイマーが回収されない余地を生むため、send と同じガードに
+    // 揃える。
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(data);
+      if (ws.bufferedAmount > HIGH_WATERMARK_BYTES) {
+        pausePty();
+      }
     }
   });
 
   ptyProcess.onExit(() => {
+    // pause 中に pty が終了した場合に備え、ここでもポーリング用タイマーを
+    // 片付ける（close/error リスナの発火だけに頼らない防御的な後始末）。
+    clearResumeCheckTimer();
     if (ws.readyState === WebSocket.OPEN) {
       ws.close();
     }
@@ -210,10 +297,12 @@ async function startTerminalSession(
 
   // WS 切断時は pty プロセスのみ kill する。tmux セッションは残す
   // （TmuxClient に kill-session 相当のメソッドが無いため、ここから tmux を
-  // 終了させることはそもそもできない）。
-  const killPtyOnly = () => {
+  // 終了させることはそもそもできない）。あわせて、pause 中のポーリング用
+  // タイマーが起動していれば必ず片付ける（タイマーリーク防止）。
+  const cleanupOnDisconnect = () => {
+    clearResumeCheckTimer();
     ptyProcess?.kill();
   };
-  ws.on("close", killPtyOnly);
-  ws.on("error", killPtyOnly);
+  ws.on("close", cleanupOnDisconnect);
+  ws.on("error", cleanupOnDisconnect);
 }

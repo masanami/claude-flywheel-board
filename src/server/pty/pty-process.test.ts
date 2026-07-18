@@ -48,4 +48,18 @@ describe("spawnPtyProcess", () => {
     expect(() => ptyProcess.write("hello\n")).not.toThrow();
     expect(() => ptyProcess.kill()).not.toThrow();
   });
+
+  it("pause / resume が例外を投げずに呼び出せる（バックプレッシャー制御。Issue #26）", async () => {
+    const ptyProcess = spawnPtyProcess("/bin/cat", [], {
+      cwd: process.cwd(),
+    });
+
+    // アサーション失敗時にも /bin/cat を残さないよう、kill は finally で保証する
+    try {
+      expect(() => ptyProcess.pause()).not.toThrow();
+      expect(() => ptyProcess.resume()).not.toThrow();
+    } finally {
+      ptyProcess.kill();
+    }
+  });
 });
