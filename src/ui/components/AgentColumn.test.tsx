@@ -958,8 +958,11 @@ describe("AgentColumn", () => {
       expect(
         screen.getByTestId("agent-column-bottom-drop-zone"),
       ).not.toHaveAttribute("data-drop-target");
+      // prefill はターミナルへの入力（未実行）に留まる（NFR-01）。実行済みと
+      // 誤解させないよう、確定＝移動完了ではなく「指示を入力した」ことのみを
+      // 伝える文言にする（CodeRabbit Major指摘 #2）。
       expect(screen.getByTestId("agent-column-live-region")).toHaveTextContent(
-        "移動しました",
+        "並べ替え指示をターミナルに入力しました（Enter で実行）",
       );
     });
 
@@ -1154,6 +1157,49 @@ describe("AgentColumn", () => {
       expect(prefill).not.toHaveBeenCalled();
     });
 
+    it("並べ替えモード中に challenges が差し替わり、保持中のスロットが有効なまま指す隣接課題だけが別課題にすり替わった場合、確定してもprefillされずキャンセル通知される（CodeRabbit Major指摘 #1）", () => {
+      const { rerender } = render(
+        <AgentColumn agent={agentBoard({ challenges: threeChallenges() })} />,
+      );
+
+      const card = focusCard("1番目");
+      // C-001（先頭）を1段下げる → スロット2（元々は C-003 の前＝読み上げは
+      // 「移動先はC-003の上」）へ。
+      fireEvent.keyDown(card, { key: "ArrowDown", altKey: true });
+      expect(screen.getByTestId("agent-column-live-region")).toHaveTextContent(
+        "並べ替え: 移動先はC-003の上",
+      );
+
+      // 監視更新（fs-watch/WS）により、C-001 自身の位置は変わらないまま
+      // スロット2の直前に別の課題（D-999）が挿入された。isNoOpSlot による
+      // 範囲・no-op 判定だけでは検知できない（selfIndex・slot自体は依然
+      // 有効なまま）が、スロット2が指す隣接課題は C-003 から D-999 に
+      // すり替わっている。
+      rerender(
+        <AgentColumn
+          agent={agentBoard({
+            challenges: [
+              challenge({ id: "C-001", title: "1番目" }),
+              challenge({ id: "C-002", title: "2番目" }),
+              challenge({ id: "D-999", title: "差し込まれた課題" }),
+              challenge({ id: "C-003", title: "3番目" }),
+            ],
+          })}
+        />,
+      );
+
+      const refreshedCard = screen.getByText("1番目").closest(".task-card");
+      if (!refreshedCard) throw new Error("task-card が見つかりません");
+      fireEvent.keyDown(refreshedCard, { key: "Enter" });
+
+      // 読み上げた基準（C-003）と異なる課題（D-999）を基準にした指示文が
+      // 誤って prefill されてはならない。
+      expect(prefill).not.toHaveBeenCalled();
+      expect(screen.getByTestId("agent-column-live-region")).toHaveTextContent(
+        "カードの並びが変わったため並べ替えをキャンセルしました",
+      );
+    });
+
     it("要素が1件のみのカラムでは移動先が無いため並べ替えモードが実質開始しない（インジケータが付かない）", () => {
       render(
         <AgentColumn
@@ -1237,6 +1283,72 @@ describe("AgentColumn", () => {
       expect(
         screen.queryByPlaceholderText("課題の内容"),
       ).not.toBeInTheDocument();
+    });
+
+    // IME変換中のガード（CodeRabbit Major指摘 #3）: 変換確定のためだけに
+    // 押した Enter が、ゴースト確定（prefill）に化けてはならない。同様に
+    // 変換候補を打ち消す Escape がゴースト破棄に化けてもならない。
+    it("IME変換確定中（isComposing）の Enter では prefill されずゴーストが維持される", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            challenges: [
+              challenge({ id: "C-044", priority: "P1", title: "先頭タスク" }),
+            ],
+          })}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "＋ 差し込み" }));
+      const input = screen.getByPlaceholderText("課題の内容");
+      fireEvent.change(input, { target: { value: "新しい課題" } });
+
+      fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+
+      expect(prefill).not.toHaveBeenCalled();
+      expect(screen.getByPlaceholderText("課題の内容")).toBeInTheDocument();
+    });
+
+    it("IME変換中（isComposing）の Escape ではゴーストが破棄されない", () => {
+      render(<AgentColumn agent={agentBoard({ challenges: [] })} />);
+      fireEvent.click(screen.getByRole("button", { name: "＋ 差し込み" }));
+      const input = screen.getByPlaceholderText("課題の内容");
+      fireEvent.change(input, { target: { value: "新しい課題" } });
+
+      fireEvent.keyDown(input, { key: "Escape", isComposing: true });
+
+      expect(prefill).not.toHaveBeenCalled();
+      expect(screen.getByPlaceholderText("課題の内容")).toBeInTheDocument();
+    });
+  });
+
+  describe("ゴースト破棄後のフォーカス復帰（CodeRabbit Major指摘 #4）", () => {
+    it("Escapeでゴーストを破棄すると「＋ 差し込み」ボタンにフォーカスが戻る", () => {
+      render(<AgentColumn agent={agentBoard({ challenges: [] })} />);
+      fireEvent.click(screen.getByRole("button", { name: "＋ 差し込み" }));
+      const input = screen.getByPlaceholderText("課題の内容");
+
+      fireEvent.keyDown(input, { key: "Escape" });
+
+      expect(screen.getByRole("button", { name: "＋ 差し込み" })).toHaveFocus();
+    });
+
+    it("Enterでゴーストを確定した後も「＋ 差し込み」ボタンにフォーカスが戻る", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            challenges: [
+              challenge({ id: "C-044", priority: "P1", title: "先頭タスク" }),
+            ],
+          })}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "＋ 差し込み" }));
+      const input = screen.getByPlaceholderText("課題の内容");
+      fireEvent.change(input, { target: { value: "新しい課題" } });
+
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      expect(screen.getByRole("button", { name: "＋ 差し込み" })).toHaveFocus();
     });
   });
 });

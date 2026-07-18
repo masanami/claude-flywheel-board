@@ -123,7 +123,18 @@ type DropTargetKey = string | "ghost" | "bottom" | null;
 // で表現する。スロット i（i<N）は「現在の challenges[i] の直前に置く」、
 // スロット N は「末尾（最下位）に置く」を意味する。並べ替え対象自身の位置に
 // 戻ってしまう（結果的に何も変わらない）スロットは自動的にスキップする。
-type ReorderState = { challengeId: string; slot: number } | null;
+// basisAdjacentId / basisPlacement: スロット確定時に「読み上げた（＝ユーザーが
+// 意図した）隣接課題」を固定するための基準値。並べ替えモード中に監視更新
+// （fs-watch/WS）で challenges が挿入・並び替えされると、スロット番号自体は
+// 範囲内・no-opでなくても、そのスロットが指す隣接課題の中身がすり替わる
+// ことがある（CodeRabbit Major指摘 #1）。確定時にこの基準値と現在の
+// challenges から導いた隣接課題を突き合わせ、一致しない場合はキャンセルする。
+type ReorderState = {
+  challengeId: string;
+  slot: number;
+  basisAdjacentId: string | undefined;
+  basisPlacement: Placement;
+} | null;
 
 // スロット slot が対象カード自身（selfIndex）にとって no-op かどうか。
 // slot === selfIndex（自分の直前に自分を置く）、
@@ -161,6 +172,10 @@ export function AgentColumn({ agent }: AgentColumnProps) {
   // aria-live="polite" で読み上げる案内文（#25）。視覚的には非表示。
   const [liveMessage, setLiveMessage] = useState("");
   const ghostInputRef = useRef<HTMLInputElement | null>(null);
+  // ゴースト破棄時（Escape・確定後）にフォーカスを戻す先（CodeRabbit Major
+  // 指摘 #4）。ゴースト入力欄はゴーストの消滅と共に DOM から外れるため、
+  // 何もしなければフォーカスが失われる（キーボード操作の連続性が途切れる）。
+  const insertButtonRef = useRef<HTMLButtonElement | null>(null);
 
   // ゴースト表示直後、フォーカスが直前の要素（ターミナル等）に残ったままだと
   // タイプした文字がそちらへ流れてしまう（#27）。表示された瞬間に入力欄へ
@@ -176,6 +191,10 @@ export function AgentColumn({ agent }: AgentColumnProps) {
   const closeGhost = () => {
     setIsInsertOpen(false);
     setInsertContent("");
+    // ゴースト入力欄は次の描画で DOM から消えるため、直前にフォーカスが
+    // 無効化される前に「＋ 差し込み」ボタンへ明示的に戻す
+    // （CodeRabbit Major指摘 #4）。
+    insertButtonRef.current?.focus();
   };
 
   // 隣接カード（ドロップ先の直下に来る既存カード）を、行のインデックスから求める。
@@ -218,6 +237,22 @@ export function AgentColumn({ agent }: AgentColumnProps) {
       : "並べ替え: 最下位";
   };
 
+  // スロット slot（0..maxSlot）が指す隣接課題＋配置を求める。並べ替えの
+  // 「基準」記録（handleReorderMove）と確定時の再検証（handleReorderConfirm）
+  // の両方で同じ導出ロジックを使うことで、両者のズレを防ぐ。
+  const resolveSlotTarget = (
+    slot: number,
+    maxSlot: number,
+  ): { adjacent: AdjacentChallenge | undefined; placement: Placement } => {
+    if (slot === maxSlot) {
+      return {
+        adjacent: bottomAdjacent,
+        placement: bottomAdjacent ? "bottom" : "before",
+      };
+    }
+    return { adjacent: adjacentChallengeAt(slot), placement: "before" };
+  };
+
   // Alt+ArrowUp/Down（#25）。まだ並べ替えモードでなければ開始し、既に対象
   // カードで並べ替えモード中ならそのまま移動先スロットを動かす。
   const handleReorderMove = (
@@ -242,7 +277,16 @@ export function AgentColumn({ agent }: AgentColumnProps) {
       // この場合は並べ替えモード自体を開始しない。
       return;
     }
-    setReorderState({ challengeId, slot: next });
+    // このスロットが現時点で指している隣接課題を「基準」として記録する。
+    // ユーザーがこの読み上げ（aria-live）を聞いて Enter を押す前提のため、
+    // 確定時にはこの基準と現在の隣接課題が一致しているかを再検証する。
+    const { adjacent, placement } = resolveSlotTarget(next, maxSlot);
+    setReorderState({
+      challengeId,
+      slot: next,
+      basisAdjacentId: adjacent?.id,
+      basisPlacement: placement,
+    });
     setLiveMessage(describeReorderSlot(next, maxSlot));
   };
 
@@ -250,32 +294,45 @@ export function AgentColumn({ agent }: AgentColumnProps) {
   // placement に変換し、既存の buildReorderInstruction → prefill 経路へ渡す。
   // challenges 配列自体は書き換えない（楽観更新禁止・NFR-01）。
   //
-  // 安全弁: モード開始後に fs-watch 経由で agent.challenges が変化している
-  // 可能性があるため（board はポーリング/購読で常に最新の challenges を props
-  // として受け取る）、確定の瞬間に selfIndex を必ず取り直し、保持していた
-  // slot が新しい配列上でも依然として有効（no-op でない）かを isNoOpSlot で
-  // 再検証する。無効化されていれば prefill せずモードだけ終了する。
+  // 安全弁1（範囲・no-op）: モード開始後に fs-watch 経由で agent.challenges
+  // が変化している可能性があるため、確定の瞬間に selfIndex を必ず取り直し、
+  // 保持していた slot が新しい配列上でも依然として有効（no-op でない）かを
+  // isNoOpSlot で再検証する。無効化されていれば prefill せずモードだけ終了
+  // する。
+  //
+  // 安全弁2（隣接課題の厳密な再検証・CodeRabbit Major指摘 #1）: 安全弁1の
+  // 範囲・no-op チェックだけでは「スロット番号自体は依然有効だが、そのスロット
+  // が指す隣接課題が挿入・並び替えにより別の課題にすり替わっている」ケースを
+  // 検知できない。これを見逃すと、ユーザーが読み上げ（aria-live）で聞いた
+  // 課題とは別の課題を基準にした指示文を生成してしまう。そのため、モード
+  // 開始/移動時に記録した基準（basisAdjacentId/basisPlacement）と、確定時に
+  // 現在の challenges から導いた隣接課題を突き合わせ、不一致ならキャンセル
+  // 扱いにする。
   const handleReorderConfirm = (challengeId: string) => {
     if (!reorderState || reorderState.challengeId !== challengeId) {
       setReorderState(null);
       return;
     }
-    const { slot } = reorderState;
+    const { slot, basisAdjacentId, basisPlacement } = reorderState;
     const selfIndex = agent.challenges.findIndex((c) => c.id === challengeId);
     const maxSlot = agent.challenges.length;
     setReorderState(null);
     if (selfIndex === -1 || slot > maxSlot || isNoOpSlot(slot, selfIndex)) {
       return;
     }
-    const adjacent =
-      slot === maxSlot ? bottomAdjacent : adjacentChallengeAt(slot);
-    const placement: Placement =
-      slot === maxSlot ? (bottomAdjacent ? "bottom" : "before") : "before";
+    const { adjacent, placement } = resolveSlotTarget(slot, maxSlot);
+    if (adjacent?.id !== basisAdjacentId || placement !== basisPlacement) {
+      setLiveMessage("カードの並びが変わったため並べ替えをキャンセルしました");
+      return;
+    }
     prefill(
       agent.name,
       buildReorderInstruction(challengeId, adjacent, placement),
     );
-    setLiveMessage("移動しました");
+    // NFR-01: prefill はターミナルへの入力に留まり、実行（Enter 送信）は
+    // 人間が行う。「移動しました」は完了済みと誤解させるため、未実行が
+    // 伝わる文言にする（CodeRabbit Major指摘 #2）。
+    setLiveMessage("並べ替え指示をターミナルに入力しました（Enter で実行）");
   };
 
   // 並べ替えモード中の Escape によるキャンセル（#25）。prefill せずモードだけ
@@ -380,6 +437,7 @@ export function AgentColumn({ agent }: AgentColumnProps) {
         <h2 className="agent-column-title">{agent.name}</h2>
         <CycleStatusIndicator cycleStatus={agent.cycleStatus} />
         <button
+          ref={insertButtonRef}
           type="button"
           className="agent-column-insert-button"
           onClick={() => (isInsertOpen ? closeGhost() : setIsInsertOpen(true))}
@@ -433,6 +491,13 @@ export function AgentColumn({ agent }: AgentColumnProps) {
               // へ確定、Escape でゴーストを破棄する。D&D と同じ「空内容は
               // 無視」ガードを踏襲する。
               onKeyDown={(event) => {
+                // IME変換中のガード（CodeRabbit Major指摘 #3）: 変換確定の
+                // ために押した Enter が prefill 確定に化けたり、変換候補を
+                // 打ち消すための Escape がゴースト破棄に化けたりしないよう、
+                // isComposing 中はこのハンドラの対象キーを無視する。
+                if (event.nativeEvent.isComposing) {
+                  return;
+                }
                 if (event.key === "Enter") {
                   event.preventDefault();
                   if (!insertContent.trim()) {
