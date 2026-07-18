@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AgentBoard, Challenge, ParseError } from "../board-types.ts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentBoard, Challenge, ParseError, Run } from "../board-types.ts";
 import { prefill } from "../terminal-control.ts";
 import { AgentColumn } from "./AgentColumn.tsx";
 
@@ -42,6 +42,16 @@ function agentBoard(overrides: Partial<AgentBoard> = {}): AgentBoard {
     path: "/agents/medical",
     challenges: [],
     parseErrors: [],
+    cycleStatus: "idle",
+    runningRuns: [],
+    ...overrides,
+  };
+}
+
+function run(overrides: Partial<Run> & Pick<Run, "kind" | "key">): Run {
+  return {
+    startedAt: "2026-07-16T09:00:00.000Z",
+    stale: false,
     ...overrides,
   };
 }
@@ -528,6 +538,186 @@ describe("AgentColumn", () => {
       expect(
         screen.getByRole("button", { name: "＋ 差し込み" }),
       ).toBeInTheDocument();
+    });
+
+    it("実行中の delegate Run があっても操作ボタンは増えない（resume ボタン等は #31 の担当）", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            challenges: [challenge({ id: "C-001" })],
+            runningRuns: [
+              run({
+                kind: "delegate",
+                key: "session-1",
+                challenge: "C-002",
+                repo: "some/repo",
+              }),
+            ],
+          })}
+        />,
+      );
+
+      expect(screen.getAllByRole("button")).toHaveLength(2);
+    });
+  });
+
+  describe("カラムヘッダのサイクル状態（P3-2）", () => {
+    it('cycleStatus が running のとき「サイクル実行中」を data-cycle-status="running" で表示する', () => {
+      render(<AgentColumn agent={agentBoard({ cycleStatus: "running" })} />);
+
+      const status = screen.getByText("サイクル実行中");
+      expect(status).toBeInTheDocument();
+      expect(status.closest("[data-cycle-status]")).toHaveAttribute(
+        "data-cycle-status",
+        "running",
+      );
+    });
+
+    it('cycleStatus が idle のとき「idle」を data-cycle-status="idle" で表示する', () => {
+      render(<AgentColumn agent={agentBoard({ cycleStatus: "idle" })} />);
+
+      const status = screen.getByText("idle");
+      expect(status).toBeInTheDocument();
+      expect(status.closest("[data-cycle-status]")).toHaveAttribute(
+        "data-cycle-status",
+        "idle",
+      );
+    });
+
+    it("cycleStatus が未定義のとき idle 扱いで表示する", () => {
+      render(<AgentColumn agent={agentBoard({ cycleStatus: undefined })} />);
+
+      expect(screen.getByText("idle")).toBeInTheDocument();
+    });
+
+    it('cycleStatus が stale のとき「⚠ 応答なし」を data-cycle-status="stale" で表示する', () => {
+      render(<AgentColumn agent={agentBoard({ cycleStatus: "stale" })} />);
+
+      const status = screen.getByText("⚠ 応答なし");
+      expect(status).toBeInTheDocument();
+      expect(status.closest("[data-cycle-status]")).toHaveAttribute(
+        "data-cycle-status",
+        "stale",
+      );
+    });
+  });
+
+  describe("実行中セクション（P3-2）", () => {
+    beforeEach(() => {
+      vi.setSystemTime(new Date("2026-07-16T09:40:00.000Z"));
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("runningRuns が空のとき「⚡ 実行中」見出しごと表示しない", () => {
+      render(<AgentColumn agent={agentBoard({ runningRuns: [] })} />);
+
+      expect(screen.queryByText("⚡ 実行中")).not.toBeInTheDocument();
+    });
+
+    it("runningRuns があるとき「⚡ 実行中」見出しを表示する", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            runningRuns: [
+              run({
+                kind: "adhoc",
+                key: "adhoc-1",
+                title: "差し込み対応",
+                startedAt: "2026-07-16T09:00:00.000Z",
+              }),
+            ],
+          })}
+        />,
+      );
+
+      expect(
+        screen.getByRole("heading", { name: "⚡ 実行中", level: 3 }),
+      ).toBeInTheDocument();
+    });
+
+    it("delegate の実行中 Run を課題ID・委譲先repo・経過時間で表示する", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            runningRuns: [
+              run({
+                kind: "delegate",
+                key: "session-1",
+                challenge: "C-042",
+                repo: "org/service-a",
+                startedAt: "2026-07-16T09:00:00.000Z",
+              }),
+            ],
+          })}
+        />,
+      );
+
+      expect(screen.getByText("C-042")).toBeInTheDocument();
+      expect(screen.getByText(/org\/service-a/)).toBeInTheDocument();
+      expect(screen.getByText("40分")).toBeInTheDocument();
+    });
+
+    it("adhoc の実行中 Run を title で表示する", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            runningRuns: [
+              run({
+                kind: "adhoc",
+                key: "adhoc-1",
+                title: "緊急バグ調査",
+                startedAt: "2026-07-16T09:00:00.000Z",
+              }),
+            ],
+          })}
+        />,
+      );
+
+      expect(screen.getByText("緊急バグ調査")).toBeInTheDocument();
+      expect(screen.getByText("40分")).toBeInTheDocument();
+    });
+
+    it("stale な Run は「応答なし（要確認）」で強調表示する", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            runningRuns: [
+              run({
+                kind: "adhoc",
+                key: "adhoc-1",
+                title: "放置タスク",
+                startedAt: "2026-07-16T09:00:00.000Z",
+                stale: true,
+              }),
+            ],
+          })}
+        />,
+      );
+
+      expect(screen.getByText(/応答なし（要確認）/)).toBeInTheDocument();
+    });
+
+    it("stale ではない Run には「応答なし」の警告が表示されない", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            runningRuns: [
+              run({
+                kind: "adhoc",
+                key: "adhoc-1",
+                title: "通常タスク",
+                startedAt: "2026-07-16T09:00:00.000Z",
+                stale: false,
+              }),
+            ],
+          })}
+        />,
+      );
+
+      expect(screen.queryByText(/応答なし/)).not.toBeInTheDocument();
     });
   });
 });

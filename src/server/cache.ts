@@ -22,16 +22,13 @@ export type AgentBoard = {
   challenges: Challenge[];
   parseErrors: ParseError[];
   // P3: runs.jsonl から導出するサイクル状態・実行中セッション（getSnapshot が
-  // 呼び出しのたびに算出して埋める。cycleStatus/runningRuns は意図的に
-  // optional にしている: 既存 UI 側テストヘルパー（Board.test.tsx /
-  // AgentColumn.test.tsx / ws.test.ts の agentBoard()）が Partial<AgentBoard>
-  // ではなく全フィールド明示のリテラルでこれらを含まずに AgentBoard を作って
-  // おり、UI は変更禁止（別チケット #30/#31）のためここを必須化すると
-  // typecheck を壊してしまう。追加のみで既存を壊さないという設計意図を
-  // optional 修飾で担保する（実行時は getSnapshot が必ず両方とも埋めて返す）。
-  cycleStatus?: AgentCycleStatus;
+  // 呼び出しのたびに算出して埋める）。#30 で UI 側テストヘルパー
+  // （Board.test.tsx / AgentColumn.test.tsx / ws.test.ts の agentBoard()）に
+  // デフォルト値を追加したため、必須フィールドとして扱えるようになった
+  // （実行時は getSnapshot が必ず両方とも埋めて返す。型と実態を一致させる）。
+  cycleStatus: AgentCycleStatus;
   /** kind: "delegate" | "adhoc" の実行中 Run のみ（cycle は cycleStatus 側で表現するため除外）。 */
-  runningRuns?: Run[];
+  runningRuns: Run[];
 };
 
 export type BoardSnapshot = {

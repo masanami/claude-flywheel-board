@@ -45,6 +45,8 @@ function boardSnapshot(): BoardSnapshot {
         path: "/agents/medical",
         challenges: [],
         parseErrors: [],
+        cycleStatus: "idle",
+        runningRuns: [],
       },
     ],
   };
@@ -56,6 +58,8 @@ function agentBoard(): AgentBoard {
     path: "/agents/medical",
     challenges: [],
     parseErrors: [],
+    cycleStatus: "idle",
+    runningRuns: [],
   };
 }
 
