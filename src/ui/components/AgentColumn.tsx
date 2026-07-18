@@ -1,11 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import type { AgentBoard } from "../board-types.ts";
+import type { AgentBoard, AgentCycleStatus, Run } from "../board-types.ts";
+import { formatElapsed } from "../lib/format-elapsed.ts";
 import {
   type AdjacentChallenge,
   type Placement,
   buildInsertInstruction,
   buildReorderInstruction,
 } from "../lib/instruction.ts";
+import {
+  buildResumeCommand,
+  isResumableDelegateRun,
+} from "../lib/resume-command.ts";
 import { prefill } from "../terminal-control.ts";
 import { ErrorCard } from "./ErrorCard.tsx";
 import {
@@ -13,6 +18,80 @@ import {
   CHALLENGE_DRAG_MIME,
   TaskCard,
 } from "./TaskCard.tsx";
+
+// カラムヘッダのサイクル状態表示（P3-2）。cycleStatus は cache.ts の
+// getSnapshot が都度算出する値で、board 側は表示するだけ（NFR-01）。
+const CYCLE_STATUS_LABEL: Record<AgentCycleStatus, string> = {
+  running: "サイクル実行中",
+  idle: "idle",
+  stale: "⚠ 応答なし",
+};
+
+function CycleStatusIndicator({
+  cycleStatus,
+}: {
+  cycleStatus: AgentCycleStatus | undefined;
+}) {
+  const status = cycleStatus ?? "idle";
+  return (
+    <span className="agent-column-cycle-status" data-cycle-status={status}>
+      <span className="agent-column-cycle-status-dot" aria-hidden="true" />
+      {CYCLE_STATUS_LABEL[status]}
+    </span>
+  );
+}
+
+// 実行中セクション（P3-2）: runningRuns（kind: delegate | adhoc の実行中 Run
+// のみ。cycle は cycleStatus 側で表現するためサーバ側で除外済み）を表示する。
+// 実行中カードに操作ボタンは基本置かないが、応答なし（stale）の delegate
+// 実行中セッションに限り「再開コマンドを挿入」ボタンを表示する（#31・FR-12）。
+// クリティカル設計決定（親 #28 / #2）: prefill するのみで Enter 送信・自動実行
+// はしない。
+function RunningRunRow({ run, agentName }: { run: Run; agentName: string }) {
+  const elapsed = formatElapsed(run.startedAt, new Date());
+  // 再開ボタンの対象判定は isResumableDelegateRun に一元化する
+  // （CardDetailModal 側の findStaleDelegateRun と判定基準を共有）。
+  // resumeRepo に代入することで、以降の JSX では repo の truthy チェックが
+  // そのまま TypeScript の型絞り込みとしても機能する（as string キャスト不要）。
+  const resumeRepo = isResumableDelegateRun(run) ? run.repo : undefined;
+  return (
+    <div
+      className="agent-column-running-run"
+      data-testid={`running-run-${run.key}`}
+      data-stale={run.stale || undefined}
+    >
+      <div className="agent-column-running-run-subject">
+        {run.kind === "delegate" ? (
+          <>
+            <span className="agent-column-running-run-challenge">
+              {run.challenge}
+            </span>
+            <span className="agent-column-running-run-arrow">→ {run.repo}</span>
+          </>
+        ) : (
+          <span className="agent-column-running-run-title">{run.title}</span>
+        )}
+      </div>
+      <span className="agent-column-running-run-elapsed">{elapsed}</span>
+      {run.stale && (
+        <div className="agent-column-running-run-stale-warning">
+          ⚠ 応答なし（要確認）
+        </div>
+      )}
+      {resumeRepo && (
+        <button
+          type="button"
+          className="agent-column-running-run-resume-button"
+          onClick={() =>
+            prefill(agentName, buildResumeCommand(resumeRepo, run.key))
+          }
+        >
+          再開コマンドを挿入
+        </button>
+      )}
+    </div>
+  );
+}
 
 type AgentColumnProps = {
   agent: AgentBoard;
@@ -31,8 +110,8 @@ const GHOST_DRAG_MIME = "application/x-flywheel-ghost";
 // それ以外は課題ID。
 type DropTargetKey = string | "ghost" | "bottom" | null;
 
-// カラム＝1エージェント。ヘッダはエージェント名のみ（サイクル状態・実行中段は
-// P3 スコープのためここでは実装しない）。challenges は既に呼び出し元
+// カラム＝1エージェント。ヘッダにはエージェント名＋サイクル状態
+// （CycleStatusIndicator）を表示する。challenges は既に呼び出し元
 // （サーバの sortChallenges）でソート済みのため、そのままの順で描画する。
 //
 // D&D 並べ替え・「＋差し込み」ゴースト（#16）: board は台帳を書かない（NFR-01）。
@@ -135,6 +214,7 @@ export function AgentColumn({ agent }: AgentColumnProps) {
     <section className="agent-column">
       <div className="agent-column-header">
         <h2 className="agent-column-title">{agent.name}</h2>
+        <CycleStatusIndicator cycleStatus={agent.cycleStatus} />
         <button
           type="button"
           className="agent-column-insert-button"
@@ -144,6 +224,18 @@ export function AgentColumn({ agent }: AgentColumnProps) {
         </button>
       </div>
       <div className="agent-column-body">
+        {agent.runningRuns && agent.runningRuns.length > 0 && (
+          <section className="agent-column-running-section">
+            <h3 className="agent-column-running-heading">⚡ 実行中</h3>
+            {agent.runningRuns.map((run) => (
+              <RunningRunRow
+                key={`${run.kind}:${run.key}`}
+                run={run}
+                agentName={agent.name}
+              />
+            ))}
+          </section>
+        )}
         {isInsertOpen && (
           <div
             className="agent-column-row agent-column-ghost-row"
@@ -183,27 +275,32 @@ export function AgentColumn({ agent }: AgentColumnProps) {
           </div>
         )}
         {agent.challenges.map((challenge, index) => (
-          <div
-            key={challenge.id}
-            className="agent-column-row"
-            data-testid={`agent-column-row-${challenge.id}`}
-            data-drop-target={dropTargetKey === challenge.id || undefined}
-            onDragOver={(event) => {
-              event.preventDefault();
-              setDropTargetKey(challenge.id);
-            }}
-            onDragLeave={() =>
-              setDropTargetKey((current) =>
-                current === challenge.id ? null : current,
-              )
-            }
-            onDrop={(event) => handleDrop(event, adjacentChallengeAt(index))}
-            onDragEnd={() => setDropTargetKey(null)}
-          >
+          <div key={challenge.id} className="agent-column-row-group">
             {index === firstNeedsHumanIndex && (
               <h3 className="agent-column-needs-human-heading">🔔 承認待ち</h3>
             )}
-            <TaskCard challenge={challenge} agentName={agent.name} />
+            <div
+              className="agent-column-row"
+              data-testid={`agent-column-row-${challenge.id}`}
+              data-drop-target={dropTargetKey === challenge.id || undefined}
+              onDragOver={(event) => {
+                event.preventDefault();
+                setDropTargetKey(challenge.id);
+              }}
+              onDragLeave={() =>
+                setDropTargetKey((current) =>
+                  current === challenge.id ? null : current,
+                )
+              }
+              onDrop={(event) => handleDrop(event, adjacentChallengeAt(index))}
+              onDragEnd={() => setDropTargetKey(null)}
+            >
+              <TaskCard
+                challenge={challenge}
+                agentName={agent.name}
+                runningRuns={agent.runningRuns}
+              />
+            </div>
           </div>
         ))}
         <div

@@ -1,17 +1,38 @@
-import type { JournalEntry, LogEntry } from "./parsers/journal.ts";
+import type { JournalEntry } from "./parsers/journal.ts";
 import { deriveLogEntries } from "./parsers/journal.ts";
-import type { Challenge, ParseError } from "./parsers/ledger.ts";
+import type { Challenge } from "./parsers/ledger.ts";
+import type { MatchedRun, Run } from "./parsers/runs.ts";
+import {
+  deriveRunLogEntries,
+  deriveRuns,
+  mergeLogEntries,
+  resolveStaleMinutes,
+} from "./parsers/runs.ts";
+// ParseError/LogEntry の単一定義は parsers/types.ts（セルフレビュー指摘対応:
+// 三重定義の解消）。ledger.ts/journal.ts 経由の re-export ではなく、正本の
+// types.ts を直接参照する（watcher.ts・ui/board-types.ts と揃える）。
+import type { LogEntry, ParseError } from "./parsers/types.ts";
 
 // 読み取り専用の索引（NFR-04）。fs には一切依存せず、破棄しても正本
 // （challenge-ledger.md / journal / runs.jsonl）から再構築できることを唯一の
 // 必須性質とする。実装は本ファイルに閉じ、呼び出し側（api.ts 等）は
 // BoardCache インターフェースにのみ依存する（§3.3 SQLite 移行トリガー対応）。
 
+export type AgentCycleStatus = "running" | "idle" | "stale";
+
 export type AgentBoard = {
   name: string;
   path: string;
   challenges: Challenge[];
   parseErrors: ParseError[];
+  // P3: runs.jsonl から導出するサイクル状態・実行中セッション（getSnapshot が
+  // 呼び出しのたびに算出して埋める）。#30 で UI 側テストヘルパー
+  // （Board.test.tsx / AgentColumn.test.tsx / ws.test.ts の agentBoard()）に
+  // デフォルト値を追加したため、必須フィールドとして扱えるようになった
+  // （実行時は getSnapshot が必ず両方とも埋めて返す。型と実態を一致させる）。
+  cycleStatus: AgentCycleStatus;
+  /** kind: "delegate" | "adhoc" の実行中 Run のみ（cycle は cycleStatus 側で表現するため除外）。 */
+  runningRuns: Run[];
 };
 
 export type BoardSnapshot = {
@@ -30,12 +51,18 @@ export interface BoardCache {
   replaceAgent(input: ReplaceAgentInput): void;
   /** 指定エージェントの journal エントリを丸ごと入れ替える。 */
   replaceJournal(agentName: string, entries: JournalEntry[]): void;
+  /** 指定エージェントの runs.jsonl 由来 MatchedRun を丸ごと入れ替える。 */
+  replaceRuns(agentName: string, matched: MatchedRun[]): void;
   /** (agent, challengeId) の複合キーで課題を取得する。未登録なら undefined。 */
   getChallenge(agentName: string, challengeId: string): Challenge | undefined;
-  /** (agent, challengeId) の複合キーで journal 由来のログを導出する。未登録なら空配列。 */
+  /** (agent, challengeId) の複合キーで journal + runs 由来のログを導出する。未登録なら空配列。 */
   getLog(agentName: string, challengeId: string): LogEntry[];
-  /** 全エージェントのスナップショットを返す。 */
-  getSnapshot(): BoardSnapshot;
+  /**
+   * 全エージェントのスナップショットを返す。cycleStatus/runningRuns は now 時点で
+   * 都度再計算する（先に stale を確定させて保存しない）ため、定期再評価
+   * （startStaleReevaluation）や API 呼び出しのたびに正しい経過時間で導出される。
+   */
+  getSnapshot(now?: Date): BoardSnapshot;
 }
 
 const PRIORITY_GROUP_WITH_PRIORITY = 0;
@@ -76,9 +103,42 @@ export function sortChallenges(challenges: Challenge[]): Challenge[] {
   });
 }
 
-export function createMemoryBoardCache(): BoardCache {
-  const agents = new Map<string, AgentBoard>();
+export type MemoryBoardCacheOptions = {
+  /** stale しきい値（分）。省略時は {@link resolveStaleMinutes}() を使う。 */
+  staleMinutes?: number;
+};
+
+// getSnapshot の内部保持用。cycleStatus/runningRuns は都度算出するため保持しない。
+type StoredAgentBoard = Omit<AgentBoard, "cycleStatus" | "runningRuns">;
+
+function deriveCycleStatus(runs: Run[]): AgentCycleStatus {
+  const openCycles = runs.filter(
+    (run) =>
+      run.kind === "cycle" && run.endedAt === undefined && !run.superseded,
+  );
+  if (openCycles.length === 0) {
+    return "idle";
+  }
+  return openCycles.some((run) => run.stale) ? "stale" : "running";
+}
+
+function deriveRunningRuns(runs: Run[]): Run[] {
+  return runs.filter(
+    (run) =>
+      run.kind !== "cycle" && run.endedAt === undefined && !run.superseded,
+  );
+}
+
+export function createMemoryBoardCache(
+  options: MemoryBoardCacheOptions = {},
+): BoardCache {
+  // resolveStaleMinutes に検証を一任する（0・負数・NaN は不正値としてデフォルトへ
+  // フォールバック。従来は `options.staleMinutes ?? resolveStaleMinutes()` で
+  // override の正数チェックが漏れていた。CodeRabbit 指摘対応）。
+  const staleMinutes = resolveStaleMinutes(options.staleMinutes);
+  const agents = new Map<string, StoredAgentBoard>();
   const journalByAgent = new Map<string, JournalEntry[]>();
+  const runsByAgent = new Map<string, MatchedRun[]>();
 
   return {
     replaceAgent(input) {
@@ -94,21 +154,134 @@ export function createMemoryBoardCache(): BoardCache {
       journalByAgent.set(agentName, entries);
     },
 
+    replaceRuns(agentName, matched) {
+      runsByAgent.set(agentName, matched);
+    },
+
     getChallenge(agentName, challengeId) {
       const agent = agents.get(agentName);
       return agent?.challenges.find((c) => c.id === challengeId);
     },
 
     getLog(agentName, challengeId) {
-      const entries = journalByAgent.get(agentName);
-      if (!entries) {
-        return [];
-      }
-      return deriveLogEntries(entries, challengeId);
+      const journalEntries = journalByAgent.get(agentName);
+      const journalLog = journalEntries
+        ? deriveLogEntries(journalEntries, challengeId)
+        : [];
+
+      const matchedRuns = runsByAgent.get(agentName) ?? [];
+      const relevantRuns = matchedRuns.filter(
+        (run) => run.challenge === challengeId,
+      );
+      const runsLog = deriveRunLogEntries(relevantRuns);
+
+      return mergeLogEntries(journalLog, runsLog);
     },
 
-    getSnapshot() {
-      return { agents: Array.from(agents.values()) };
+    getSnapshot(now = new Date()) {
+      return {
+        agents: Array.from(agents.values()).map((agent) => {
+          const matched = runsByAgent.get(agent.name) ?? [];
+          const derived = deriveRuns(matched, now, staleMinutes);
+          return {
+            ...agent,
+            cycleStatus: deriveCycleStatus(derived),
+            runningRuns: deriveRunningRuns(derived),
+          };
+        }),
+      };
+    },
+  };
+}
+
+export type StaleReevaluationTimer = { close(): void };
+
+export type StaleReevaluationOptions = {
+  /** 再評価間隔（ミリ秒）。既定 60_000（1分）。 */
+  intervalMs?: number;
+  /** 現在時刻を返す関数。既定 () => new Date()（テストで時刻を Mock するための DI）。 */
+  now?: () => Date;
+  /** setInterval の DI 用。既定 global setInterval。 */
+  setIntervalFn?: (handler: () => void, timeoutMs: number) => NodeJS.Timeout;
+  /** clearInterval の DI 用。既定 global clearInterval。 */
+  clearIntervalFn?: (handle: NodeJS.Timeout) => void;
+};
+
+/**
+ * cycleStatus + runningRuns（の stale 値等）の変化を検知するための署名。
+ * 変化検知に十分な情報（kind/key/endedAt/stale）に加え、実行中 run の
+ * 経過分バケット（elapsedMinutes）を含める — UI の経過時間表示は
+ * クライアント側タイマーを持たず agent_update の再描画でのみ更新されるため、
+ * 分が進むごとに署名が変わって push が発生することが表示更新の前提になる
+ * （実行中 run が無いエージェントは従来どおり変化時のみ push）。
+ */
+function computeAgentSignature(agent: AgentBoard, nowMs: number): string {
+  return JSON.stringify({
+    cycleStatus: agent.cycleStatus,
+    runningRuns: (agent.runningRuns ?? []).map((run) => ({
+      kind: run.kind,
+      key: run.key,
+      endedAt: run.endedAt,
+      stale: run.stale,
+      elapsedMinutes: run.endedAt
+        ? null
+        : Math.floor((nowMs - Date.parse(run.startedAt)) / 60_000),
+    })),
+  });
+}
+
+const DEFAULT_STALE_REEVALUATION_INTERVAL_MS = 60_000;
+
+/**
+ * intervalMs（既定1分）ごとに cache.getSnapshot(now) を再計算し、前回 push した
+ * cycleStatus/runningRuns から変化があったエージェントのみ onAgentUpdate を呼ぶ
+ * （無変化なら push せず、無駄な WS broadcast を避ける）。fs イベントも API 呼び出しも
+ * 起きない間に stale へ変わったことへ誰も気づけない問題を解消するための定期タイマー。
+ */
+export function startStaleReevaluation(
+  cache: BoardCache,
+  onAgentUpdate: (agent: AgentBoard) => void,
+  options: StaleReevaluationOptions = {},
+): StaleReevaluationTimer {
+  const intervalMs =
+    options.intervalMs ?? DEFAULT_STALE_REEVALUATION_INTERVAL_MS;
+  const now = options.now ?? (() => new Date());
+  const setIntervalFn = options.setIntervalFn ?? setInterval;
+  const clearIntervalFn = options.clearIntervalFn ?? clearInterval;
+
+  const lastSignatureByAgent = new Map<string, string>();
+  // 起動時点のスナップショットを基準にしておく（初回 tick で無変化なら push しない）。
+  const initialNow = now().getTime();
+  for (const agent of cache.getSnapshot(new Date(initialNow)).agents) {
+    lastSignatureByAgent.set(
+      agent.name,
+      computeAgentSignature(agent, initialNow),
+    );
+  }
+
+  const timer = setIntervalFn(() => {
+    const tickNow = now();
+    const snapshot = cache.getSnapshot(tickNow);
+    for (const agent of snapshot.agents) {
+      const signature = computeAgentSignature(agent, tickNow.getTime());
+      if (lastSignatureByAgent.get(agent.name) !== signature) {
+        lastSignatureByAgent.set(agent.name, signature);
+        onAgentUpdate(agent);
+      }
+    }
+  }, intervalMs);
+
+  // board 停止（プロセス終了）をタイマーが妨げないようにする（watcher.ts の
+  // rescanInterval.unref() と同様）。DI 注入されたテストダブルには unref が
+  // 無い可能性があるため、存在チェックしてから呼ぶ。
+  const maybeUnref = (timer as unknown as { unref?: () => void }).unref;
+  if (typeof maybeUnref === "function") {
+    maybeUnref.call(timer);
+  }
+
+  return {
+    close() {
+      clearIntervalFn(timer);
     },
   };
 }

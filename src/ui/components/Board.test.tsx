@@ -18,6 +18,8 @@ function agentBoard(overrides: Partial<AgentBoard> = {}): AgentBoard {
     path: "/agents/medical",
     challenges: [],
     parseErrors: [],
+    cycleStatus: "idle",
+    runningRuns: [],
     ...overrides,
   };
 }
@@ -179,6 +181,43 @@ describe("Board", () => {
     expect(
       screen.getByText("challenge-ledger.md:1 — 壊れている"),
     ).toBeInTheDocument();
+  });
+
+  it("承認待ちフィルタ選択時、実行中セクションも隠れる（runningRuns が空配列として渡される）", async () => {
+    const { Board } = await import("./Board.tsx");
+    render(<Board />);
+
+    act(() => {
+      latestOptions().onSnapshot(
+        snapshot([
+          agentBoard({
+            name: "medical",
+            challenges: [],
+            runningRuns: [
+              {
+                kind: "adhoc",
+                key: "adhoc-1",
+                title: "実行中タスク",
+                startedAt: "2026-07-16T09:00:00.000Z",
+                stale: false,
+              },
+            ],
+          }),
+        ]),
+      );
+    });
+
+    expect(
+      screen.getByRole("heading", { name: "⚡ 実行中", level: 3 }),
+    ).toBeInTheDocument();
+
+    act(() => {
+      screen.getByRole("button", { name: "🔔 承認待ち" }).click();
+    });
+
+    expect(
+      screen.queryByRole("heading", { name: "⚡ 実行中", level: 3 }),
+    ).not.toBeInTheDocument();
   });
 
   it("アンマウント時に close() を呼ぶ", async () => {

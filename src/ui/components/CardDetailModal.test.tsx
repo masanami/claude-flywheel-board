@@ -1,8 +1,13 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Challenge, LogEntry } from "../board-types.ts";
+import type { Challenge, LogEntry, Run } from "../board-types.ts";
+import { prefill } from "../terminal-control.ts";
 import { CardDetailModal } from "./CardDetailModal.tsx";
+
+vi.mock("../terminal-control.ts", () => ({
+  prefill: vi.fn(),
+}));
 
 function challenge(overrides: Partial<Challenge> = {}): Challenge {
   return {
@@ -26,8 +31,21 @@ function logEntry(overrides: Partial<LogEntry> = {}): LogEntry {
   };
 }
 
+function delegateRun(overrides: Partial<Run> = {}): Run {
+  return {
+    kind: "delegate",
+    key: "session-1",
+    challenge: "C-001",
+    repo: "org/service-a",
+    startedAt: "2026-07-16T09:00:00.000Z",
+    stale: true,
+    ...overrides,
+  };
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.mocked(prefill).mockClear();
 });
 
 describe("CardDetailModal", () => {
@@ -130,7 +148,7 @@ describe("CardDetailModal", () => {
     expect(screen.getByText("着手中 → 検証中")).toBeInTheDocument();
   });
 
-  it("source バッジは data-source 属性で journal / ledger を出し分ける", async () => {
+  it("source バッジは data-source 属性で journal / ledger / runs を出し分ける", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -139,6 +157,7 @@ describe("CardDetailModal", () => {
           Promise.resolve([
             logEntry({ source: "journal", text: "journal 由来" }),
             logEntry({ source: "ledger", text: "ledger 由来" }),
+            logEntry({ source: "runs", text: "runs 由来" }),
           ]),
       }),
     );
@@ -152,7 +171,7 @@ describe("CardDetailModal", () => {
     );
 
     await waitFor(() => {
-      expect(container.querySelectorAll("[data-source]")).toHaveLength(2);
+      expect(container.querySelectorAll("[data-source]")).toHaveLength(3);
     });
     expect(
       container.querySelector('[data-source="journal"]'),
@@ -160,6 +179,8 @@ describe("CardDetailModal", () => {
     expect(
       container.querySelector('[data-source="ledger"]'),
     ).toBeInTheDocument();
+    expect(container.querySelector('[data-source="runs"]')).toBeInTheDocument();
+    expect(screen.getByText("runs 由来")).toBeInTheDocument();
   });
 
   it("フェッチ失敗時にエラー表示をする", async () => {
@@ -286,5 +307,157 @@ describe("CardDetailModal", () => {
     const buttons = screen.getAllByRole("button");
     expect(buttons).toHaveLength(1);
     expect(buttons[0]).toHaveAccessibleName("閉じる");
+  });
+
+  describe("再開コマンドの prefill 連携（#31・FR-12）", () => {
+    it("対象課題に stale な delegate run がある場合、resumebox にコマンド文字列を表示する", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+
+      render(
+        <CardDetailModal
+          challenge={challenge({ id: "C-001" })}
+          agentName="medical"
+          onClose={vi.fn()}
+          runningRuns={[delegateRun({ challenge: "C-001" })]}
+        />,
+      );
+
+      expect(screen.getByTestId("resumebox")).toBeInTheDocument();
+      expect(
+        screen.getByDisplayValue(
+          "cd .flywheel/repos/org/service-a && claude -p --resume session-1",
+        ),
+      ).toBeInTheDocument();
+    });
+
+    it("resumebox の見出し文言は「応答なし（要確認）」に統一されている（feature doc の表記統一。stale は data 属性/内部名にのみ残す）", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+
+      render(
+        <CardDetailModal
+          challenge={challenge({ id: "C-001" })}
+          agentName="medical"
+          onClose={vi.fn()}
+          runningRuns={[delegateRun({ challenge: "C-001" })]}
+        />,
+      );
+
+      expect(
+        screen.getByText(
+          "⚠ 応答なし（要確認）のセッションがあります。再開コマンドをタブに挿入できます",
+        ),
+      ).toBeInTheDocument();
+    });
+
+    it("「タブにプリフィル」ボタンをクリックすると agent 名と resume コマンド文字列で prefill が呼ばれる", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+
+      render(
+        <CardDetailModal
+          challenge={challenge({ id: "C-001" })}
+          agentName="medical"
+          onClose={vi.fn()}
+          runningRuns={[
+            delegateRun({ challenge: "C-001", key: "session-xyz" }),
+          ]}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "タブにプリフィル" }));
+
+      expect(prefill).toHaveBeenCalledWith(
+        "medical",
+        "cd .flywheel/repos/org/service-a && claude -p --resume session-xyz",
+      );
+    });
+
+    it("runningRuns が未指定の場合は resumebox を表示しない", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+
+      render(
+        <CardDetailModal
+          challenge={challenge({ id: "C-001" })}
+          agentName="medical"
+          onClose={vi.fn()}
+        />,
+      );
+
+      expect(screen.queryByTestId("resumebox")).not.toBeInTheDocument();
+    });
+
+    it("runningRuns が空配列の場合は resumebox を表示しない", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+
+      render(
+        <CardDetailModal
+          challenge={challenge({ id: "C-001" })}
+          agentName="medical"
+          onClose={vi.fn()}
+          runningRuns={[]}
+        />,
+      );
+
+      expect(screen.queryByTestId("resumebox")).not.toBeInTheDocument();
+    });
+
+    it("stale ではない delegate run しか無い場合は resumebox を表示しない", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+
+      render(
+        <CardDetailModal
+          challenge={challenge({ id: "C-001" })}
+          agentName="medical"
+          onClose={vi.fn()}
+          runningRuns={[delegateRun({ challenge: "C-001", stale: false })]}
+        />,
+      );
+
+      expect(screen.queryByTestId("resumebox")).not.toBeInTheDocument();
+    });
+
+    it("別の課題向けの stale delegate run しか無い場合は resumebox を表示しない", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+
+      render(
+        <CardDetailModal
+          challenge={challenge({ id: "C-001" })}
+          agentName="medical"
+          onClose={vi.fn()}
+          runningRuns={[delegateRun({ challenge: "C-999" })]}
+        />,
+      );
+
+      expect(screen.queryByTestId("resumebox")).not.toBeInTheDocument();
+    });
+
+    it("repo が欠落している stale delegate run しか無い場合は resumebox を表示しない", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+
+      render(
+        <CardDetailModal
+          challenge={challenge({ id: "C-001" })}
+          agentName="medical"
+          onClose={vi.fn()}
+          runningRuns={[delegateRun({ challenge: "C-001", repo: undefined })]}
+        />,
+      );
+
+      expect(screen.queryByTestId("resumebox")).not.toBeInTheDocument();
+    });
+
+    it("runningRuns があっても既存の「操作ボタンは閉じるのみ」以外は増えない場合、resumebox が無ければボタン数は1のまま", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+
+      render(
+        <CardDetailModal
+          challenge={challenge({ id: "C-001" })}
+          agentName="medical"
+          onClose={vi.fn()}
+          runningRuns={[delegateRun({ challenge: "C-999" })]}
+        />,
+      );
+
+      expect(screen.getAllByRole("button")).toHaveLength(1);
+    });
   });
 });

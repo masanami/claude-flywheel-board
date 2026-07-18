@@ -1,4 +1,9 @@
 import * as fs from "node:fs";
+import type { ParseError } from "./types.ts";
+
+// 後方互換のための re-export（既存の import 元 `./ledger.ts` からの参照を維持する）。
+// 単一定義は ./types.ts（セルフレビュー指摘対応: ParseError 三重定義の解消）。
+export type { ParseError } from "./types.ts";
 
 export type LedgerStatus =
   | "未分類"
@@ -27,13 +32,6 @@ export type Challenge = {
   position?: string;
   needsHuman: boolean;
   summary?: string;
-};
-
-export type ParseError = {
-  file: string;
-  line?: number;
-  message: string;
-  raw: string;
 };
 
 const HEADER_PATTERN = /^###\s*\[([^\]]*)\]\s*(.*)$/;

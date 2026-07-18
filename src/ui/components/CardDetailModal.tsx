@@ -1,10 +1,19 @@
 import { useEffect, useRef, useState } from "react";
-import type { Challenge, LogEntry } from "../board-types.ts";
+import type { Challenge, LogEntry, Run } from "../board-types.ts";
+import {
+  buildResumeCommand,
+  findStaleDelegateRun,
+} from "../lib/resume-command.ts";
+import { prefill } from "../terminal-control.ts";
 
 type CardDetailModalProps = {
   challenge: Challenge;
   agentName: string;
   onClose: () => void;
+  // 対象エージェントの実行中 Run（AgentColumn → TaskCard → CardDetailModal と
+  // 中継される。#31・FR-12）。応答なし（stale）の delegate run が対象課題に
+  // 見つかった場合のみ、resumebox（再開コマンドの表示＋プリフィル導線）を出す。
+  runningRuns?: Run[];
 };
 
 type LogState =
@@ -24,8 +33,15 @@ export function CardDetailModal({
   challenge,
   agentName,
   onClose,
+  runningRuns,
 }: CardDetailModalProps) {
   const [logState, setLogState] = useState<LogState>({ status: "loading" });
+  const staleDelegateRun = findStaleDelegateRun(runningRuns, challenge.id);
+  // repo の truthy チェックを一度だけ行い、コマンド文字列も一度だけ組み立てる
+  // （表示用の <input value> とボタンの onClick の双方から参照する）。
+  const resumeCommand =
+    staleDelegateRun?.repo &&
+    buildResumeCommand(staleDelegateRun.repo, staleDelegateRun.key);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const mouseDownOnDialog = useRef(false);
   // onClose は呼び出し元（TaskCard）の再レンダーのたびに新しい関数参照になりうる。
@@ -143,6 +159,28 @@ export function CardDetailModal({
           <dt>要約</dt>
           <dd>{challenge.summary ?? "-"}</dd>
         </dl>
+
+        {resumeCommand && (
+          <div className="resumebox" data-testid="resumebox">
+            <p className="resumebox-heading">
+              ⚠
+              応答なし（要確認）のセッションがあります。再開コマンドをタブに挿入できます
+            </p>
+            <input
+              type="text"
+              readOnly
+              className="resumebox-command"
+              value={resumeCommand}
+            />
+            <button
+              type="button"
+              className="resumebox-prefill-button"
+              onClick={() => prefill(agentName, resumeCommand)}
+            >
+              タブにプリフィル
+            </button>
+          </div>
+        )}
 
         <h3 className="card-detail-log-heading">作業ログ</h3>
         {logState.status === "loading" && (

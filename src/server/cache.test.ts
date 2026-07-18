@@ -1,7 +1,14 @@
-import { describe, expect, it } from "vitest";
-import { createMemoryBoardCache, sortChallenges } from "./cache.ts";
+import { describe, expect, it, vi } from "vitest";
+import type { AgentBoard } from "./cache.ts";
+import {
+  createMemoryBoardCache,
+  sortChallenges,
+  startStaleReevaluation,
+} from "./cache.ts";
 import type { JournalEntry } from "./parsers/journal.ts";
 import type { Challenge } from "./parsers/ledger.ts";
+import type { MatchedRun, RunEvent } from "./parsers/runs.ts";
+import { matchRuns } from "./parsers/runs.ts";
 
 function challenge(
   overrides: Partial<Challenge> & Pick<Challenge, "id">,
@@ -25,6 +32,13 @@ function journalEntry(overrides: Partial<JournalEntry> = {}): JournalEntry {
     decisions: [],
     ...overrides,
   };
+}
+
+function matchedRun(
+  overrides: Partial<MatchedRun> &
+    Pick<MatchedRun, "kind" | "key" | "startedAt">,
+): MatchedRun {
+  return { ...overrides };
 }
 
 describe("sortChallenges", () => {
@@ -233,5 +247,516 @@ describe("createMemoryBoardCache", () => {
     expect(cache.getLog("bi", "C-044")).toEqual([
       { ts: "2026-07-01", source: "journal", text: "着手中 → 検証中" },
     ]);
+  });
+
+  it("getLog は replaceRuns した内容から該当 challenge の runs 由来ログも統合して返す（journal→runs のソートキー順）", () => {
+    const cache = createMemoryBoardCache();
+
+    cache.replaceJournal("medical", [
+      journalEntry({
+        date: "2026-07-16",
+        touched_issues: [{ id: "C-044", from: "未着手", to: "着手中" }],
+      }),
+    ]);
+    cache.replaceRuns("medical", [
+      matchedRun({
+        kind: "delegate",
+        key: "550e8400-e29b-41d4-a716-446655440000",
+        challenge: "C-044",
+        repo: "net-config",
+        startedAt: "2026-07-16T10:05:12+09:00",
+        endedAt: "2026-07-16T10:42:30+09:00",
+        result: "実装完了",
+      }),
+    ]);
+
+    const log = cache.getLog("medical", "C-044");
+
+    expect(log).toHaveLength(3);
+    expect(log.map((e) => e.source)).toEqual(["journal", "runs", "runs"]);
+  });
+
+  it("getLog は runs の challenge が一致しない Run は含めない（他課題への委譲と混線しない）", () => {
+    const cache = createMemoryBoardCache();
+
+    cache.replaceRuns("medical", [
+      matchedRun({
+        kind: "delegate",
+        key: "s1",
+        challenge: "C-999",
+        repo: "net-config",
+        startedAt: "2026-07-16T10:05:12+09:00",
+      }),
+    ]);
+
+    expect(cache.getLog("medical", "C-044")).toEqual([]);
+  });
+
+  describe("replaceRuns / getSnapshot（cycleStatus・runningRuns の導出）", () => {
+    it("実行中の cycle Run が無ければ cycleStatus は idle", () => {
+      const cache = createMemoryBoardCache();
+      cache.replaceAgent({
+        name: "medical",
+        path: "/agents/medical-agent",
+        challenges: [],
+        parseErrors: [],
+      });
+
+      const snapshot = cache.getSnapshot(new Date("2026-07-16T10:00:00Z"));
+
+      expect(snapshot.agents[0]?.cycleStatus).toBe("idle");
+      expect(snapshot.agents[0]?.runningRuns).toEqual([]);
+    });
+
+    it("実行中の cycle Run があり経過がしきい値以下なら cycleStatus は running", () => {
+      const cache = createMemoryBoardCache({ staleMinutes: 30 });
+      cache.replaceAgent({
+        name: "medical",
+        path: "/agents/medical-agent",
+        challenges: [],
+        parseErrors: [],
+      });
+      cache.replaceRuns("medical", [
+        matchedRun({
+          kind: "cycle",
+          key: "2026-07-16-cycle",
+          startedAt: "2026-07-16T10:00:00+09:00",
+        }),
+      ]);
+
+      const snapshot = cache.getSnapshot(new Date("2026-07-16T10:05:00+09:00"));
+
+      expect(snapshot.agents[0]?.cycleStatus).toBe("running");
+    });
+
+    it("実行中の cycle Run があり経過がしきい値超過なら cycleStatus は stale", () => {
+      const cache = createMemoryBoardCache({ staleMinutes: 30 });
+      cache.replaceAgent({
+        name: "medical",
+        path: "/agents/medical-agent",
+        challenges: [],
+        parseErrors: [],
+      });
+      cache.replaceRuns("medical", [
+        matchedRun({
+          kind: "cycle",
+          key: "2026-07-16-cycle",
+          startedAt: "2026-07-16T10:00:00+09:00",
+        }),
+      ]);
+
+      const snapshot = cache.getSnapshot(new Date("2026-07-16T10:31:00+09:00"));
+
+      expect(snapshot.agents[0]?.cycleStatus).toBe("stale");
+    });
+
+    it("runningRuns には delegate/adhoc の実行中 Run のみ含み、cycle は含めない", () => {
+      const cache = createMemoryBoardCache({ staleMinutes: 30 });
+      cache.replaceAgent({
+        name: "medical",
+        path: "/agents/medical-agent",
+        challenges: [],
+        parseErrors: [],
+      });
+      cache.replaceRuns("medical", [
+        matchedRun({
+          kind: "cycle",
+          key: "2026-07-16-cycle",
+          startedAt: "2026-07-16T10:00:00+09:00",
+        }),
+        matchedRun({
+          kind: "delegate",
+          key: "s1",
+          challenge: "C-044",
+          repo: "net-config",
+          startedAt: "2026-07-16T10:05:00+09:00",
+        }),
+        matchedRun({
+          kind: "adhoc",
+          key: "adhoc-1",
+          title: "調査",
+          startedAt: "2026-07-16T10:06:00+09:00",
+        }),
+        matchedRun({
+          kind: "delegate",
+          key: "s2",
+          challenge: "C-045",
+          repo: "net-config",
+          startedAt: "2026-07-16T09:00:00+09:00",
+          endedAt: "2026-07-16T09:10:00+09:00",
+          result: "done",
+        }),
+      ]);
+
+      const snapshot = cache.getSnapshot(new Date("2026-07-16T10:10:00+09:00"));
+
+      const runningRuns = snapshot.agents[0]?.runningRuns ?? [];
+      expect(runningRuns.map((r) => r.kind).sort()).toEqual([
+        "adhoc",
+        "delegate",
+      ]);
+      expect(runningRuns.every((r) => r.endedAt === undefined)).toBe(true);
+    });
+
+    it("superseded な delegate Run（同一 key の新しい start による）は runningRuns から除外される", () => {
+      const cache = createMemoryBoardCache({ staleMinutes: 30 });
+      cache.replaceAgent({
+        name: "medical",
+        path: "/agents/medical-agent",
+        challenges: [],
+        parseErrors: [],
+      });
+      cache.replaceRuns("medical", [
+        matchedRun({
+          kind: "delegate",
+          key: "s1",
+          challenge: "C-044",
+          repo: "net-config",
+          startedAt: "2026-07-16T10:00:00+09:00",
+          superseded: true,
+        }),
+        matchedRun({
+          kind: "delegate",
+          key: "s1",
+          challenge: "C-044",
+          repo: "net-config",
+          startedAt: "2026-07-17T09:00:00+09:00",
+        }),
+      ]);
+
+      const snapshot = cache.getSnapshot(new Date("2026-07-17T09:05:00+09:00"));
+
+      const runningRuns = snapshot.agents[0]?.runningRuns ?? [];
+      expect(runningRuns).toHaveLength(1);
+      expect(runningRuns[0]?.startedAt).toBe("2026-07-17T09:00:00+09:00");
+    });
+
+    it("superseded な cycle Run（古い stale なもの）は cycleStatus 判定から除外され、現行 cycle の状態のみで判定される", () => {
+      const cache = createMemoryBoardCache({ staleMinutes: 30 });
+      cache.replaceAgent({
+        name: "medical",
+        path: "/agents/medical-agent",
+        challenges: [],
+        parseErrors: [],
+      });
+      cache.replaceRuns("medical", [
+        matchedRun({
+          kind: "cycle",
+          key: "same-cycle-name",
+          startedAt: "2026-07-01T00:00:00+09:00", // 大幅に経過（superseded でなければ stale）
+          superseded: true,
+        }),
+        matchedRun({
+          kind: "cycle",
+          key: "same-cycle-name",
+          startedAt: "2026-07-17T09:00:00+09:00",
+        }),
+      ]);
+
+      const snapshot = cache.getSnapshot(new Date("2026-07-17T09:05:00+09:00"));
+
+      expect(snapshot.agents[0]?.cycleStatus).toBe("running");
+    });
+
+    it("結合シナリオ: cycle1 で delegate_start・cycle1 abandoned・cycle2 で同一 session_id の delegate_start→end という並びでは、実行中（cycleStatus/runningRuns）がゼロになる（Issue #36 項目1のシナリオ回帰確認）", () => {
+      const events: RunEvent[] = [
+        {
+          ts: "2026-07-16T10:00:00+09:00",
+          event: "cycle_start",
+          cycle: "cycle1",
+        },
+        {
+          ts: "2026-07-16T10:05:00+09:00",
+          event: "delegate_start",
+          challenge: "C-044",
+          repo: "net-config",
+          session_id: "s1",
+        },
+        {
+          ts: "2026-07-16T10:45:00+09:00",
+          event: "cycle_end",
+          cycle: "cycle1",
+          result: "abandoned",
+        },
+        {
+          ts: "2026-07-17T09:00:00+09:00",
+          event: "cycle_start",
+          cycle: "cycle2",
+        },
+        {
+          ts: "2026-07-17T09:01:00+09:00",
+          event: "delegate_start",
+          challenge: "C-044",
+          repo: "net-config",
+          session_id: "s1",
+        },
+        {
+          ts: "2026-07-17T09:30:00+09:00",
+          event: "delegate_end",
+          challenge: "C-044",
+          repo: "net-config",
+          session_id: "s1",
+          result: "実装完了・PR起票（照合済み）",
+        },
+        {
+          ts: "2026-07-17T09:35:00+09:00",
+          event: "cycle_end",
+          cycle: "cycle2",
+          result: "completed",
+        },
+      ];
+
+      const cache = createMemoryBoardCache({ staleMinutes: 30 });
+      cache.replaceAgent({
+        name: "medical",
+        path: "/agents/medical-agent",
+        challenges: [],
+        parseErrors: [],
+      });
+      cache.replaceRuns("medical", matchRuns(events));
+
+      const snapshot = cache.getSnapshot(new Date("2026-07-17T10:00:00+09:00"));
+
+      expect(snapshot.agents[0]?.cycleStatus).toBe("idle");
+      expect(snapshot.agents[0]?.runningRuns).toEqual([]);
+    });
+
+    it("createMemoryBoardCache({ staleMinutes }) が既定30分を上書きする", () => {
+      const cache = createMemoryBoardCache({ staleMinutes: 5 });
+      cache.replaceAgent({
+        name: "medical",
+        path: "/agents/medical-agent",
+        challenges: [],
+        parseErrors: [],
+      });
+      cache.replaceRuns("medical", [
+        matchedRun({
+          kind: "cycle",
+          key: "2026-07-16-cycle",
+          startedAt: "2026-07-16T10:00:00+09:00",
+        }),
+      ]);
+
+      // 10分経過: 既定30分なら running のはずだが staleMinutes: 5 のため stale になる
+      const snapshot = cache.getSnapshot(new Date("2026-07-16T10:10:00+09:00"));
+
+      expect(snapshot.agents[0]?.cycleStatus).toBe("stale");
+    });
+
+    it.each([
+      ["0", 0],
+      ["負数", -5],
+      ["NaN", Number.NaN],
+    ])(
+      "createMemoryBoardCache({ staleMinutes: 不正値（%s） }) は既定30分にフォールバックする",
+      (_label, invalidStaleMinutes) => {
+        const cache = createMemoryBoardCache({
+          staleMinutes: invalidStaleMinutes,
+        });
+        cache.replaceAgent({
+          name: "medical",
+          path: "/agents/medical-agent",
+          challenges: [],
+          parseErrors: [],
+        });
+        cache.replaceRuns("medical", [
+          matchedRun({
+            kind: "cycle",
+            key: "2026-07-16-cycle",
+            startedAt: "2026-07-16T10:00:00+09:00",
+          }),
+        ]);
+
+        // 10分経過: 不正値は既定30分にフォールバックされるはずなので running のまま
+        const snapshot = cache.getSnapshot(
+          new Date("2026-07-16T10:10:00+09:00"),
+        );
+
+        expect(snapshot.agents[0]?.cycleStatus).toBe("running");
+      },
+    );
+  });
+});
+
+describe("startStaleReevaluation", () => {
+  function agentBoard(overrides: Partial<AgentBoard> = {}): AgentBoard {
+    return {
+      name: "medical",
+      path: "/agents/medical-agent",
+      challenges: [],
+      parseErrors: [],
+      cycleStatus: "idle",
+      runningRuns: [],
+      ...overrides,
+    };
+  }
+
+  function fakeCache(snapshots: () => AgentBoard[]): {
+    replaceAgent: () => void;
+    replaceJournal: () => void;
+    replaceRuns: () => void;
+    getChallenge: () => undefined;
+    getLog: () => [];
+    getSnapshot: () => { agents: AgentBoard[] };
+  } {
+    return {
+      replaceAgent: () => undefined,
+      replaceJournal: () => undefined,
+      replaceRuns: () => undefined,
+      getChallenge: () => undefined,
+      getLog: () => [],
+      getSnapshot: () => ({ agents: snapshots() }),
+    };
+  }
+
+  it("intervalMs ごとに cache.getSnapshot(now) を呼び、cycleStatus/runningRuns の変化があるエージェントのみ onAgentUpdate を呼ぶ", () => {
+    let tick = 0;
+    const cache = fakeCache(() => {
+      tick += 1;
+      if (tick === 1) {
+        return [agentBoard({ name: "medical", cycleStatus: "idle" })];
+      }
+      return [agentBoard({ name: "medical", cycleStatus: "running" })];
+    });
+    const onAgentUpdate = vi.fn();
+
+    let scheduled: (() => void) | undefined;
+    const setIntervalFn = vi.fn((handler: () => void) => {
+      scheduled = handler;
+      return 1 as unknown as NodeJS.Timeout;
+    });
+    const clearIntervalFn = vi.fn();
+
+    const timer = startStaleReevaluation(cache, onAgentUpdate, {
+      setIntervalFn,
+      clearIntervalFn,
+    });
+
+    // 初回スナップショット取得直後（コンストラクション時点）はまだ push しない。
+    expect(onAgentUpdate).not.toHaveBeenCalled();
+
+    scheduled?.();
+
+    expect(onAgentUpdate).toHaveBeenCalledTimes(1);
+    expect(onAgentUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "medical", cycleStatus: "running" }),
+    );
+
+    timer.close();
+  });
+
+  it("変化が無いエージェントは onAgentUpdate を呼ばない", () => {
+    const cache = fakeCache(() => [
+      agentBoard({ name: "medical", cycleStatus: "idle" }),
+    ]);
+    const onAgentUpdate = vi.fn();
+
+    let scheduled: (() => void) | undefined;
+    const setIntervalFn = vi.fn((handler: () => void) => {
+      scheduled = handler;
+      return 1 as unknown as NodeJS.Timeout;
+    });
+    const clearIntervalFn = vi.fn();
+
+    const timer = startStaleReevaluation(cache, onAgentUpdate, {
+      setIntervalFn,
+      clearIntervalFn,
+    });
+
+    scheduled?.();
+    scheduled?.();
+
+    expect(onAgentUpdate).not.toHaveBeenCalled();
+
+    timer.close();
+  });
+
+  it("実行中 run があるエージェントは分が進むごとに push される（経過時間表示の更新前提。UI はクライアント側タイマーを持たない）", () => {
+    const startedAt = "2026-07-18T10:00:00+09:00";
+    const cache = fakeCache(() => [
+      agentBoard({
+        name: "medical",
+        cycleStatus: "running",
+        runningRuns: [
+          {
+            kind: "delegate",
+            key: "session-1",
+            challenge: "C-044",
+            repo: "net-config",
+            startedAt,
+            stale: false,
+          },
+        ],
+      }),
+      agentBoard({ name: "idle-agent", cycleStatus: "idle" }),
+    ]);
+    const onAgentUpdate = vi.fn();
+
+    let nowMs = Date.parse(startedAt);
+    let scheduled: (() => void) | undefined;
+    const setIntervalFn = vi.fn((handler: () => void) => {
+      scheduled = handler;
+      return 1 as unknown as NodeJS.Timeout;
+    });
+
+    const timer = startStaleReevaluation(cache, onAgentUpdate, {
+      now: () => new Date(nowMs),
+      setIntervalFn,
+      clearIntervalFn: vi.fn(),
+    });
+
+    // 1 分経過 → 経過分バケットが変わり、実行中 run を持つエージェントだけ push
+    nowMs += 60_000;
+    scheduled?.();
+    expect(onAgentUpdate).toHaveBeenCalledTimes(1);
+    expect(onAgentUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "medical" }),
+    );
+
+    // さらに 1 分 → もう一度 push（毎分更新される）
+    nowMs += 60_000;
+    scheduled?.();
+    expect(onAgentUpdate).toHaveBeenCalledTimes(2);
+
+    // 同一分内の再評価では push しない
+    nowMs += 1_000;
+    scheduled?.();
+    expect(onAgentUpdate).toHaveBeenCalledTimes(2);
+
+    timer.close();
+  });
+
+  it("close() で clearIntervalFn が呼ばれる", () => {
+    const cache = fakeCache(() => [agentBoard()]);
+    const onAgentUpdate = vi.fn();
+
+    const handle = {};
+    const setIntervalFn = vi.fn(() => handle as unknown as NodeJS.Timeout);
+    const clearIntervalFn = vi.fn();
+
+    const timer = startStaleReevaluation(cache, onAgentUpdate, {
+      setIntervalFn,
+      clearIntervalFn,
+    });
+    timer.close();
+
+    expect(clearIntervalFn).toHaveBeenCalledWith(handle);
+  });
+
+  it("既定の intervalMs は 60000ms", () => {
+    const cache = fakeCache(() => [agentBoard()]);
+    const onAgentUpdate = vi.fn();
+
+    const setIntervalFn = vi.fn(() => 1 as unknown as NodeJS.Timeout);
+    const clearIntervalFn = vi.fn();
+
+    const timer = startStaleReevaluation(cache, onAgentUpdate, {
+      setIntervalFn,
+      clearIntervalFn,
+    });
+
+    expect(setIntervalFn).toHaveBeenCalledWith(expect.any(Function), 60_000);
+
+    timer.close();
   });
 });

@@ -59,6 +59,8 @@ export function Board() {
                 ? {
                     ...agent,
                     challenges: agent.challenges.filter((c) => c.needsHuman),
+                    // 承認待ちフィルタ選択時は実行中セクションも隠す（P3-2）。
+                    runningRuns: [],
                   }
                 : agent
             }
