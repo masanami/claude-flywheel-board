@@ -849,4 +849,394 @@ describe("AgentColumn", () => {
       );
     });
   });
+
+  describe("キーボードでの並べ替え（#25）", () => {
+    function focusCard(title: string): HTMLElement {
+      const card = screen.getByText(title).closest(".task-card");
+      if (!card) throw new Error("task-card が見つかりません");
+      // fireEvent.focus は合成イベントを発火するのみで document.activeElement
+      // を実際には更新しない。Escape 後のフォーカス復帰確認（toHaveFocus）に
+      // 実フォーカス状態が必要なため、element.focus() で実際にフォーカスする。
+      (card as HTMLElement).focus();
+      return card as HTMLElement;
+    }
+
+    function threeChallenges() {
+      return [
+        challenge({ id: "C-001", title: "1番目" }),
+        challenge({ id: "C-002", title: "2番目" }),
+        challenge({ id: "C-003", title: "3番目" }),
+      ];
+    }
+
+    it("Alt+ArrowUp で並べ替えモードが開始し、直上行に data-drop-target が付き aria-live に「最上位」が読み上げられる", () => {
+      render(
+        <AgentColumn agent={agentBoard({ challenges: threeChallenges() })} />,
+      );
+
+      const card = focusCard("2番目");
+      fireEvent.keyDown(card, { key: "ArrowUp", altKey: true });
+
+      expect(screen.getByTestId("agent-column-row-C-001")).toHaveAttribute(
+        "data-drop-target",
+        "true",
+      );
+      expect(screen.getByTestId("agent-column-live-region")).toHaveTextContent(
+        "並べ替え: 最上位",
+      );
+    });
+
+    it("Alt+ArrowDown で並べ替えモードが開始し、最下位ドロップゾーンに data-drop-target が付き aria-live に「最下位」が読み上げられる", () => {
+      render(
+        <AgentColumn agent={agentBoard({ challenges: threeChallenges() })} />,
+      );
+
+      const card = focusCard("2番目");
+      fireEvent.keyDown(card, { key: "ArrowDown", altKey: true });
+
+      expect(
+        screen.getByTestId("agent-column-bottom-drop-zone"),
+      ).toHaveAttribute("data-drop-target", "true");
+      expect(screen.getByTestId("agent-column-live-region")).toHaveTextContent(
+        "並べ替え: 最下位",
+      );
+    });
+
+    it("自分自身の位置に戻る（no-op）スロットは自動的にスキップする（先頭カードの Alt+ArrowDown は隣接カードを飛び越える）", () => {
+      render(
+        <AgentColumn agent={agentBoard({ challenges: threeChallenges() })} />,
+      );
+
+      const card = focusCard("1番目");
+      fireEvent.keyDown(card, { key: "ArrowDown", altKey: true });
+
+      // C-001 を C-002 の直前に置く（=no-op）はスキップされ、C-003 の直前に置く
+      // スロットに止まる。
+      expect(screen.getByTestId("agent-column-row-C-003")).toHaveAttribute(
+        "data-drop-target",
+        "true",
+      );
+      expect(screen.getByTestId("agent-column-live-region")).toHaveTextContent(
+        "並べ替え: 移動先はC-003の上",
+      );
+    });
+
+    it("同じカードで並べ替えモード中に続けて矢印キーを押すと移動先スロットが動く", () => {
+      render(
+        <AgentColumn agent={agentBoard({ challenges: threeChallenges() })} />,
+      );
+
+      const card = focusCard("1番目");
+      fireEvent.keyDown(card, { key: "ArrowDown", altKey: true });
+      expect(screen.getByTestId("agent-column-row-C-003")).toHaveAttribute(
+        "data-drop-target",
+        "true",
+      );
+
+      fireEvent.keyDown(card, { key: "ArrowDown", altKey: true });
+      expect(
+        screen.getByTestId("agent-column-bottom-drop-zone"),
+      ).toHaveAttribute("data-drop-target", "true");
+      expect(screen.getByTestId("agent-column-live-region")).toHaveTextContent(
+        "並べ替え: 最下位",
+      );
+    });
+
+    it("並べ替えモード中に Enter を押すと、移動先スロットに応じた優先度変更の指示で prefill が呼ばれモードが終了する", () => {
+      render(
+        <AgentColumn agent={agentBoard({ challenges: threeChallenges() })} />,
+      );
+
+      const card = focusCard("2番目");
+      fireEvent.keyDown(card, { key: "ArrowDown", altKey: true });
+      fireEvent.keyDown(card, { key: "Enter" });
+
+      expect(prefill).toHaveBeenCalledWith(
+        "medical",
+        "課題 C-002 の優先度を C-003 より下（最低優先度）に変更してください",
+      );
+      expect(
+        screen.getByTestId("agent-column-bottom-drop-zone"),
+      ).not.toHaveAttribute("data-drop-target");
+      expect(screen.getByTestId("agent-column-live-region")).toHaveTextContent(
+        "移動しました",
+      );
+    });
+
+    it("並べ替えモード中の Enter はカードの詳細モーダルを開かない", () => {
+      render(
+        <AgentColumn agent={agentBoard({ challenges: threeChallenges() })} />,
+      );
+
+      const card = focusCard("2番目");
+      fireEvent.keyDown(card, { key: "ArrowUp", altKey: true });
+      fireEvent.keyDown(card, { key: "Enter" });
+
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("並べ替えモード中に Escape を押すと、prefill されずモードが終了しフォーカスはカードに残る", () => {
+      render(
+        <AgentColumn agent={agentBoard({ challenges: threeChallenges() })} />,
+      );
+
+      const card = focusCard("2番目");
+      fireEvent.keyDown(card, { key: "ArrowUp", altKey: true });
+      fireEvent.keyDown(card, { key: "Escape" });
+
+      expect(prefill).not.toHaveBeenCalled();
+      expect(screen.getByTestId("agent-column-row-C-001")).not.toHaveAttribute(
+        "data-drop-target",
+      );
+      expect(card).toHaveFocus();
+      expect(screen.getByTestId("agent-column-live-region")).toHaveTextContent(
+        "並べ替えをキャンセルしました",
+      );
+    });
+
+    it("確定（Enter）後は素の Enter で詳細モーダルが開く挙動に戻る", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+      render(
+        <AgentColumn agent={agentBoard({ challenges: threeChallenges() })} />,
+      );
+
+      const card = focusCard("2番目");
+      fireEvent.keyDown(card, { key: "ArrowUp", altKey: true });
+      fireEvent.keyDown(card, { key: "Enter" });
+      vi.mocked(prefill).mockClear();
+
+      fireEvent.keyDown(card, { key: "Enter" });
+
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+    });
+
+    it("キャンセル（Escape）後は素の Enter で詳細モーダルが開く挙動に戻る", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+      render(
+        <AgentColumn agent={agentBoard({ challenges: threeChallenges() })} />,
+      );
+
+      const card = focusCard("2番目");
+      fireEvent.keyDown(card, { key: "ArrowUp", altKey: true });
+      fireEvent.keyDown(card, { key: "Escape" });
+
+      fireEvent.keyDown(card, { key: "Enter" });
+
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+    });
+
+    it("並べ替えモード中に Enter を押すと、最上位（スロット0）確定でも正しい指示文で prefill される", () => {
+      render(
+        <AgentColumn agent={agentBoard({ challenges: threeChallenges() })} />,
+      );
+
+      // C-003（末尾）から2回 Alt+ArrowUp すると、C-002 を飛び越えて
+      // スロット0（最上位・C-001の前）に到達する。
+      const card = focusCard("3番目");
+      fireEvent.keyDown(card, { key: "ArrowUp", altKey: true });
+      fireEvent.keyDown(card, { key: "ArrowUp", altKey: true });
+      expect(screen.getByTestId("agent-column-live-region")).toHaveTextContent(
+        "並べ替え: 最上位",
+      );
+
+      fireEvent.keyDown(card, { key: "Enter" });
+
+      // スロット0の隣接カードは現在の先頭 C-001 であり、buildReorderInstruction
+      // の「隣接カードなし＝最上位」の特別なテキストは（自分自身以外に必ず
+      // 隣接カードが存在するため）並べ替えでは使われず、C-001 との相対指示になる。
+      expect(prefill).toHaveBeenCalledWith(
+        "medical",
+        "課題 C-003 の優先度を C-001 より上（適切な優先度で）に変更してください",
+      );
+    });
+
+    it("並べ替えモード中に Enter を押すと、中間スロット確定時は隣接カードの優先度を反映した指示文で prefill される", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            challenges: [
+              challenge({ id: "C-001", title: "1番目" }),
+              challenge({ id: "C-002", title: "2番目" }),
+              challenge({ id: "C-003", priority: "P2", title: "3番目" }),
+            ],
+          })}
+        />,
+      );
+
+      const card = focusCard("1番目");
+      fireEvent.keyDown(card, { key: "ArrowDown", altKey: true });
+      expect(screen.getByTestId("agent-column-live-region")).toHaveTextContent(
+        "並べ替え: 移動先はC-003の上",
+      );
+
+      fireEvent.keyDown(card, { key: "Enter" });
+
+      expect(prefill).toHaveBeenCalledWith(
+        "medical",
+        "課題 C-001 の優先度を C-003 より上（P2 以上）に変更してください",
+      );
+    });
+
+    it("並べ替えモード中に agent.challenges が変化（fs-watch 反映等）してスロットが無効になった場合、モードは静かに終了する（古いスロットで誤って prefill しない）", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+      const { rerender } = render(
+        <AgentColumn agent={agentBoard({ challenges: threeChallenges() })} />,
+      );
+
+      const card = focusCard("2番目");
+      // C-002 を末尾（スロット3）へ移動しようとしている最中とする。
+      fireEvent.keyDown(card, { key: "ArrowDown", altKey: true });
+      expect(
+        screen.getByTestId("agent-column-bottom-drop-zone"),
+      ).toHaveAttribute("data-drop-target", "true");
+
+      // その間に台帳側の更新が反映され、C-003 が無くなった（配列が縮んだ）。
+      rerender(
+        <AgentColumn
+          agent={agentBoard({
+            challenges: [
+              challenge({ id: "C-001", title: "1番目" }),
+              challenge({ id: "C-002", title: "2番目" }),
+            ],
+          })}
+        />,
+      );
+
+      expect(
+        screen.queryByTestId("agent-column-bottom-drop-zone"),
+      ).not.toHaveAttribute("data-drop-target");
+
+      // 並べ替えモードは終了しているため、Enter は素の詳細モーダルを開く
+      // 挙動に戻っているはず。
+      const refreshedCard = screen.getByText("2番目").closest(".task-card");
+      if (!refreshedCard) throw new Error("task-card が見つかりません");
+      fireEvent.keyDown(refreshedCard, { key: "Enter" });
+
+      expect(prefill).not.toHaveBeenCalled();
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+    });
+
+    it("並べ替えモード中に配列の並びが変わり、保持中のスロットが結果的に no-op（隣接カードが自分自身相当）になった場合はモードを終了し prefill しない", () => {
+      const { rerender } = render(
+        <AgentColumn agent={agentBoard({ challenges: threeChallenges() })} />,
+      );
+
+      const card = focusCard("1番目");
+      // C-001（先頭）を1段下げる → スロット2（C-003 の前）へ。
+      fireEvent.keyDown(card, { key: "ArrowDown", altKey: true });
+      expect(screen.getByTestId("agent-column-row-C-003")).toHaveAttribute(
+        "data-drop-target",
+        "true",
+      );
+
+      // 外部要因で配列の並びが変わり、C-001 の直後が C-003 になった
+      // （= 保持中のスロット2は C-001 にとって no-op に変化）。
+      rerender(
+        <AgentColumn
+          agent={agentBoard({
+            challenges: [
+              challenge({ id: "C-002", title: "2番目" }),
+              challenge({ id: "C-001", title: "1番目" }),
+              challenge({ id: "C-003", title: "3番目" }),
+            ],
+          })}
+        />,
+      );
+
+      expect(
+        screen.queryByTestId("agent-column-row-C-003"),
+      ).not.toHaveAttribute("data-drop-target");
+
+      const refreshedCard = screen.getByText("1番目").closest(".task-card");
+      if (!refreshedCard) throw new Error("task-card が見つかりません");
+      fireEvent.keyDown(refreshedCard, { key: "Enter" });
+
+      expect(prefill).not.toHaveBeenCalled();
+    });
+
+    it("要素が1件のみのカラムでは移動先が無いため並べ替えモードが実質開始しない（インジケータが付かない）", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            challenges: [challenge({ id: "C-001", title: "唯一のタスク" })],
+          })}
+        />,
+      );
+
+      const card = focusCard("唯一のタスク");
+      fireEvent.keyDown(card, { key: "ArrowDown", altKey: true });
+      fireEvent.keyDown(card, { key: "ArrowUp", altKey: true });
+
+      expect(screen.getByTestId("agent-column-row-C-001")).not.toHaveAttribute(
+        "data-drop-target",
+      );
+      expect(
+        screen.getByTestId("agent-column-bottom-drop-zone"),
+      ).not.toHaveAttribute("data-drop-target");
+    });
+  });
+
+  describe("差し込みゴーストのキーボード確定（#25）", () => {
+    it("内容入力欄で Enter を押すと、先頭位置（adjacentChallengeAt(0)）で prefill が呼ばれゴーストが閉じる", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            challenges: [
+              challenge({ id: "C-044", priority: "P1", title: "先頭タスク" }),
+            ],
+          })}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "＋ 差し込み" }));
+      const input = screen.getByPlaceholderText("課題の内容");
+      fireEvent.change(input, { target: { value: "新しい課題" } });
+
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      expect(prefill).toHaveBeenCalledWith(
+        "medical",
+        "差し込み: 「新しい課題」を課題台帳に追加してください。優先度は C-044 より上（P1 相当）でお願いします",
+      );
+      expect(
+        screen.queryByPlaceholderText("課題の内容"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("内容が空（trim 後に空文字）の状態で Enter を押しても prefill されずゴーストは維持される", () => {
+      render(<AgentColumn agent={agentBoard({ challenges: [] })} />);
+      fireEvent.click(screen.getByRole("button", { name: "＋ 差し込み" }));
+      const input = screen.getByPlaceholderText("課題の内容");
+
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      expect(prefill).not.toHaveBeenCalled();
+      expect(screen.getByPlaceholderText("課題の内容")).toBeInTheDocument();
+    });
+
+    it("内容が空白文字のみの状態で Enter を押しても prefill されずゴーストは維持される", () => {
+      render(<AgentColumn agent={agentBoard({ challenges: [] })} />);
+      fireEvent.click(screen.getByRole("button", { name: "＋ 差し込み" }));
+      const input = screen.getByPlaceholderText("課題の内容");
+      fireEvent.change(input, { target: { value: "   " } });
+
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      expect(prefill).not.toHaveBeenCalled();
+      expect(screen.getByPlaceholderText("課題の内容")).toBeInTheDocument();
+    });
+
+    it("内容入力欄で Escape を押すとゴーストが破棄される（prefill されない）", () => {
+      render(<AgentColumn agent={agentBoard({ challenges: [] })} />);
+      fireEvent.click(screen.getByRole("button", { name: "＋ 差し込み" }));
+      const input = screen.getByPlaceholderText("課題の内容");
+      fireEvent.change(input, { target: { value: "新しい課題" } });
+
+      fireEvent.keyDown(input, { key: "Escape" });
+
+      expect(prefill).not.toHaveBeenCalled();
+      expect(
+        screen.queryByPlaceholderText("課題の内容"),
+      ).not.toBeInTheDocument();
+    });
+  });
 });

@@ -270,4 +270,175 @@ describe("TaskCard", () => {
       expect(card).toHaveFocus();
     });
   });
+
+  describe("キーボードでの並べ替え操作（#25）", () => {
+    it("フォーカス中のみ「Alt+↑/↓ で並べ替え」ヒントを表示する", () => {
+      render(<TaskCard challenge={challenge()} agentName="medical" />);
+
+      const card = screen.getByText("課題タイトル").closest(".task-card");
+      if (!card) throw new Error("task-card が見つかりません");
+
+      expect(screen.queryByText("Alt+↑/↓ で並べ替え")).not.toBeInTheDocument();
+
+      fireEvent.focus(card);
+
+      expect(screen.getByText("Alt+↑/↓ で並べ替え")).toBeInTheDocument();
+
+      fireEvent.blur(card);
+
+      expect(screen.queryByText("Alt+↑/↓ で並べ替え")).not.toBeInTheDocument();
+    });
+
+    it("Alt+ArrowUp で onReorderMove('up') が呼ばれる（isReordering の値によらない）", () => {
+      const onReorderMove = vi.fn();
+      render(
+        <TaskCard
+          challenge={challenge()}
+          agentName="medical"
+          onReorderMove={onReorderMove}
+        />,
+      );
+
+      const card = screen.getByText("課題タイトル").closest(".task-card");
+      if (!card) throw new Error("task-card が見つかりません");
+
+      fireEvent.keyDown(card, { key: "ArrowUp", altKey: true });
+
+      expect(onReorderMove).toHaveBeenCalledWith("up");
+    });
+
+    it("Alt+ArrowDown で onReorderMove('down') が呼ばれる", () => {
+      const onReorderMove = vi.fn();
+      render(
+        <TaskCard
+          challenge={challenge()}
+          agentName="medical"
+          onReorderMove={onReorderMove}
+        />,
+      );
+
+      const card = screen.getByText("課題タイトル").closest(".task-card");
+      if (!card) throw new Error("task-card が見つかりません");
+
+      fireEvent.keyDown(card, { key: "ArrowDown", altKey: true });
+
+      expect(onReorderMove).toHaveBeenCalledWith("down");
+    });
+
+    it("修飾キー無しの矢印キーでは onReorderMove を呼ばない", () => {
+      const onReorderMove = vi.fn();
+      render(
+        <TaskCard
+          challenge={challenge()}
+          agentName="medical"
+          onReorderMove={onReorderMove}
+        />,
+      );
+
+      const card = screen.getByText("課題タイトル").closest(".task-card");
+      if (!card) throw new Error("task-card が見つかりません");
+
+      fireEvent.keyDown(card, { key: "ArrowUp" });
+      fireEvent.keyDown(card, { key: "ArrowDown" });
+
+      expect(onReorderMove).not.toHaveBeenCalled();
+    });
+
+    it("isReordering=true の状態で Enter を押すと onReorderConfirm が呼ばれ、モーダルは開かない", () => {
+      const onReorderConfirm = vi.fn();
+      render(
+        <TaskCard
+          challenge={challenge()}
+          agentName="medical"
+          isReordering
+          onReorderConfirm={onReorderConfirm}
+        />,
+      );
+
+      const card = screen.getByText("課題タイトル").closest(".task-card");
+      if (!card) throw new Error("task-card が見つかりません");
+
+      fireEvent.keyDown(card, { key: "Enter" });
+
+      expect(onReorderConfirm).toHaveBeenCalled();
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("isReordering=true の状態で Escape を押すと onReorderCancel が呼ばれる", () => {
+      const onReorderCancel = vi.fn();
+      render(
+        <TaskCard
+          challenge={challenge()}
+          agentName="medical"
+          isReordering
+          onReorderCancel={onReorderCancel}
+        />,
+      );
+
+      const card = screen.getByText("課題タイトル").closest(".task-card");
+      if (!card) throw new Error("task-card が見つかりません");
+
+      fireEvent.keyDown(card, { key: "Escape" });
+
+      expect(onReorderCancel).toHaveBeenCalled();
+    });
+
+    it("isReordering=true の状態でカードが blur すると onReorderCancel が呼ばれる（フォーカス喪失時の見えないモード残留を防ぐ）", () => {
+      const onReorderCancel = vi.fn();
+      render(
+        <TaskCard
+          challenge={challenge()}
+          agentName="medical"
+          isReordering
+          onReorderCancel={onReorderCancel}
+        />,
+      );
+
+      const card = screen.getByText("課題タイトル").closest(".task-card");
+      if (!card) throw new Error("task-card が見つかりません");
+
+      fireEvent.blur(card);
+
+      expect(onReorderCancel).toHaveBeenCalled();
+    });
+
+    it("isReordering=false のときに blur しても onReorderCancel は呼ばれない", () => {
+      const onReorderCancel = vi.fn();
+      render(
+        <TaskCard
+          challenge={challenge()}
+          agentName="medical"
+          onReorderCancel={onReorderCancel}
+        />,
+      );
+
+      const card = screen.getByText("課題タイトル").closest(".task-card");
+      if (!card) throw new Error("task-card が見つかりません");
+
+      fireEvent.blur(card);
+
+      expect(onReorderCancel).not.toHaveBeenCalled();
+    });
+
+    it("isReordering=false（既定）のとき、素の Enter は従来通り詳細モーダルを開く（回帰確認）", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+      const onReorderConfirm = vi.fn();
+
+      render(
+        <TaskCard
+          challenge={challenge()}
+          agentName="medical"
+          onReorderConfirm={onReorderConfirm}
+        />,
+      );
+
+      const card = screen.getByText("課題タイトル").closest(".task-card");
+      if (!card) throw new Error("task-card が見つかりません");
+
+      fireEvent.keyDown(card, { key: "Enter" });
+
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      expect(onReorderConfirm).not.toHaveBeenCalled();
+    });
+  });
 });

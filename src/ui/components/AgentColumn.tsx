@@ -16,6 +16,7 @@ import { ErrorCard } from "./ErrorCard.tsx";
 import {
   AGENT_NAME_DRAG_MIME,
   CHALLENGE_DRAG_MIME,
+  type ReorderDirection,
   TaskCard,
 } from "./TaskCard.tsx";
 
@@ -118,11 +119,47 @@ type DropTargetKey = string | "ghost" | "bottom" | null;
 // ドロップ確定で行うのは「指示文の生成 → prefill」のみであり、challenges 配列
 // 自体を並べ替えるような楽観更新は行わない（渡された順のまま描画し続け、実際の
 // 並び替えは台帳更新の fs-watch 反映を待つ）。
+// キーボードでの並べ替え（#25）: 移動先を「スロット」0..N（N = challenges.length）
+// で表現する。スロット i（i<N）は「現在の challenges[i] の直前に置く」、
+// スロット N は「末尾（最下位）に置く」を意味する。並べ替え対象自身の位置に
+// 戻ってしまう（結果的に何も変わらない）スロットは自動的にスキップする。
+type ReorderState = { challengeId: string; slot: number } | null;
+
+// スロット slot が対象カード自身（selfIndex）にとって no-op かどうか。
+// slot === selfIndex（自分の直前に自分を置く）、
+// slot === selfIndex + 1（自分を取り除いた直後の位置に戻すだけ）の
+// いずれも見た目上の並びは変化しない。
+function isNoOpSlot(slot: number, selfIndex: number): boolean {
+  return slot === selfIndex || slot === selfIndex + 1;
+}
+
+// 現在のスロット current から direction 方向へ、no-op スロットを飛ばして
+// 次に止まれるスロットを探す。範囲外（0未満・maxSlot超）に達したら、それ以上
+// 進めないため current のまま返す（境界で足踏みする＝最上位/最下位で止まる）。
+function findNextSlot(
+  current: number,
+  direction: 1 | -1,
+  selfIndex: number,
+  maxSlot: number,
+): number {
+  let candidate = current + direction;
+  while (candidate >= 0 && candidate <= maxSlot) {
+    if (!isNoOpSlot(candidate, selfIndex)) {
+      return candidate;
+    }
+    candidate += direction;
+  }
+  return current;
+}
+
 export function AgentColumn({ agent }: AgentColumnProps) {
   const firstNeedsHumanIndex = agent.challenges.findIndex((c) => c.needsHuman);
   const [isInsertOpen, setIsInsertOpen] = useState(false);
   const [insertContent, setInsertContent] = useState("");
   const [dropTargetKey, setDropTargetKey] = useState<DropTargetKey>(null);
+  const [reorderState, setReorderState] = useState<ReorderState>(null);
+  // aria-live="polite" で読み上げる案内文（#25）。視覚的には非表示。
+  const [liveMessage, setLiveMessage] = useState("");
   const ghostInputRef = useRef<HTMLInputElement | null>(null);
 
   // ゴースト表示直後、フォーカスが直前の要素（ターミナル等）に残ったままだと
@@ -164,6 +201,114 @@ export function AgentColumn({ agent }: AgentColumnProps) {
   const handleBottomDrop = (event: React.DragEvent<HTMLElement>) => {
     handleDrop(event, bottomAdjacent, bottomAdjacent ? "bottom" : "before");
   };
+
+  // スロット slot（0..N）の読み上げ文を組み立てる（#25）。
+  // 0=最上位、N=最下位、それ以外は「直前に置く隣接カードの上」を案内する。
+  // 隣接カードの取得は既存の adjacentChallengeAt に揃える（D&D と同じ基準）。
+  const describeReorderSlot = (slot: number, maxSlot: number): string => {
+    if (slot === 0) {
+      return "並べ替え: 最上位";
+    }
+    if (slot === maxSlot) {
+      return "並べ替え: 最下位";
+    }
+    const adjacent = adjacentChallengeAt(slot);
+    return adjacent
+      ? `並べ替え: 移動先は${adjacent.id}の上`
+      : "並べ替え: 最下位";
+  };
+
+  // Alt+ArrowUp/Down（#25）。まだ並べ替えモードでなければ開始し、既に対象
+  // カードで並べ替えモード中ならそのまま移動先スロットを動かす。
+  const handleReorderMove = (
+    challengeId: string,
+    direction: ReorderDirection,
+  ) => {
+    const selfIndex = agent.challenges.findIndex((c) => c.id === challengeId);
+    if (selfIndex === -1) {
+      return;
+    }
+    const maxSlot = agent.challenges.length;
+    const alreadyReordering = reorderState?.challengeId === challengeId;
+    const current = alreadyReordering ? reorderState.slot : selfIndex;
+    const next = findNextSlot(
+      current,
+      direction === "up" ? -1 : 1,
+      selfIndex,
+      maxSlot,
+    );
+    if (next === current && !alreadyReordering) {
+      // 移動できるスロットが1つも無い（例: カラムに要素が1件のみ）。
+      // この場合は並べ替えモード自体を開始しない。
+      return;
+    }
+    setReorderState({ challengeId, slot: next });
+    setLiveMessage(describeReorderSlot(next, maxSlot));
+  };
+
+  // 並べ替えモード中の Enter による確定（#25）。スロットを隣接カード＋
+  // placement に変換し、既存の buildReorderInstruction → prefill 経路へ渡す。
+  // challenges 配列自体は書き換えない（楽観更新禁止・NFR-01）。
+  //
+  // 安全弁: モード開始後に fs-watch 経由で agent.challenges が変化している
+  // 可能性があるため（board はポーリング/購読で常に最新の challenges を props
+  // として受け取る）、確定の瞬間に selfIndex を必ず取り直し、保持していた
+  // slot が新しい配列上でも依然として有効（no-op でない）かを isNoOpSlot で
+  // 再検証する。無効化されていれば prefill せずモードだけ終了する。
+  const handleReorderConfirm = (challengeId: string) => {
+    if (!reorderState || reorderState.challengeId !== challengeId) {
+      setReorderState(null);
+      return;
+    }
+    const { slot } = reorderState;
+    const selfIndex = agent.challenges.findIndex((c) => c.id === challengeId);
+    const maxSlot = agent.challenges.length;
+    setReorderState(null);
+    if (selfIndex === -1 || slot > maxSlot || isNoOpSlot(slot, selfIndex)) {
+      return;
+    }
+    const adjacent =
+      slot === maxSlot ? bottomAdjacent : adjacentChallengeAt(slot);
+    const placement: Placement =
+      slot === maxSlot ? (bottomAdjacent ? "bottom" : "before") : "before";
+    prefill(
+      agent.name,
+      buildReorderInstruction(challengeId, adjacent, placement),
+    );
+    setLiveMessage("移動しました");
+  };
+
+  // 並べ替えモード中の Escape によるキャンセル（#25）。prefill せずモードだけ
+  // 終了する。フォーカスはカード自身に残したままなので何もしなくてよい。
+  const handleReorderCancel = () => {
+    setReorderState(null);
+    setLiveMessage("並べ替えをキャンセルしました");
+  };
+
+  // 並べ替えモード中に agent.challenges が変化した場合の整合性維持（#25）。
+  // board は状態ファイルの fs-watch／WebSocket 経由で agent.challenges を
+  // 常時最新化して再 props するため、並べ替えモード中（Enter/Escape で
+  // 確定/キャンセルする前）に対象課題が消える・配列の並びが変わって保持中の
+  // slot が no-op になる、といった事態が起こり得る。見えないまま
+  // モードが残留し続ける（インジケータは消えるが isReordering は true の
+  // まま＝素の Enter が誤って並べ替え確定に化ける）事故を防ぐため、
+  // 無効化を検知したら静かにモードを終了する。
+  useEffect(() => {
+    if (!reorderState) {
+      return;
+    }
+    const selfIndex = agent.challenges.findIndex(
+      (c) => c.id === reorderState.challengeId,
+    );
+    const maxSlot = agent.challenges.length;
+    if (
+      selfIndex === -1 ||
+      reorderState.slot > maxSlot ||
+      isNoOpSlot(reorderState.slot, selfIndex)
+    ) {
+      setReorderState(null);
+    }
+  }, [agent.challenges, reorderState]);
 
   const handleDrop = (
     event: React.DragEvent<HTMLElement>,
@@ -212,6 +357,25 @@ export function AgentColumn({ agent }: AgentColumnProps) {
 
   return (
     <section className="agent-column">
+      {/* キーボードでの並べ替え（#25）の状態変化をスクリーンリーダーへ伝える、
+          視覚的に隠れた読み上げ専用領域。見た目には一切影響しない。 */}
+      <div
+        aria-live="polite"
+        data-testid="agent-column-live-region"
+        style={{
+          position: "absolute",
+          width: "1px",
+          height: "1px",
+          padding: 0,
+          margin: "-1px",
+          overflow: "hidden",
+          clip: "rect(0,0,0,0)",
+          whiteSpace: "nowrap",
+          border: 0,
+        }}
+      >
+        {liveMessage}
+      </div>
       <div className="agent-column-header">
         <h2 className="agent-column-title">{agent.name}</h2>
         <CycleStatusIndicator cycleStatus={agent.cycleStatus} />
@@ -265,6 +429,31 @@ export function AgentColumn({ agent }: AgentColumnProps) {
               placeholder="課題の内容"
               value={insertContent}
               onChange={(event) => setInsertContent(event.target.value)}
+              // キーボードでの確定経路（#25）: Enter で既定位置（スタック先頭）
+              // へ確定、Escape でゴーストを破棄する。D&D と同じ「空内容は
+              // 無視」ガードを踏襲する。
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  if (!insertContent.trim()) {
+                    return;
+                  }
+                  prefill(
+                    agent.name,
+                    buildInsertInstruction(
+                      insertContent,
+                      adjacentChallengeAt(0),
+                      "before",
+                    ),
+                  );
+                  closeGhost();
+                  return;
+                }
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  closeGhost();
+                }
+              }}
               // 親行が draggable のため、テキスト選択・カーソル移動のドラッグ操作が
               // 行のドラッグ開始と競合しないよう入力欄自体は draggable にしない。
               draggable={false}
@@ -282,7 +471,11 @@ export function AgentColumn({ agent }: AgentColumnProps) {
             <div
               className="agent-column-row"
               data-testid={`agent-column-row-${challenge.id}`}
-              data-drop-target={dropTargetKey === challenge.id || undefined}
+              data-drop-target={
+                dropTargetKey === challenge.id ||
+                reorderState?.slot === index ||
+                undefined
+              }
               onDragOver={(event) => {
                 event.preventDefault();
                 setDropTargetKey(challenge.id);
@@ -299,6 +492,12 @@ export function AgentColumn({ agent }: AgentColumnProps) {
                 challenge={challenge}
                 agentName={agent.name}
                 runningRuns={agent.runningRuns}
+                isReordering={reorderState?.challengeId === challenge.id}
+                onReorderMove={(direction: ReorderDirection) =>
+                  handleReorderMove(challenge.id, direction)
+                }
+                onReorderConfirm={() => handleReorderConfirm(challenge.id)}
+                onReorderCancel={handleReorderCancel}
               />
             </div>
           </div>
@@ -306,7 +505,11 @@ export function AgentColumn({ agent }: AgentColumnProps) {
         <div
           className="agent-column-row agent-column-bottom-drop-zone"
           data-testid="agent-column-bottom-drop-zone"
-          data-drop-target={dropTargetKey === "bottom" || undefined}
+          data-drop-target={
+            dropTargetKey === "bottom" ||
+            reorderState?.slot === agent.challenges.length ||
+            undefined
+          }
           onDragOver={(event) => {
             event.preventDefault();
             setDropTargetKey("bottom");
