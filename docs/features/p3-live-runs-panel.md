@@ -1,13 +1,13 @@
 # P3: 実行中パネル＋カード→セッション連携
 
-> **✅ P0 解消済み**（2026-07-16・claude-flywheel PR #45）: `runs.jsonl` の正本仕様は claude-flywheel `templates/runtime/README.md`。本書は正本仕様と突き合わせ済み。**残る依存は P2（プリフィル基盤）のみ**。
+> **✅ 依存すべて解消済み・着手可能**（2026-07-18）: P0 は claude-flywheel PR #45 で解消（`runs.jsonl` 正本仕様は claude-flywheel `templates/runtime/README.md`。本書は突き合わせ済み）。P2（プリフィル基盤・terminal-control）は PR #24 で main にマージ済み。
 
 ## 概要
 
 `runs.jsonl` から実行中のサイクル・委譲セッションを検出してボードに表示し、応答なし（stale）を警告する。タスクカードから `claude -p --resume <session-id>` をプリフィルしたターミナルを開き、介入を最短動線にする。
 
 - 対応要件: FR-05, FR-12 ＋ FR-02 のカラムヘッダ「サイクル状態」表示 ＋ FR-08 の作業ログへの runs 統合 / NFR-01, 05
-- 依存: **claude-flywheel P0（ブロッカー）** ＋ P2（プリフィル基盤）＋ P1（ボード UI）
+- 依存: claude-flywheel P0（✅ 解消済み）＋ P2 プリフィル基盤（✅ main マージ済み）＋ P1 ボード UI（✅ main マージ済み）
 - 関連: [requirements.md](../requirements.md) §6.1〜6.2 / [architecture.md](../architecture.md) §3.3〜3.5・§4.1・§5.2
 
 ## 背景・目的
