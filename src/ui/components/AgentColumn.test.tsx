@@ -720,4 +720,133 @@ describe("AgentColumn", () => {
       expect(screen.queryByText(/応答なし/)).not.toBeInTheDocument();
     });
   });
+
+  describe("再開コマンドの prefill 連携（#31・FR-12）", () => {
+    beforeEach(() => {
+      vi.setSystemTime(new Date("2026-07-16T09:40:00.000Z"));
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("stale な delegate Run には「再開コマンドを挿入」ボタンを表示する", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            name: "medical",
+            runningRuns: [
+              run({
+                kind: "delegate",
+                key: "session-1",
+                challenge: "C-042",
+                repo: "org/service-a",
+                stale: true,
+              }),
+            ],
+          })}
+        />,
+      );
+
+      expect(
+        screen.getByRole("button", { name: "再開コマンドを挿入" }),
+      ).toBeInTheDocument();
+    });
+
+    it("stale ではない delegate Run にはボタンを表示しない", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            name: "medical",
+            runningRuns: [
+              run({
+                kind: "delegate",
+                key: "session-1",
+                challenge: "C-042",
+                repo: "org/service-a",
+                stale: false,
+              }),
+            ],
+          })}
+        />,
+      );
+
+      expect(
+        screen.queryByRole("button", { name: "再開コマンドを挿入" }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("stale な adhoc（kind !== delegate）Run にはボタンを表示しない", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            name: "medical",
+            runningRuns: [
+              run({
+                kind: "adhoc",
+                key: "adhoc-1",
+                title: "放置タスク",
+                stale: true,
+              }),
+            ],
+          })}
+        />,
+      );
+
+      expect(
+        screen.queryByRole("button", { name: "再開コマンドを挿入" }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("stale な delegate Run でも repo が欠落している場合はボタンを表示しない", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            name: "medical",
+            runningRuns: [
+              run({
+                kind: "delegate",
+                key: "session-1",
+                challenge: "C-042",
+                repo: undefined,
+                stale: true,
+              }),
+            ],
+          })}
+        />,
+      );
+
+      expect(
+        screen.queryByRole("button", { name: "再開コマンドを挿入" }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("ボタンをクリックすると agent 名と resume コマンド文字列で prefill が呼ばれる", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            name: "medical",
+            runningRuns: [
+              run({
+                kind: "delegate",
+                key: "session-abc123",
+                challenge: "C-042",
+                repo: "org/service-a",
+                stale: true,
+              }),
+            ],
+          })}
+        />,
+      );
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "再開コマンドを挿入" }),
+      );
+
+      expect(prefill).toHaveBeenCalledWith(
+        "medical",
+        "cd .flywheel/repos/org/service-a && claude -p --resume session-abc123",
+      );
+    });
+  });
 });
