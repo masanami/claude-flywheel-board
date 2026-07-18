@@ -38,7 +38,7 @@ describe("scanAgent", () => {
     expect(delegate?.endedAt).toBeUndefined();
   });
 
-  it("repo パスが存在しない場合は例外を投げず、ledger/journal/runs 3つ分の ParseError を返す（監視失敗の可視化）", async () => {
+  it("repo パスが存在しない場合は例外を投げず、ledger/journal 2つ分の ParseError を返す（監視失敗の可視化）。runs.jsonl は遅延生成のため repo 不存在時の欠落もエラー化しない", async () => {
     const result = await scanAgent({
       name: "missing-agent",
       path: `${FIXTURES_ROOT}does-not-exist`,
@@ -47,14 +47,22 @@ describe("scanAgent", () => {
     expect(result.challenges).toEqual([]);
     expect(result.journalEntries).toEqual([]);
     expect(result.matchedRuns).toEqual([]);
-    expect(result.parseErrors).toHaveLength(3);
+    expect(result.parseErrors).toHaveLength(2);
     expect(result.parseErrors[0]?.file).toContain("challenge-ledger.md");
     expect(result.parseErrors[1]?.file).toContain(
       `journal${path.sep}index.jsonl`,
     );
-    expect(result.parseErrors[2]?.file).toContain(
-      `.flywheel${path.sep}runs.jsonl`,
-    );
+  });
+
+  it("repo はあるが runs.jsonl だけ無い（未稼働エージェントの正常状態）場合、parseErrors は空で matchedRuns も空になる", async () => {
+    const result = await scanAgent({
+      name: "agent-e",
+      path: `${FIXTURES_ROOT}agent-e`,
+    });
+
+    expect(result.parseErrors).toEqual([]);
+    expect(result.challenges).toHaveLength(1);
+    expect(result.matchedRuns).toEqual([]);
   });
 });
 
@@ -134,7 +142,7 @@ describe("fullScan", () => {
     ]);
     const missing = snapshot.agents.find((a) => a.name === "missing-agent");
     expect(missing?.challenges).toEqual([]);
-    expect(missing?.parseErrors).toHaveLength(3);
+    expect(missing?.parseErrors).toHaveLength(2);
     expect(onAgentUpdate).toHaveBeenCalledTimes(2);
   });
 });

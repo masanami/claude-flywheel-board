@@ -1,7 +1,13 @@
 import { readFile } from "node:fs/promises";
+import type { LogEntry, ParseError } from "./types.ts";
 
 // journal/index.jsonl のスキーマ（正本: claude-flywheel 側 templates/journal/README.md）。
 // フィールド名・構造はスキーマ通りとし、独自フィールドを追加しない（NFR-05）。
+
+// 後方互換のための re-export（既存の import 元 `./journal.ts` からの参照を維持する）。
+// 単一定義は ./types.ts（セルフレビュー指摘対応: ParseError 三重定義の解消・
+// LogEntry の依存方向是正）。
+export type { ParseError, LogEntry } from "./types.ts";
 
 export type TouchedIssue = {
   id: string;
@@ -30,19 +36,6 @@ export type JournalEntry = {
   pr_urls: string[];
   pending_approvals: PendingApproval[];
   decisions: string[];
-};
-
-export type ParseError = {
-  file: string;
-  line?: number;
-  message: string;
-  raw: string;
-};
-
-export type LogEntry = {
-  ts: string;
-  source: "journal" | "ledger" | "runs";
-  text: string;
 };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

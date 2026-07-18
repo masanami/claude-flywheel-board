@@ -122,4 +122,56 @@ describe("isResumableDelegateRun", () => {
 
     expect(isResumableDelegateRun(run)).toBe(false);
   });
+
+  it("repo が安全な文字集合を外れる場合（シェルメタ文字混入）は false を返す（怪しいものは提示しない防御）", () => {
+    expect(
+      isResumableDelegateRun(delegateRun({ repo: "org/service-a; rm -rf /" })),
+    ).toBe(false);
+  });
+
+  it("repo にバッククォート・ドル記号・パイプ等のシェルインジェクション文字が含まれる場合は false を返す", () => {
+    expect(isResumableDelegateRun(delegateRun({ repo: "`whoami`" }))).toBe(
+      false,
+    );
+    expect(isResumableDelegateRun(delegateRun({ repo: "$(whoami)" }))).toBe(
+      false,
+    );
+    expect(isResumableDelegateRun(delegateRun({ repo: "a|b" }))).toBe(false);
+  });
+
+  it("sessionId（run.key）が安全な文字集合を外れる場合は false を返す", () => {
+    expect(
+      isResumableDelegateRun(delegateRun({ key: "session-1 && curl evil" })),
+    ).toBe(false);
+  });
+
+  it("repo に .. のパス区切りセグメントが含まれる場合（パストラバーサル）は false を返す（セルフレビュー指摘対応: 文字集合だけでは cd 先が委譲先クローン配下から抜けられてしまう懸念への対応）", () => {
+    expect(
+      isResumableDelegateRun(delegateRun({ repo: "../../../../etc/passwd" })),
+    ).toBe(false);
+    expect(
+      isResumableDelegateRun(delegateRun({ repo: "org/../../escape" })),
+    ).toBe(false);
+  });
+
+  it("sessionId（run.key）が先頭ハイフンの場合は false を返す（セルフレビュー指摘対応: claude -p --resume <key> に展開された際、<key> がオプションフラグとして誤解釈されるのを防ぐ）", () => {
+    expect(isResumableDelegateRun(delegateRun({ key: "-x" }))).toBe(false);
+    expect(
+      isResumableDelegateRun(delegateRun({ key: "--dangerous-flag" })),
+    ).toBe(false);
+  });
+
+  it("org/repo 形式のスラッシュ区切り repo は引き続き true を返す（正当な値の後方互換）", () => {
+    expect(isResumableDelegateRun(delegateRun({ repo: "org/service-a" }))).toBe(
+      true,
+    );
+  });
+
+  it("UUID 形式の session_id は引き続き true を返す（正当な値の後方互換）", () => {
+    expect(
+      isResumableDelegateRun(
+        delegateRun({ key: "550e8400-e29b-41d4-a716-446655440000" }),
+      ),
+    ).toBe(true);
+  });
 });

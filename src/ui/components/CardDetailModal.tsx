@@ -164,7 +164,7 @@ export function CardDetailModal({
           <div className="resumebox" data-testid="resumebox">
             <p className="resumebox-heading">
               ⚠
-              応答なし（stale）のセッションがあります。再開コマンドをタブに挿入できます
+              応答なし（要確認）のセッションがあります。再開コマンドをタブに挿入できます
             </p>
             <input
               type="text"

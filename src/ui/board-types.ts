@@ -9,6 +9,6 @@ export type {
   AgentCycleStatus,
   BoardSnapshot,
 } from "../server/cache.ts";
-export type { Challenge, ParseError } from "../server/parsers/ledger.ts";
-export type { LogEntry } from "../server/parsers/journal.ts";
+export type { Challenge } from "../server/parsers/ledger.ts";
+export type { ParseError, LogEntry } from "../server/parsers/types.ts";
 export type { Run } from "../server/parsers/runs.ts";

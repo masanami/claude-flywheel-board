@@ -103,6 +103,22 @@ describe("parseRuns", () => {
     expect(errors).toHaveLength(1);
     expect(errors[0]?.message).toMatch(/ts/);
   });
+
+  it("ファイルが存在しない（ENOENT）場合はエラーを投げず、events/errors ともに空を返す（runs.jsonl は遅延生成のため未稼働エージェントの正常状態）", async () => {
+    const { events, errors } = await parseRuns(fixture("does-not-exist.jsonl"));
+
+    expect(events).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
+  it("ENOENT 以外の読み込みエラー（例: ディレクトリをファイルとして開こうとした EISDIR）はそのまま例外を投げる（scanAgent 側で ParseError 化される契約を維持する）", async () => {
+    // fixtures/runs 自体はディレクトリなので、ファイルとして readFile すると EISDIR になる。
+    await expect(
+      parseRuns(
+        fileURLToPath(new URL("../../../tests/fixtures/runs", import.meta.url)),
+      ),
+    ).rejects.toThrow();
+  });
 });
 
 describe("matchRuns", () => {
@@ -155,7 +171,7 @@ describe("matchRuns", () => {
     });
   });
 
-  it("resume 規則: 別サイクルへ持ち越した同一 session_id の resume は、最新の未終了 start に end が対応付けられ、1回目の start は未終了のまま残る", async () => {
+  it("resume 規則: 別サイクルへ持ち越した同一 session_id の resume は、最新の未終了 start に end が対応付けられ、1回目の start は superseded: true のまま残る（合成 endedAt は作らない）", async () => {
     const { events } = await parseRuns(fixture("resume.jsonl"));
 
     const matched = matchRuns(events);
@@ -164,11 +180,13 @@ describe("matchRuns", () => {
     expect(delegates).toHaveLength(2);
     expect(delegates[0]?.startedAt).toBe("2026-07-16T10:05:00+09:00");
     expect(delegates[0]?.endedAt).toBeUndefined();
+    expect(delegates[0]?.superseded).toBe(true);
     expect(delegates[1]).toMatchObject({
       startedAt: "2026-07-17T09:01:00+09:00",
       endedAt: "2026-07-17T09:30:00+09:00",
       result: "実装完了・PR起票（照合済み）",
     });
+    expect(delegates[1]?.superseded).toBeFalsy();
   });
 
   it("未終了の adhoc_start は endedAt が undefined のまま残る", async () => {
@@ -192,6 +210,85 @@ describe("matchRuns", () => {
       result: "abandoned",
       endedAt: "2026-07-16T10:45:00+09:00",
     });
+  });
+
+  it("同一 session_id の新しい delegate_start が来ると、既存の未終了 start は superseded: true になる（合成 endedAt は作らない）", () => {
+    const matched = matchRuns([
+      {
+        ts: "2026-07-16T10:00:00+09:00",
+        event: "delegate_start",
+        challenge: "C-044",
+        repo: "net-config",
+        session_id: "s1",
+      },
+      {
+        ts: "2026-07-17T09:00:00+09:00",
+        event: "delegate_start",
+        challenge: "C-044",
+        repo: "net-config",
+        session_id: "s1",
+      },
+    ]);
+
+    expect(matched).toHaveLength(2);
+    expect(matched[0]?.superseded).toBe(true);
+    expect(matched[0]?.endedAt).toBeUndefined();
+    expect(matched[1]?.superseded).toBeFalsy();
+    expect(matched[1]?.endedAt).toBeUndefined();
+  });
+
+  it("cycle kind でも同一 key の新しい start により既存の未終了 start が superseded になる（一般化の確認）", () => {
+    const matched = matchRuns([
+      {
+        ts: "2026-07-16T10:00:00+09:00",
+        event: "cycle_start",
+        cycle: "same-cycle-name",
+      },
+      {
+        ts: "2026-07-16T11:00:00+09:00",
+        event: "cycle_start",
+        cycle: "same-cycle-name",
+      },
+    ]);
+
+    expect(matched).toHaveLength(2);
+    expect(matched[0]?.superseded).toBe(true);
+    expect(matched[0]?.endedAt).toBeUndefined();
+    expect(matched[1]?.superseded).toBeFalsy();
+  });
+
+  it("start→resume start→end の並びでは、end は最新（2件目）の start にのみ対応付けられ、1件目は superseded のまま endedAt を持たない", () => {
+    const matched = matchRuns([
+      {
+        ts: "2026-07-16T10:00:00+09:00",
+        event: "delegate_start",
+        challenge: "C-044",
+        repo: "net-config",
+        session_id: "s1",
+      },
+      {
+        ts: "2026-07-17T09:00:00+09:00",
+        event: "delegate_start",
+        challenge: "C-044",
+        repo: "net-config",
+        session_id: "s1",
+      },
+      {
+        ts: "2026-07-17T09:30:00+09:00",
+        event: "delegate_end",
+        challenge: "C-044",
+        repo: "net-config",
+        session_id: "s1",
+        result: "完了",
+      },
+    ]);
+
+    expect(matched).toHaveLength(2);
+    expect(matched[0]?.superseded).toBe(true);
+    expect(matched[0]?.endedAt).toBeUndefined();
+    expect(matched[1]?.superseded).toBeFalsy();
+    expect(matched[1]?.endedAt).toBe("2026-07-17T09:30:00+09:00");
+    expect(matched[1]?.result).toBe("完了");
   });
 
   it("対応する未終了 start が見つからない *_end イベントは無視する（新しい Run を作らない）", () => {
@@ -320,6 +417,26 @@ describe("DEFAULT_STALE_MINUTES / resolveStaleMinutes", () => {
     delete process.env[ENV_KEY];
     expect(resolveStaleMinutes()).toBe(DEFAULT_STALE_MINUTES);
   });
+
+  it("override が0（環境変数なし）なら既定値にフォールバックする（override にも環境変数と同じ正数チェックを適用）", () => {
+    delete process.env[ENV_KEY];
+    expect(resolveStaleMinutes(0)).toBe(DEFAULT_STALE_MINUTES);
+  });
+
+  it("override が負数（環境変数なし）なら既定値にフォールバックする", () => {
+    delete process.env[ENV_KEY];
+    expect(resolveStaleMinutes(-5)).toBe(DEFAULT_STALE_MINUTES);
+  });
+
+  it("override が NaN（環境変数なし）なら既定値にフォールバックする", () => {
+    delete process.env[ENV_KEY];
+    expect(resolveStaleMinutes(Number.NaN)).toBe(DEFAULT_STALE_MINUTES);
+  });
+
+  it("override が不正（0）で環境変数が有効な場合は環境変数の値にフォールバックする（override 無指定時と同じ優先順位で扱う）", () => {
+    process.env[ENV_KEY] = "45";
+    expect(resolveStaleMinutes(0)).toBe(45);
+  });
 });
 
 describe("deriveRunLogEntries", () => {
@@ -361,10 +478,10 @@ describe("deriveRunLogEntries", () => {
 });
 
 describe("logEntrySortKey", () => {
-  it("日付のみ（journal 由来）は同日 00:00 として扱う", () => {
+  it("日付のみ（journal 由来）はローカル日の深夜として扱う（TZ境界バグ修正: UTC深夜固定だと +09:00 環境で同日午前の runs イベントより後ろに逆転してしまうため）", () => {
     const entry: LogEntry = { ts: "2026-07-16", source: "journal", text: "x" };
 
-    expect(logEntrySortKey(entry)).toBe(Date.parse("2026-07-16T00:00:00.000Z"));
+    expect(logEntrySortKey(entry)).toBe(new Date(2026, 6, 16).getTime());
   });
 
   it("フル ISO（runs 由来）はそのまま Date.parse する", () => {
@@ -387,7 +504,9 @@ describe("mergeLogEntries", () => {
     ];
     const runsEntries: LogEntry[] = [
       {
-        ts: "2026-07-16T10:05:12+09:00",
+        // ホストローカル時刻の同日午前として動的に組み立てる（TZ非依存化。
+        // 詳細は下の isoAtLocalTime のコメント参照）。
+        ts: isoAtLocalTime(2026, 7, 16, 10, 5),
         source: "runs",
         text: "runs 側",
       },
@@ -396,6 +515,50 @@ describe("mergeLogEntries", () => {
     const merged = mergeLogEntries(journalEntries, runsEntries);
 
     expect(merged.map((e) => e.text)).toEqual(["journal 側", "runs 側"]);
+  });
+
+  // ホストのローカルタイムゾーンにおける "YYYY-MM-DDTHH:mm:00±HH:MM" 文字列を組み立てる。
+  // セルフレビュー指摘対応: 当初この回帰テストは runs 側の ts に "+09:00" を
+  // ハードコードしていたため、ホストのローカルTZ（journal 側の基準）と
+  // runs 側のオフセットが食い違い、JST 以外のホスト（例: TZ=UTC）ではテストが
+  // 失敗する問題があった（実際に TZ=UTC で再現・FAIL を確認済み）。
+  // ホストの実際のオフセットで動的に組み立てることで、どの実行環境でも
+  // 「同一暦日内では journal が runs より先」という不変条件を検証できるようにする。
+  function isoAtLocalTime(
+    year: number,
+    month: number,
+    day: number,
+    hour: number,
+    minute: number,
+  ): string {
+    const date = new Date(year, month - 1, day, hour, minute, 0, 0);
+    const offsetMinutes = -date.getTimezoneOffset();
+    const sign = offsetMinutes >= 0 ? "+" : "-";
+    const abs = Math.abs(offsetMinutes);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${year}-${pad(month)}-${pad(day)}T${pad(hour)}:${pad(minute)}:00${sign}${pad(
+      Math.floor(abs / 60),
+    )}:${pad(abs % 60)}`;
+  }
+
+  it("TZ境界の回帰テスト: 同日午前のホストローカル時刻の runs イベントより、journal(日付のみ)の当日マーカーが必ず先に来る（UTC深夜固定だと 2026-07-18T08:00+09:00 は 2026-07-17T23:00Z となり、journal の UTC 深夜より前に逆転してしまっていたバグの修正確認。runs 側 ts はホストの実オフセットで動的に組み立て、どのホストTZでも再現できるようにする）", () => {
+    const journalEntries: LogEntry[] = [
+      { ts: "2026-07-18", source: "journal", text: "journal マーカー" },
+    ];
+    const runsEntries: LogEntry[] = [
+      {
+        ts: isoAtLocalTime(2026, 7, 18, 8, 0),
+        source: "runs",
+        text: "runs イベント（同日午前）",
+      },
+    ];
+
+    const merged = mergeLogEntries(journalEntries, runsEntries);
+
+    expect(merged.map((e) => e.text)).toEqual([
+      "journal マーカー",
+      "runs イベント（同日午前）",
+    ]);
   });
 
   it("時系列が前後する複数リストを正しい順序にマージする", () => {

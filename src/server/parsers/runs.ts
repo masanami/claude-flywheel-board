@@ -1,18 +1,21 @@
 import { readFile } from "node:fs/promises";
-import type { LogEntry } from "./journal.ts";
+import type { LogEntry, ParseError } from "./types.ts";
 
 // .flywheel/runs.jsonl のスキーマ（正本: claude-flywheel 側
 // templates/runtime/README.md「実行イベントログ（runs.jsonl）」PR #45 確定版）。
 // board は消費者に徹し、フィールド名・構造は正本仕様通りとする（NFR-05）。
 // 実装パターンは journal.ts の parseJournal と揃える（行ごとの JSON.parse →
 // バリデーション → ParseError 蓄積。壊れた行だけを積み、正常な行は活かす）。
+//
+// runs.jsonl は journal/index.jsonl と異なり**遅延生成**される（claude-flywheel
+// 側で初回 append 時に mkdir -p .flywheel）かつ .gitignore 対象。journal は
+// テンプレートで scaffold され常に存在する前提だが、runs.jsonl は
+// 新規/未稼働エージェントでは存在しないのが正常状態（parseRuns の ENOENT
+// ハンドリング参照）。
 
-export type ParseError = {
-  file: string;
-  line?: number;
-  message: string;
-  raw: string;
-};
+// 後方互換のための re-export（既存の import 元 `./runs.ts` からの参照を維持する）。
+// 単一定義は ./types.ts（セルフレビュー指摘対応: ParseError 三重定義の解消）。
+export type { ParseError } from "./types.ts";
 
 export type CycleStartEvent = {
   ts: string;
@@ -187,6 +190,12 @@ function validateRunEvent(value: unknown): string | undefined {
   }
 }
 
+function isEnoent(error: unknown): boolean {
+  return (
+    error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT"
+  );
+}
+
 /**
  * .flywheel/runs.jsonl（append-only JSONL）を行ごとにパースする。
  * マッチング（start/end 対応付け）は行わない（matchRuns の責務）。
@@ -194,7 +203,21 @@ function validateRunEvent(value: unknown): string | undefined {
 export async function parseRuns(
   filePath: string,
 ): Promise<{ events: RunEvent[]; errors: ParseError[] }> {
-  const content = await readFile(filePath, "utf-8");
+  let content: string;
+  try {
+    content = await readFile(filePath, "utf-8");
+  } catch (error) {
+    // runs.jsonl は遅延生成（claude-flywheel 側の初回 append 時に mkdir -p .flywheel）
+    // かつ .gitignore 対象（正本仕様）。journal/index.jsonl のようにテンプレートで
+    // scaffold されるファイルとは異なり、新規/未稼働エージェントでは存在しないのが
+    // 正常状態のため、ENOENT はエラーカード化せず「イベント 0 件」として扱う。
+    // 権限エラー等 ENOENT 以外は従来どおり呼び出し元（scanAgent）で ParseError 化
+    // されるよう、ここでは再送出する。
+    if (isEnoent(error)) {
+      return { events: [], errors: [] };
+    }
+    throw error;
+  }
   const lines = content.split("\n");
 
   const events: RunEvent[] = [];
@@ -243,6 +266,17 @@ export type MatchedRun = {
   startedAt: string; // ISO 8601（start イベントの ts）
   endedAt?: string; // 対応する end があれば ISO 8601
   result?: string; // end の result
+  /**
+   * 同一 kind+key で新しい start が来た時点で、この Run（旧 start）が
+   * supersede されたことを示す。合成の endedAt は作らない（実在しない終了
+   * イベントを作らないため）。deriveRuns は superseded な Run にも通常どおり
+   * stale を計算するが、実行中導出の消費側（deriveRunningRuns /
+   * deriveCycleStatus。ひいては resumable 判定 isResumableDelegateRun）は
+   * superseded な Run を除外してから stale を参照するため、実行中扱いには
+   * ならない。ログ導出（deriveRunLogEntries）は実在した start イベントとして
+   * 表示を維持する（除外対象外）。
+   */
+  superseded?: boolean;
 };
 
 // MatchedRun は agent フィールドを持たない（意図的な逸脱）: 既存の Challenge 型が
@@ -275,6 +309,20 @@ function closeLatestOpenRun(
 }
 
 /**
+ * 同一キーのバケツ内にある未終了（endedAt === undefined）かつ未 supersede
+ * の Run をすべて superseded: true にする。新しい start が来た時点で
+ * 呼び出す（1 つの key につき未終了 Run は常に高々 1 つになる導出規則）。
+ * 合成の endedAt は作らない（実在しない終了イベントを作らないため）。
+ */
+function supersedeOpenRuns(bucket: MatchedRun[]): void {
+  for (const run of bucket) {
+    if (run.endedAt === undefined && !run.superseded) {
+      run.superseded = true;
+    }
+  }
+}
+
+/**
  * start/end のマッチングのみを行う（時刻非依存の純粋関数。stale 判定は
  * deriveRuns の責務）。対応付けキーはイベント種別ごと（cycle→cycle /
  * delegate→session_id / adhoc→id）。resume 規則（同一キーの最新の未終了 start
@@ -297,12 +345,14 @@ export function matchRuns(events: RunEvent[]): MatchedRun[] {
   for (const event of events) {
     switch (event.event) {
       case "cycle_start": {
+        const bucket = bucketFor("cycle", event.cycle);
+        supersedeOpenRuns(bucket);
         const run: MatchedRun = {
           kind: "cycle",
           key: event.cycle,
           startedAt: event.ts,
         };
-        bucketFor("cycle", event.cycle).push(run);
+        bucket.push(run);
         order.push(run);
         break;
       }
@@ -315,6 +365,8 @@ export function matchRuns(events: RunEvent[]): MatchedRun[] {
         break;
       }
       case "delegate_start": {
+        const bucket = bucketFor("delegate", event.session_id);
+        supersedeOpenRuns(bucket);
         const run: MatchedRun = {
           kind: "delegate",
           key: event.session_id,
@@ -322,7 +374,7 @@ export function matchRuns(events: RunEvent[]): MatchedRun[] {
           repo: event.repo,
           startedAt: event.ts,
         };
-        bucketFor("delegate", event.session_id).push(run);
+        bucket.push(run);
         order.push(run);
         break;
       }
@@ -335,6 +387,8 @@ export function matchRuns(events: RunEvent[]): MatchedRun[] {
         break;
       }
       case "adhoc_start": {
+        const bucket = bucketFor("adhoc", event.id);
+        supersedeOpenRuns(bucket);
         const run: MatchedRun = {
           kind: "adhoc",
           key: event.id,
@@ -343,7 +397,7 @@ export function matchRuns(events: RunEvent[]): MatchedRun[] {
           title: event.title,
           startedAt: event.ts,
         };
-        bucketFor("adhoc", event.id).push(run);
+        bucket.push(run);
         order.push(run);
         break;
       }
@@ -385,20 +439,34 @@ export const DEFAULT_STALE_MINUTES = 30;
 const STALE_MINUTES_ENV_KEY = "FLYWHEEL_BOARD_STALE_MINUTES";
 
 /**
+ * 正の有限数かどうか（しきい値として使える値かどうか）を判定する。
+ * 0 以下（負値・0含む）・NaN・Infinity は「不正値」として扱う
+ * （しきい値0以下だと実行中 Run が即 stale 化してしまうため。セルフレビュー指摘対応）。
+ * 環境変数・引数 override の両方の検証に使う共通ロジック（CodeRabbit 指摘対応:
+ * 従来は環境変数のみ検証していたが、override も同じ基準で検証する）。
+ */
+function isPositiveFiniteMinutes(value: number): boolean {
+  return Number.isFinite(value) && value > 0;
+}
+
+/**
  * しきい値（分）の解決順: 引数優先 → 環境変数 FLYWHEEL_BOARD_STALE_MINUTES
  * （数値としてパース。不正値は無視してデフォルトへ fallback） → デフォルト30分
  * （manifest.ts の resolveFleetManifestPath と同じパターン）。
- * 0 以下（空文字・負値含む）も「不正値」として扱いデフォルトへ fallback する
- * （しきい値0以下だと実行中 Run が即 stale 化してしまうため。セルフレビュー指摘対応）。
+ * 引数 override・環境変数のどちらも、正の有限数でなければ「不正値」として無視し
+ * 次の優先順位（override 不正 → 環境変数 → デフォルト）へフォールバックする。
  */
 export function resolveStaleMinutes(overrideMinutes?: number): number {
-  if (overrideMinutes !== undefined) {
+  if (
+    overrideMinutes !== undefined &&
+    isPositiveFiniteMinutes(overrideMinutes)
+  ) {
     return overrideMinutes;
   }
   const fromEnv = process.env[STALE_MINUTES_ENV_KEY];
   if (fromEnv !== undefined) {
     const parsed = Number(fromEnv);
-    if (Number.isFinite(parsed) && parsed > 0) {
+    if (isPositiveFiniteMinutes(parsed)) {
       return parsed;
     }
   }
@@ -440,16 +508,29 @@ export function deriveRunLogEntries(matched: MatchedRun[]): LogEntry[] {
   return entries;
 }
 
-const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const DATE_ONLY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 /**
  * ログの時系列統合のためのソートキー正規化。journal 由来の ts は
- * "YYYY-MM-DD"（日付のみ）、runs 由来の ts はフル ISO。日付のみはその日の
- * 00:00 として扱うことで、同日内では runs イベントより先に来る一貫したルールにする。
+ * "YYYY-MM-DD"（日付のみ）、runs 由来の ts はフル ISO（オフセット付き）。
+ *
+ * 日付のみの ts は**ローカル日の深夜**として解釈する（`new Date(y, m-1, d)` は
+ * ローカルタイムゾーンで解釈されるコンストラクタ形式）。以前は
+ * `Date.parse(`${ts}T00:00:00.000Z`)` で UTC 深夜固定にしていたが、+09:00 環境
+ * では同日午前（例: 08:00+09:00 = 前日 23:00Z）の runs イベントが
+ * journal の当日マーカー（00:00Z）より前に来てしまい、同日内でも
+ * 逆転する不具合があった（TZ境界バグ）。board はローカルマシン上で動く前提
+ * （NFR-01・アーキ上の位置づけ）のため、journal/runs 双方をプロセスの
+ * ローカルタイムゾーン基準で比較することで、同一暦日内では常に journal の
+ * マーカーが runs イベントより先に来る一貫したルールにする。
  */
 export function logEntrySortKey(entry: LogEntry): number {
-  if (DATE_ONLY_PATTERN.test(entry.ts)) {
-    return Date.parse(`${entry.ts}T00:00:00.000Z`);
+  const match = entry.ts.match(DATE_ONLY_PATTERN);
+  if (match) {
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    return new Date(year, month - 1, day).getTime();
   }
   return Date.parse(entry.ts);
 }

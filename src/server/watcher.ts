@@ -4,10 +4,11 @@ import type { AgentBoard, BoardCache } from "./cache.ts";
 import type { FleetEntry } from "./manifest.ts";
 import type { JournalEntry } from "./parsers/journal.ts";
 import { deriveSummary, parseJournal } from "./parsers/journal.ts";
-import type { Challenge, ParseError } from "./parsers/ledger.ts";
+import type { Challenge } from "./parsers/ledger.ts";
 import { parseLedgerFile } from "./parsers/ledger.ts";
 import type { MatchedRun } from "./parsers/runs.ts";
 import { matchRuns, parseRuns } from "./parsers/runs.ts";
+import type { ParseError } from "./parsers/types.ts";
 
 // 監視対象ファイル名（P3 で runs.jsonl を追加できるよう、ここに集約する）。
 export const LEDGER_FILE_NAME = "challenge-ledger.md";
@@ -76,6 +77,11 @@ export async function scanAgent(entry: FleetEntry): Promise<ScanResult> {
     });
   }
 
+  // runs.jsonl は ledger/journal と異なり、ファイル不在（ENOENT）を parseRuns
+  // 内部で正常状態として吸収する（遅延生成・新規/未稼働エージェントの通常状態のため）。
+  // そのため ledger/journal と違い、ここで catch されるのは ENOENT 以外の
+  // 読み込み失敗（権限不足等）のみになる（parser 層と scanAgent 層で
+  // 責務が非対称になっている点は意図した設計判断。詳細は parseRuns 側コメント）。
   const runsPath = runsPathFor(entry);
   try {
     const result = await parseRuns(runsPath);

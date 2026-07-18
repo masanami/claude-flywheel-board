@@ -330,6 +330,25 @@ describe("CardDetailModal", () => {
       ).toBeInTheDocument();
     });
 
+    it("resumebox の見出し文言は「応答なし（要確認）」に統一されている（feature doc の表記統一。stale は data 属性/内部名にのみ残す）", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+
+      render(
+        <CardDetailModal
+          challenge={challenge({ id: "C-001" })}
+          agentName="medical"
+          onClose={vi.fn()}
+          runningRuns={[delegateRun({ challenge: "C-001" })]}
+        />,
+      );
+
+      expect(
+        screen.getByText(
+          "⚠ 応答なし（要確認）のセッションがあります。再開コマンドをタブに挿入できます",
+        ),
+      ).toBeInTheDocument();
+    });
+
     it("「タブにプリフィル」ボタンをクリックすると agent 名と resume コマンド文字列で prefill が呼ばれる", () => {
       vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
 

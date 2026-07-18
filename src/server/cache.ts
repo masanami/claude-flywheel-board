@@ -1,6 +1,6 @@
-import type { JournalEntry, LogEntry } from "./parsers/journal.ts";
+import type { JournalEntry } from "./parsers/journal.ts";
 import { deriveLogEntries } from "./parsers/journal.ts";
-import type { Challenge, ParseError } from "./parsers/ledger.ts";
+import type { Challenge } from "./parsers/ledger.ts";
 import type { MatchedRun, Run } from "./parsers/runs.ts";
 import {
   deriveRunLogEntries,
@@ -8,6 +8,10 @@ import {
   mergeLogEntries,
   resolveStaleMinutes,
 } from "./parsers/runs.ts";
+// ParseError/LogEntry の単一定義は parsers/types.ts（セルフレビュー指摘対応:
+// 三重定義の解消）。ledger.ts/journal.ts 経由の re-export ではなく、正本の
+// types.ts を直接参照する（watcher.ts・ui/board-types.ts と揃える）。
+import type { LogEntry, ParseError } from "./parsers/types.ts";
 
 // 読み取り専用の索引（NFR-04）。fs には一切依存せず、破棄しても正本
 // （challenge-ledger.md / journal / runs.jsonl）から再構築できることを唯一の
@@ -109,7 +113,8 @@ type StoredAgentBoard = Omit<AgentBoard, "cycleStatus" | "runningRuns">;
 
 function deriveCycleStatus(runs: Run[]): AgentCycleStatus {
   const openCycles = runs.filter(
-    (run) => run.kind === "cycle" && run.endedAt === undefined,
+    (run) =>
+      run.kind === "cycle" && run.endedAt === undefined && !run.superseded,
   );
   if (openCycles.length === 0) {
     return "idle";
@@ -119,14 +124,18 @@ function deriveCycleStatus(runs: Run[]): AgentCycleStatus {
 
 function deriveRunningRuns(runs: Run[]): Run[] {
   return runs.filter(
-    (run) => run.kind !== "cycle" && run.endedAt === undefined,
+    (run) =>
+      run.kind !== "cycle" && run.endedAt === undefined && !run.superseded,
   );
 }
 
 export function createMemoryBoardCache(
   options: MemoryBoardCacheOptions = {},
 ): BoardCache {
-  const staleMinutes = options.staleMinutes ?? resolveStaleMinutes();
+  // resolveStaleMinutes に検証を一任する（0・負数・NaN は不正値としてデフォルトへ
+  // フォールバック。従来は `options.staleMinutes ?? resolveStaleMinutes()` で
+  // override の正数チェックが漏れていた。CodeRabbit 指摘対応）。
+  const staleMinutes = resolveStaleMinutes(options.staleMinutes);
   const agents = new Map<string, StoredAgentBoard>();
   const journalByAgent = new Map<string, JournalEntry[]>();
   const runsByAgent = new Map<string, MatchedRun[]>();
