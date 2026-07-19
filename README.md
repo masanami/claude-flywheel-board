@@ -35,7 +35,7 @@ flowchart LR
 
 | 依存 | 必須 | 用途 |
 | --- | --- | --- |
-| Node.js **22.18 以上** | ✅ | サーバ実行（TypeScript を直接実行するため type stripping が必要） |
+| Node.js **22.18 以上**（v24 で開発・検証済み） | ✅ | サーバ実行（TypeScript を直接実行するため type stripping が必要） |
 | **tmux** | ✅（ターミナル機能に） | 埋め込みターミナルのバックエンド。`brew install tmux`。**未インストールだとボード表示は動くが、ターミナルタブの接続が失敗する** |
 | npm | ✅ | 依存インストール |
 
