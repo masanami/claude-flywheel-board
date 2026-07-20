@@ -1,4 +1,5 @@
-import { useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { Challenge, Run } from "../board-types.ts";
 import { CardDetailModal } from "./CardDetailModal.tsx";
 
@@ -34,6 +35,32 @@ export const CHALLENGE_DRAG_MIME = "application/x-flywheel-challenge-id";
 // 突き合わせて「別カラムへの誤ドロップ」を弾く判定に使う。
 export const AGENT_NAME_DRAG_MIME = "application/x-flywheel-agent-name";
 
+// ツールチップとカードの間隔（px）。
+const TOOLTIP_GAP = 6;
+// 上出しの可否を判定するための想定高さ（px）。ツールチップは max-width 240px の
+// 短文なので実測せずこの概算で足りる（外れても被るのは数px）。
+const TOOLTIP_ESTIMATED_HEIGHT = 72;
+
+// ツールチップの viewport 基準の配置。position: fixed で使う。
+// 上出し（above）は bottom 基準にすることで、描画前に高さを測らずに済む。
+type TooltipPosition =
+  | { left: number; top: number; bottom?: undefined }
+  | { left: number; bottom: number; top?: undefined };
+
+function computeTooltipPosition(trigger: HTMLElement): TooltipPosition {
+  const rect = trigger.getBoundingClientRect();
+  // カード内padding（0.65rem）に合わせて左端を揃える。
+  const left = rect.left + 10;
+  // 上出しが収まる下限はカラム本体の上端。ここを越えるとカラムヘッダー
+  //（"<エージェント名> idle ＋差し込み"）に被るので下出しへ回す（#41）。
+  const columnBody = trigger.closest(".agent-column-body");
+  const boundaryTop = columnBody ? columnBody.getBoundingClientRect().top : 0;
+  if (rect.top - TOOLTIP_GAP - TOOLTIP_ESTIMATED_HEIGHT >= boundaryTop) {
+    return { left, bottom: window.innerHeight - rect.top + TOOLTIP_GAP };
+  }
+  return { left, top: rect.bottom + TOOLTIP_GAP };
+}
+
 // 観測専用カード（NFR-01）: 状態を変更する実ボタン・書き込み系の操作は一切持たない。
 // ホバー/フォーカスで summary をツールチップ表示し、クリック/Enter で読み取り専用の
 // 詳細モーダル（CardDetailModal）を開く（#8）。
@@ -59,8 +86,21 @@ export function TaskCard({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const tooltipId = useId();
 
+  // ツールチップは overflow をもつ .agent-column-body / .agent-column の外へ
+  // portal し、position: fixed で配置する（#41）。カラム内に absolute のまま
+  // 置くと z-index に関わらず overflow ボックスに切り取られるため。
+  const [tooltipPosition, setTooltipPosition] =
+    useState<TooltipPosition | null>(null);
+
+  const updateTooltipPosition = useCallback(() => {
+    if (triggerRef.current) {
+      setTooltipPosition(computeTooltipPosition(triggerRef.current));
+    }
+  }, []);
+
   const showTooltip = () => {
     if (challenge.summary) {
+      updateTooltipPosition();
       setIsTooltipVisible(true);
     }
   };
@@ -76,6 +116,21 @@ export function TaskCard({
   };
 
   const tooltipVisible = isTooltipVisible && Boolean(challenge.summary);
+
+  // fixed 配置は viewport 基準なので、カラムのスクロールやウィンドウの
+  // リサイズで追従させないとカードから離れてしまう。表示中のみ購読する。
+  // scroll は capture で拾う（.agent-column-body のスクロールは bubble しない）。
+  useEffect(() => {
+    if (!tooltipVisible) {
+      return;
+    }
+    window.addEventListener("scroll", updateTooltipPosition, true);
+    window.addEventListener("resize", updateTooltipPosition);
+    return () => {
+      window.removeEventListener("scroll", updateTooltipPosition, true);
+      window.removeEventListener("resize", updateTooltipPosition);
+    };
+  }, [tooltipVisible, updateTooltipPosition]);
 
   return (
     <>
@@ -159,12 +214,20 @@ export function TaskCard({
         {isFocused && (
           <div className="task-card-reorder-hint">Alt+↑/↓ で並べ替え</div>
         )}
-        {tooltipVisible && (
-          <div id={tooltipId} className="task-card-tooltip" role="tooltip">
-            {challenge.summary}
-          </div>
-        )}
       </button>
+      {tooltipVisible &&
+        tooltipPosition &&
+        createPortal(
+          <div
+            id={tooltipId}
+            className="task-card-tooltip"
+            role="tooltip"
+            style={tooltipPosition}
+          >
+            {challenge.summary}
+          </div>,
+          document.body,
+        )}
       {isModalOpen && (
         <CardDetailModal
           challenge={challenge}
