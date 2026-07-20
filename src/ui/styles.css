@@ -159,7 +159,10 @@ body {
 }
 
 .agent-column {
-  flex: 0 0 280px;
+  /* エージェントが少ないときは横幅の余りを分け合って広がり、多いときは
+   * 280px まで詰まってから .board-columns が横スクロールする（#41）。 */
+  flex: 1 1 280px;
+  max-width: 420px;
   background: var(--board-column-bg);
   border: 1px solid var(--board-border);
   border-radius: 8px;
@@ -381,10 +384,9 @@ body {
 }
 
 .task-card-tooltip {
-  position: absolute;
-  left: 0.65rem;
-  bottom: 100%;
-  margin-bottom: 0.35rem;
+  /* document.body へ portal されるため viewport 基準。top/left/bottom は
+   * TaskCard 側が実測して inline style で与える（#41）。 */
+  position: fixed;
   max-width: 240px;
   background: var(--board-tooltip-bg);
   color: var(--board-tooltip-fg);
