@@ -57,6 +57,80 @@ describe("createTmuxClient", () => {
     ]);
   });
 
+  it("newSession は escape-time を 0 に設定する set-option -g を実行する（Issue #45: 全画面UIで単独 Esc が既定 500ms 待たされる問題への対処。escape-time はサーバスコープのオプションのため -g を使う）", async () => {
+    const runCommand = vi.fn().mockResolvedValue(undefined);
+    const tmux = createTmuxClient({ runCommand });
+
+    await tmux.newSession("flywheel-medical", "/repos/medical-agent");
+
+    expect(runCommand).toHaveBeenCalledWith("tmux", [
+      "set-option",
+      "-g",
+      "escape-time",
+      "0",
+    ]);
+  });
+
+  it("newSession は new-session の後に escape-time の set-option を実行する（set-option -g はサーバの起動を前提とするため、先に new-session でサーバ・セッションを立ち上げてから呼ぶ）", async () => {
+    const calls: string[][] = [];
+    const runCommand = vi.fn().mockImplementation((_command, args) => {
+      calls.push(args);
+      return Promise.resolve(undefined);
+    });
+    const tmux = createTmuxClient({ runCommand });
+
+    await tmux.newSession("flywheel-medical", "/repos/medical-agent");
+
+    const newSessionIndex = calls.findIndex(
+      (args) => args[0] === "new-session",
+    );
+    const setOptionIndex = calls.findIndex((args) => args[0] === "set-option");
+    expect(newSessionIndex).toBeGreaterThanOrEqual(0);
+    expect(setOptionIndex).toBeGreaterThan(newSessionIndex);
+  });
+
+  it("newSession は new-session が失敗した場合、set-option を実行せずにエラーを伝播する", async () => {
+    const runCommand = vi.fn().mockImplementation((_command, args) => {
+      if (args[0] === "new-session") {
+        return Promise.reject(new Error("tmux binary not found"));
+      }
+      return Promise.resolve(undefined);
+    });
+    const tmux = createTmuxClient({ runCommand });
+
+    await expect(
+      tmux.newSession("flywheel-medical", "/repos/medical-agent"),
+    ).rejects.toThrow("tmux binary not found");
+
+    expect(runCommand).not.toHaveBeenCalledWith(
+      "tmux",
+      expect.arrayContaining(["set-option"]),
+    );
+  });
+
+  it("newSession は set-option（escape-time 設定）が失敗しても、セッション自体は作成済みとして成功扱いにする（ベストエフォート。design-reviewer 指摘: set-option 失敗を ensureTmuxSession の重複セッション再確認ロジックに黙って握り潰させない）", async () => {
+    const runCommand = vi.fn().mockImplementation((_command, args) => {
+      if (args[0] === "set-option") {
+        return Promise.reject(new Error("no server running"));
+      }
+      return Promise.resolve(undefined);
+    });
+    const tmux = createTmuxClient({ runCommand });
+
+    await expect(
+      tmux.newSession("flywheel-medical", "/repos/medical-agent"),
+    ).resolves.toBeUndefined();
+
+    expect(runCommand).toHaveBeenCalledWith("tmux", [
+      "new-session",
+      "-d",
+      "-s",
+      "flywheel-medical",
+      "-c",
+      "/repos/medical-agent",
+    ]);
+  });
+
   it("sendKeysLiteral は send-keys -t <name> -l -- <command> を実行する（literal・改行なし・-- ガード付き）", async () => {
     const runCommand = vi.fn().mockResolvedValue(undefined);
     const tmux = createTmuxClient({ runCommand });
