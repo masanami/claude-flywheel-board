@@ -317,7 +317,7 @@ describe("Board", () => {
     expect(screen.getByText("完了確認待ちタスク")).toBeInTheDocument();
   });
 
-  it("承認待ちフィルタ選択中に完了トグルを切り替えても承認待ちの表示は変わらない", async () => {
+  it("承認待ちフィルタ選択中は「完了を表示」トグルが無効化され、完了は表示されないまま", async () => {
     const { Board } = await import("./Board.tsx");
     render(<Board />);
 
@@ -352,12 +352,12 @@ describe("Board", () => {
     expect(screen.getByText("承認待ちタスク")).toBeInTheDocument();
     expect(screen.queryByText("完了タスク")).not.toBeInTheDocument();
 
-    act(() => {
-      screen.getByRole("button", { name: "完了を表示" }).click();
-    });
-
-    // needsHuman フィルタ選択中は完了トグルに関わらず 完了 は表示されない
-    // （needsHuman な課題のみ表示という既存フィルタの結果は変わらない）。
+    // needsHuman 選択中は 完了(needsHuman=false) が元々除外されトグルは no-op に
+    // なるため、UX 上の誤解を避けてトグル自体を無効化する。ここではその無効化を
+    // 直接検証する（disabled 要素のクリックは no-op のため、クリック結果の
+    // アサーションでは相互作用を検証できない）。
+    const toggle = screen.getByRole("button", { name: "完了を表示" });
+    expect(toggle).toBeDisabled();
     expect(screen.getByText("承認待ちタスク")).toBeInTheDocument();
     expect(screen.queryByText("完了タスク")).not.toBeInTheDocument();
   });
