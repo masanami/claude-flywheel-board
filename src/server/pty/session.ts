@@ -1,10 +1,28 @@
 import type { FleetEntry } from "../manifest.ts";
 
 /**
- * tmux セッション名の規約: `flywheel-<agent-name>`（architecture.md §3.5）。
+ * ターミナル接続の種別。"agent" はエージェント（Claude Code セッション）、
+ * "shell" は手動コマンド操作用の独立セッション（#57）。
  */
-export function terminalSessionName(agentName: string): string {
-  return `flywheel-${agentName}`;
+export type TerminalSessionKind = "agent" | "shell";
+
+/**
+ * tmux セッション名の規約（architecture.md §3.5）:
+ * - kind: "agent"（既定・後方互換）: `flywheel-<agent-name>`
+ * - kind: "shell"（#57）: `flywheel-<agent-name>-shell`（手動シェル用の独立セッション）
+ *
+ * 命名の前提: 接尾辞 `-shell` は本用途で予約する。agent 名 `foo-shell` を
+ * 許すと agent `foo` の shell セッション名（`flywheel-foo-shell`）と衝突しうるため、
+ * `-shell` で終わる agent 名は `loadFleetManifest`（manifest.ts）が読み込み時に
+ * 拒否する。これにより衝突は構造的に発生しない。
+ */
+export function terminalSessionName(
+  agentName: string,
+  kind: TerminalSessionKind = "agent",
+): string {
+  return kind === "shell"
+    ? `flywheel-${agentName}-shell`
+    : `flywheel-${agentName}`;
 }
 
 /**

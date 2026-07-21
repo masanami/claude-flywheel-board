@@ -7,6 +7,7 @@ import { parseClientMessage } from "./messages.ts";
 import { createNodePtySpawner } from "./pty-process.ts";
 import type { PtyProcess, SpawnTerminalPty } from "./pty-process.ts";
 import { resolveAgentEntry, terminalSessionName } from "./session.ts";
+import type { TerminalSessionKind } from "./session.ts";
 import { createTmuxClient, ensureTmuxSession } from "./tmux.ts";
 import type { TmuxClient } from "./tmux.ts";
 
@@ -88,17 +89,39 @@ export function createTerminalWebSocketServer(
       return;
     }
 
+    // kind クエリ（#57・縦分割）: 欠落時は既存クライアント（kind 非対応）との
+    // 後方互換のため "agent" を既定にする。"agent"/"shell" 以外の値は、未知の
+    // 種別でセッション・prefill 許可を誤って解決しないよう安全側（拒否）に倒す。
+    const kindParam = parsedUrl.searchParams.get("kind");
+    let kind: TerminalSessionKind;
+    if (kindParam === null || kindParam === "agent") {
+      kind = "agent";
+    } else if (kindParam === "shell") {
+      kind = "shell";
+    } else {
+      socket.destroy();
+      return;
+    }
+
     wss.handleUpgrade(request, socket, head, (ws) => {
-      wss.emit("connection", ws, request, entry);
+      wss.emit("connection", ws, request, entry, kind);
     });
   }
 
   wss.on(
     "connection",
-    (ws: WebSocket, _request: IncomingMessage, entry: FleetEntry) => {
+    (
+      ws: WebSocket,
+      _request: IncomingMessage,
+      entry: FleetEntry,
+      // wss.emit を直接叩く既存テストヘルパー（connectFakeWebSocket）との後方互換のため、
+      // kind 省略時は "agent" 扱いにする。
+      kind: TerminalSessionKind = "agent",
+    ) => {
       void startTerminalSession(
         ws,
         entry,
+        kind,
         tmux,
         spawnPty,
         setIntervalFn,
@@ -137,12 +160,18 @@ const RESUME_CHECK_INTERVAL_MS = 200;
 async function startTerminalSession(
   ws: WebSocket,
   entry: FleetEntry,
+  kind: TerminalSessionKind,
   tmux: TmuxClient,
   spawnPty: SpawnTerminalPty,
   setIntervalFn: (handler: () => void, timeoutMs: number) => NodeJS.Timeout,
   clearIntervalFn: (handle: NodeJS.Timeout) => void,
 ): Promise<void> {
-  const sessionName = terminalSessionName(entry.name);
+  const sessionName = terminalSessionName(entry.name, kind);
+  // 【最重要・安全要件】(#57) shell 接続（手動コマンド操作用の独立セッション）では
+  // prefill を構造的に無視する。「別セッションなら prefill が手動シェルに落ちない」
+  // という設計の採用理由をサーバ側で保証するための唯一の分岐点であり、UI 側の
+  // 配線が万一誤って shell 接続へ prefill を送っても、ここで確実に弾く。
+  const allowPrefill = kind === "agent";
 
   // ensureTmuxSession（tmux セッション確保）・pty spawn が完了する前に届いた
   // input/resize/prefill を、ここで一旦キューに溜める。接続直後から購読を
@@ -179,6 +208,11 @@ async function startTerminalSession(
         }
         break;
       case "prefill":
+        if (!allowPrefill) {
+          // shell 接続（kind=shell）は prefill メッセージを構造的に無視する
+          // （安全要件。上記 allowPrefill のコメント参照）。
+          break;
+        }
         // tmux send-keys -l（literal・改行なし）で流し込む。pty.write は使わない
         // （Enter を送るコードパスをここに一切作らない）。失敗しても board 自体を
         // 落とさないよう、ここで確実に catch する（unhandledRejection 防止）。

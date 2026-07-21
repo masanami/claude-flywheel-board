@@ -16,18 +16,42 @@ import type { CreateXtermInstance, XtermInstance } from "./xterm-adapter.ts";
 // タブ初回アクティブ時の pty WS 接続と xterm.js の描画に徹し、
 // コマンドの自動実行（Enter 送信）はしない（prefill は未実行の文字列を
 // 流し込むだけ）。
+//
+// #57（ターミナルペインの縦分割）: 各エージェントタブは「左=エージェント
+// （kind=agent）／右=手動シェル（kind=shell）」の常時2分割で表示する。
+// 別々の WS 接続（＝別々の tmux セッション）を張るため、prefill は
+// エージェント側の接続にのみ配線し、shell 側の接続オブジェクトへは
+// 本コンポーネントから一切 prefill を呼び出さない（サーバ側でも構造的に
+// 弾かれる。src/server/pty/bridge.ts の allowPrefill 参照）。
 
 const MIN_HEIGHT_PX = 120;
 const MAX_HEIGHT_PX = 800;
 const DEFAULT_HEIGHT_PX = 320;
 
-function buildTerminalWebSocketUrl(agent: string): string {
+// エージェント（左）ペインの幅（px）。シェル（右）ペインは残り幅を flex で埋める。
+// 高さの調整ハンドル（上端バー）と同じ「固定 px を人間が直接動かす」設計にし、
+// 分割比率を pixel 単位で扱うことでコンテナ幅の実測（getBoundingClientRect）に
+// 依存しない、テスト容易でシンプルな実装にする（KISS）。
+const MIN_AGENT_PANE_WIDTH_PX = 200;
+const MAX_AGENT_PANE_WIDTH_PX = 1200;
+const DEFAULT_AGENT_PANE_WIDTH_PX = 480;
+const SPLIT_STEP_PX = 32;
+
+type PaneKind = "agent" | "shell";
+const PANE_KINDS: readonly PaneKind[] = ["agent", "shell"];
+
+function buildTerminalWebSocketUrl(agent: string, kind: PaneKind): string {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${window.location.host}/ws/terminal?agent=${encodeURIComponent(agent)}`;
+  return `${protocol}//${window.location.host}/ws/terminal?agent=${encodeURIComponent(agent)}&kind=${kind}`;
 }
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
+}
+
+/** agent + kind の複合キー。ペインごとの接続・xterm・container ref を一意に識別する。 */
+function connectionKey(agent: string, kind: PaneKind): string {
+  return `${agent}::${kind}`;
 }
 
 type BoardAgentsResponse = {
@@ -72,15 +96,19 @@ export function TerminalPane({
   );
   const [collapsed, setCollapsed] = useState(false);
   const [height, setHeight] = useState(DEFAULT_HEIGHT_PX);
+  const [agentPaneWidth, setAgentPaneWidth] = useState(
+    DEFAULT_AGENT_PANE_WIDTH_PX,
+  );
 
   const connectionsRef = useRef<Map<string, AgentConnection>>(new Map());
   const containerRefCallbacksRef = useRef<
     Map<string, (el: HTMLDivElement | null) => void>
   >(new Map());
-  // agent がまだ opened になっていないうちに呼ばれた prefill を、
-  // 接続確立（container mount）まで一時的に保持する。
+  // agent（左＝エージェント接続）がまだ opened になっていないうちに呼ばれた
+  // prefill を、接続確立（container mount）まで一時的に保持する。
   // 単一の値ではなく配列キューにしているのは、接続確立前に連続して prefill が
   // 呼ばれた場合に後勝ちで上書きせず、全件を届いた順番のまま流し込むため。
+  // shell 側は prefill の対象にならないため、このキューはエージェント接続専用。
   const pendingPrefillsRef = useRef<Map<string, string[]>>(new Map());
   // terminal-control 経由の prefill が、タブ一覧に無い agent 名を受け取った場合に
   // 弾くためのガード（サーバ側 resolveAgentEntry も未登録名を拒否するが、
@@ -100,9 +128,11 @@ export function TerminalPane({
 
   const ensureConnection = (
     agent: string,
+    kind: PaneKind,
     container: HTMLDivElement,
   ): AgentConnection => {
-    const existing = connectionsRef.current.get(agent);
+    const key = connectionKey(agent, kind);
+    const existing = connectionsRef.current.get(key);
     if (existing) {
       return existing;
     }
@@ -112,7 +142,8 @@ export function TerminalPane({
     // シーケンスを含み得る）を再生し、xterm.js がそれへ自動応答（DA1/DA2/DSR
     // 等）してしまうことがある。xterm の onData は自動応答とユーザーの実操作を
     // 区別できないため、実操作（keydown/paste/IME変換開始）を観測するまで
-    // input 送信を抑止するゲートを挟む（#27 フォローアップ）。
+    // input 送信を抑止するゲートを挟む（#27 フォローアップ）。エージェント・
+    // シェルの各ペインは独立した container を持つため、ゲートも独立に働く。
     const gate = createAttachInputGate(container);
     // 初回の open（接続確立直後）は下の同期呼び出しで既に fit/resize 済みのため
     // 再送しない。2回目以降の open（切断→再接続）でのみ再 fit+resize する。
@@ -120,7 +151,7 @@ export function TerminalPane({
     // （src/server/pty/pty-process.ts）、現在の表示サイズを送り直す必要がある。
     let hasOpenedOnce = false;
     const socket = connect({
-      url: buildTerminalWebSocketUrl(agent),
+      url: buildTerminalWebSocketUrl(agent, kind),
       onData: (data) => {
         xterm.write(data);
       },
@@ -146,32 +177,38 @@ export function TerminalPane({
     });
 
     const connection: AgentConnection = { socket, xterm, gate };
-    connectionsRef.current.set(agent, connection);
+    connectionsRef.current.set(key, connection);
 
     const { cols, rows } = xterm.fit();
     socket.resize(cols, rows);
 
-    const pendingCommands = pendingPrefillsRef.current.get(agent);
-    if (pendingCommands !== undefined) {
-      for (const command of pendingCommands) {
-        socket.prefill(command);
+    // prefill の宛先は常にエージェント（kind: "agent"）接続のみ。shell 接続
+    // （kind: "shell"）は pendingPrefillsRef を一切参照しない（#57 クリティカル
+    // 設計決定: shell ペインは prefill レジストリに登録しない）。
+    if (kind === "agent") {
+      const pendingCommands = pendingPrefillsRef.current.get(agent);
+      if (pendingCommands !== undefined) {
+        for (const command of pendingCommands) {
+          socket.prefill(command);
+        }
+        pendingPrefillsRef.current.delete(agent);
       }
-      pendingPrefillsRef.current.delete(agent);
     }
 
     return connection;
   };
 
-  const getContainerRefCallback = (agent: string) => {
-    let callback = containerRefCallbacksRef.current.get(agent);
+  const getContainerRefCallback = (agent: string, kind: PaneKind) => {
+    const key = connectionKey(agent, kind);
+    let callback = containerRefCallbacksRef.current.get(key);
     if (!callback) {
       callback = (el) => {
         if (!el) {
           return;
         }
-        ensureConnection(agent, el);
+        ensureConnection(agent, kind, el);
       };
-      containerRefCallbacksRef.current.set(agent, callback);
+      containerRefCallbacksRef.current.set(key, callback);
     }
     return callback;
   };
@@ -226,7 +263,11 @@ export function TerminalPane({
         setCollapsed(false);
         setActiveAgent(agent);
         openAgent(agent);
-        const existing = connectionsRef.current.get(agent);
+        // prefill は常にエージェント（左）側接続のみを対象にする。shell（右）
+        // 接続は connectionsRef 上に存在しても、ここから参照すること自体が無い
+        // （#57 クリティカル設計決定）。
+        const key = connectionKey(agent, "agent");
+        const existing = connectionsRef.current.get(key);
         if (existing) {
           existing.socket.prefill(command);
         } else {
@@ -242,19 +283,24 @@ export function TerminalPane({
     };
   }, [openAgent]);
 
-  // 表示中（非 collapsed）の xterm を re-fit して resize を伝搬する共通処理。
-  // パネルの高さ変更・折りたたみ解除・タブ切替・window リサイズの4つの契機から
-  // 呼ばれる（非表示中のペインは正しいサイズを計算できないため対象外）。
+  // 表示中（非 collapsed）の xterm（agent・shell 両ペイン）を re-fit して resize を
+  // 伝搬する共通処理。パネルの高さ変更・分割比率変更・折りたたみ解除・タブ切替・
+  // window リサイズの5つの契機から呼ばれる（非表示中のペインは正しいサイズを
+  // 計算できないため対象外）。
   const refitActiveConnection = useCallback(() => {
     if (collapsed || activeAgent === undefined) {
       return;
     }
-    const connection = connectionsRef.current.get(activeAgent);
-    if (!connection) {
-      return;
+    for (const kind of PANE_KINDS) {
+      const connection = connectionsRef.current.get(
+        connectionKey(activeAgent, kind),
+      );
+      if (!connection) {
+        continue;
+      }
+      const { cols, rows } = connection.xterm.fit();
+      connection.socket.resize(cols, rows);
     }
-    const { cols, rows } = connection.xterm.fit();
-    connection.socket.resize(cols, rows);
   }, [collapsed, activeAgent]);
 
   // window のリサイズに追従する。
@@ -283,6 +329,11 @@ export function TerminalPane({
     refitActiveConnection();
   }, [height, refitActiveConnection]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: agentPaneWidth は本体で読まないが分割比率変更のたびに再 fit を発火させる意図的なトリガー依存
+  useEffect(() => {
+    refitActiveConnection();
+  }, [agentPaneWidth, refitActiveConnection]);
+
   const handleTabClick = (agent: string) => {
     setActiveAgent(agent);
     openAgent(agent);
@@ -304,6 +355,58 @@ export function TerminalPane({
 
     window.addEventListener("mousemove", handleMouseMove);
     window.addEventListener("mouseup", handleMouseUp);
+  };
+
+  const handleSplitMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
+    // ドラッグ中に左右の xterm パネル上を横切ってもテキスト選択が始まらない
+    // ようにする（#44/#51 のコピー/ペースト体験を壊さないため。CodeRabbit 指摘）。
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = agentPaneWidth;
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const delta = moveEvent.clientX - startX;
+      setAgentPaneWidth(
+        clamp(
+          startWidth + delta,
+          MIN_AGENT_PANE_WIDTH_PX,
+          MAX_AGENT_PANE_WIDTH_PX,
+        ),
+      );
+    };
+
+    const handleMouseUp = () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+  };
+
+  const handleSplitKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    // マウスドラッグの代替経路（既存の高さリサイズ・#25/#39 のキーボード操作の
+    // パターンに合わせる）。ArrowLeft/Right で32pxずつ増減し、既存の clamp で
+    // 範囲内に収める。
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      setAgentPaneWidth((prev) =>
+        clamp(
+          prev - SPLIT_STEP_PX,
+          MIN_AGENT_PANE_WIDTH_PX,
+          MAX_AGENT_PANE_WIDTH_PX,
+        ),
+      );
+    } else if (event.key === "ArrowRight") {
+      event.preventDefault();
+      setAgentPaneWidth((prev) =>
+        clamp(
+          prev + SPLIT_STEP_PX,
+          MIN_AGENT_PANE_WIDTH_PX,
+          MAX_AGENT_PANE_WIDTH_PX,
+        ),
+      );
+    }
   };
 
   return (
@@ -370,14 +473,45 @@ export function TerminalPane({
         data-testid="terminal-pane-body"
         style={{ display: collapsed ? "none" : "block" }}
       >
+        {/* #57: 各タブは常時「左=エージェント／右=手動シェル」の2分割。
+            トグルは無い（設計決定どおり常時表示）。 */}
         {[...openedAgents].map((agent) => (
           <div
             key={agent}
-            className="terminal-pane-panel"
+            className="terminal-pane-split"
             data-testid={`terminal-panel-${agent}`}
-            style={{ display: agent === activeAgent ? "block" : "none" }}
-            ref={getContainerRefCallback(agent)}
-          />
+            style={{ display: agent === activeAgent ? "flex" : "none" }}
+          >
+            <div
+              className="terminal-pane-panel terminal-pane-panel-agent"
+              data-testid={`terminal-panel-${agent}-agent`}
+              style={{ width: `${agentPaneWidth}px` }}
+              ref={getContainerRefCallback(agent, "agent")}
+            />
+            <div
+              className="terminal-pane-splitter"
+              // パネル側（terminal-panel-${agent}-agent/-shell）と同様に agent で
+              // 一意化する。openedAgents は非アクティブなタブも display:none で
+              // DOM に残したまま維持するため、agent 名を含めないと複数タブを
+              // 開いた際に同一 data-testid の要素が DOM 上に複数存在してしまう
+              // （セルフレビュー指摘: #57）。
+              data-testid={`terminal-split-handle-${agent}`}
+              role="separator"
+              aria-orientation="vertical"
+              aria-valuenow={agentPaneWidth}
+              aria-valuemin={MIN_AGENT_PANE_WIDTH_PX}
+              aria-valuemax={MAX_AGENT_PANE_WIDTH_PX}
+              aria-label={`ターミナル分割比率（エージェント/シェル） - ${agent}`}
+              tabIndex={0}
+              onMouseDown={handleSplitMouseDown}
+              onKeyDown={handleSplitKeyDown}
+            />
+            <div
+              className="terminal-pane-panel terminal-pane-panel-shell"
+              data-testid={`terminal-panel-${agent}-shell`}
+              ref={getContainerRefCallback(agent, "shell")}
+            />
+          </div>
         ))}
       </div>
     </div>

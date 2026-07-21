@@ -82,4 +82,12 @@ describe("loadFleetManifest", () => {
       /重複.*medical/s,
     );
   });
+
+  it('name の末尾が予約接尾辞 "-shell" なら Error を throw する（#57 セッション名衝突防止）', () => {
+    const malformedPath = `${FIXTURES_ROOT}malformed-reserved-shell-suffix.tsv`;
+
+    expect(() => loadFleetManifest(malformedPath)).toThrowError(
+      /-shell.*予約/s,
+    );
+  });
 });

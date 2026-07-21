@@ -719,7 +719,38 @@ body {
   position: relative;
 }
 
-.terminal-pane-panel {
+/* #57: 各エージェントタブは常時「左=エージェント／右=手動シェル」の2分割。
+ * この行（.terminal-pane-split）がタブごとに絶対配置で領域全体を覆い、
+ * アクティブなタブのみ display:flex（他は display:none）で切り替える。
+ */
+.terminal-pane-split {
   position: absolute;
   inset: 0;
+}
+
+.terminal-pane-panel {
+  min-width: 0;
+  height: 100%;
+}
+
+.terminal-pane-panel-agent {
+  flex-shrink: 0;
+}
+
+.terminal-pane-panel-shell {
+  flex: 1;
+  /* エージェント（左）ペインは flex-shrink:0 の固定 px 幅（最大
+   * MAX_AGENT_PANE_WIDTH_PX）を持つため、狭いウィンドウ幅かつ左ペイン幅が
+   * 大きい設定の組み合わせでは、残り幅を埋める右（シェル）ペインが 0px まで
+   * 潰れて操作不能になり得る（セルフレビュー指摘: #57）。最低限のターミナル幅を
+   * 確保するための下限。
+   */
+  min-width: 160px;
+}
+
+.terminal-pane-splitter {
+  width: 4px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: var(--terminal-resize-handle-bg);
 }
