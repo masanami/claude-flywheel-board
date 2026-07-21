@@ -1430,5 +1430,56 @@ describe("AgentColumn", () => {
       expect(screen.getByText("アーカイブ済みタスク")).toBeInTheDocument();
       expect(screen.queryByText("現行タスク")).not.toBeInTheDocument();
     });
+
+    it("archiveMode のカードは読み取り専用（draggable でなく、フォーカスしても並べ替えヒントを出さない）", () => {
+      render(
+        <AgentColumn
+          archiveMode
+          agent={agentBoard({
+            archivedChallenges: [
+              challenge({
+                id: "C-900",
+                title: "アーカイブ済みタスク",
+                status: "完了",
+              }),
+            ],
+          })}
+        />,
+      );
+
+      const card = screen.getByText("アーカイブ済みタスク").closest("button");
+      expect(card).not.toBeNull();
+      // ライブ用のドラッグ操作アフォーダンスを持たない（並べ替えは archive で
+      // 未結線のため、draggable=false で誤解を避ける）。
+      expect(card).toHaveAttribute("draggable", "false");
+
+      card?.focus();
+      expect(screen.queryByText("Alt+↑/↓ で並べ替え")).not.toBeInTheDocument();
+    });
+
+    it("archiveMode 中もアーカイブ読み込みの parseErrors を ErrorCard として表示する", () => {
+      render(
+        <AgentColumn
+          archiveMode
+          agent={agentBoard({
+            archivedChallenges: [],
+            parseErrors: [
+              {
+                file: "challenge-archive.md",
+                line: 3,
+                message: "壊れている",
+                raw: "raw-archive",
+              },
+            ],
+          })}
+        />,
+      );
+
+      // アーカイブ表示中に archive 読み込みの実エラーへ気づけること（受入基準
+      // 「非ENOENT の実エラーは可視化される」をライブ表示切替なしで満たす）。
+      expect(
+        screen.getByText("challenge-archive.md:3 — 壊れている"),
+      ).toBeInTheDocument();
+    });
   });
 });

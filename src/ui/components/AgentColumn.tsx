@@ -389,9 +389,22 @@ export function AgentColumn({ agent, archiveMode }: AgentColumnProps) {
                 className="agent-column-row"
                 data-testid={`agent-column-archive-row-${challenge.id}`}
               >
-                <TaskCard challenge={challenge} agentName={agent.name} />
+                <TaskCard
+                  challenge={challenge}
+                  agentName={agent.name}
+                  readOnly
+                />
               </div>
             </div>
+          ))}
+          {/* アーカイブ読み込みの非ENOENT 実エラー（権限不足等）も、アーカイブ
+              表示中に気づけるよう当該ビューで可視化する（受入基準「非ENOENT の
+              実エラーは可視化される」をライブ表示切替なしで満たす）。 */}
+          {agent.parseErrors.map((error) => (
+            <ErrorCard
+              key={`${error.file}:${error.line ?? "?"}:${error.raw}`}
+              error={error}
+            />
           ))}
         </div>
       </section>
