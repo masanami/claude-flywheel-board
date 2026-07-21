@@ -38,6 +38,8 @@ const HEADER_PATTERN = /^###\s*\[([^\]]*)\]\s*(.*)$/;
 // フェンス開始/終了行の判定に使う: バッククォート3連以上、または波ダッシュ3連以上。
 // キャプチャした文字列の先頭文字（記号）と長さから、閉じ判定（同じ記号・開始以上の長さ）を行う。
 const FENCE_LINE_PATTERN = /^\s*(`{3,}|~{3,})/;
+const HTML_COMMENT_OPEN = "<!--";
+const HTML_COMMENT_CLOSE = "-->";
 // 分類欄フィールド行: 行頭 `- key: value`（インデントなし）。
 // 承認チェックボックス行（`  - [ ] ...`）は2階層インデントのため、この正規表現には一致しない。
 const FIELD_LINE_PATTERN = /^- ([^:]+): ?(.*)$/;
@@ -54,11 +56,42 @@ type PendingEntry = {
 };
 
 /**
+ * 行内の `<!--` / `-->` マーカーを順に走査し、行末時点で HTML コメント中かどうかを返す。
+ *
+ * 1行内で開いて閉じるインラインコメント（例: フィールド行末尾の `<!-- fp:... -->`）は
+ * 状態を変化させない（呼び出し側の startInComment / 戻り値がともに false のままになる）。
+ * 一方、閉じマーカーの無い `<!--` が残る場合は true を返し、複数行コメントの開始として扱う。
+ */
+function scanCommentState(line: string, startInComment: boolean): boolean {
+  let inComment = startInComment;
+  let pos = 0;
+  while (true) {
+    if (inComment) {
+      const closeIdx = line.indexOf(HTML_COMMENT_CLOSE, pos);
+      if (closeIdx === -1) {
+        return true;
+      }
+      inComment = false;
+      pos = closeIdx + HTML_COMMENT_CLOSE.length;
+    } else {
+      const openIdx = line.indexOf(HTML_COMMENT_OPEN, pos);
+      if (openIdx === -1) {
+        return false;
+      }
+      inComment = true;
+      pos = openIdx + HTML_COMMENT_OPEN.length;
+    }
+  }
+}
+
+/**
  * challenge-ledger.md の内容をパースする純粋関数（fs に依存しない）。
  *
  * NFR-05: フォーマットの解釈は claude-flywheel 側 challenge-ledger-format.md を正とし、
- * 独自解釈を持ち込まない。フェンスコードブロック（```）内の記入例はエントリとして
- * 解釈しない（雛形ファイルの誤検出防止）。
+ * 独自解釈を持ち込まない。フェンスコードブロック（```）内、および HTML コメント
+ * （`<!-- ... -->`）内の記入例はエントリとして解釈しない（CommonMark 仕様上コメントは
+ * 文書内容でないため。雛形ファイルの誤検出防止）。フェンスとコメントは互いに排他的に扱い、
+ * フェンス中はコメント判定を行わず、コメント中はフェンス判定を行わない。
  *
  * 壊れたエントリは他のエントリのパースに影響しない: 1エントリのヘッダー/ステータス等が
  * 不正な場合はそのエントリのみ ParseError として返し、他の正常なエントリは
@@ -74,6 +107,8 @@ export function parseLedger(
 
   // 現在開いているフェンスの記号（`か~）と長さ。null なら非フェンス中。
   let fence: { char: string; length: number } | null = null;
+  // 複数行 HTML コメント中かどうか。インラインで閉じるコメントはこの状態を変化させない。
+  let inComment = false;
   let current: PendingEntry | null = null;
 
   const flush = () => {
@@ -130,10 +165,11 @@ export function parseLedger(
     const line = lines[i] ?? "";
     const lineNo = i + 1;
 
-    const fenceMatch = line.match(FENCE_LINE_PATTERN);
     if (fence) {
       // フェンス中: 同じ記号かつ開始以上の長さのフェンス行だけが閉じフェンスとして扱われる。
-      // それ以外（別記号・より短い入れ子フェンス・通常行）はすべてフェンス内容として無視する。
+      // それ以外（別記号・より短い入れ子フェンス・通常行、`<!--` 等）はすべてフェンス内容として
+      // 無視する（クリティカル設計決定: フェンス優先。コメント判定はここに到達させない）。
+      const fenceMatch = line.match(FENCE_LINE_PATTERN);
       if (
         fenceMatch &&
         fenceMatch[1]?.[0] === fence.char &&
@@ -143,9 +179,28 @@ export function parseLedger(
       }
       continue;
     }
+
+    // 複数行 HTML コメント中（フェンスが非活性の場合のみ判定）: コメント優先で、
+    // コメント中に現れる ``` 等はフェンス開始として扱わない。
+    // コメント開始行〜終了行まではエントリ内容として一切解釈せず丸ごとスキップする。
+    if (inComment) {
+      inComment = scanCommentState(line, true);
+      continue;
+    }
+
+    const fenceMatch = line.match(FENCE_LINE_PATTERN);
     if (fenceMatch) {
       const marker = fenceMatch[1] ?? "";
       fence = { char: marker[0] ?? "`", length: marker.length };
+      continue;
+    }
+
+    // HTML コメント開始判定: 1行内で開いて閉じるインラインコメント（例:
+    // フィールド行末尾の `<!-- fp:... -->`）は状態遷移させず、行の内容はそのまま
+    // 通常のフィールド行パースに渡す。閉じマーカーの無い `<!--` が残る場合のみ
+    // 複数行コメントの開始として扱い、この行自体もスキップする。
+    if (scanCommentState(line, false)) {
+      inComment = true;
       continue;
     }
 

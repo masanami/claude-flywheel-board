@@ -159,6 +159,94 @@ describe("parseLedger", () => {
     expect(result.challenges[0]?.id).toBe("C-100");
   });
 
+  it("html-comment.md の HTML コメントで囲まれた記入例はエントリとして解釈されず、コメント後の実エントリのみを返す", () => {
+    const content = readFixture("html-comment.md");
+
+    const result = parseLedger(content, "html-comment.md");
+
+    expect(result.errors).toEqual([]);
+    expect(result.challenges).toHaveLength(1);
+    expect(result.challenges[0]?.id).toBe("C-100");
+  });
+
+  it("html-comment.md のフィールド行末尾インラインコメント（優先度の <!-- fp:... -->）は従来どおり値に含めてパースされる", () => {
+    const content = readFixture("html-comment.md");
+
+    const result = parseLedger(content, "html-comment.md");
+
+    expect(result.challenges[0]?.priority).toBe("P1 <!-- fp:31284b3668e8 -->");
+  });
+
+  it("複数行にまたがる HTML コメント（<!-- の行から --> の行まで）はすべてスキップし、前後のエントリは正しくパースされる", () => {
+    const content = [
+      "### [C-050] コメント前のエントリ",
+      "",
+      "**分類欄（エージェントが記入）**",
+      "- ステータス: 未分類",
+      "",
+      "<!-- ここからコメント",
+      "### [C-999] コメント内なので無視されるべき",
+      "",
+      "**分類欄（エージェントが記入）**",
+      "- ステータス: 未分類",
+      "-->",
+      "",
+      "### [C-100] コメント後のエントリ",
+      "",
+      "**分類欄（エージェントが記入）**",
+      "- ステータス: 未分類",
+      "",
+    ].join("\n");
+
+    const result = parseLedger(content, "multi-line-comment.md");
+
+    expect(result.errors).toEqual([]);
+    expect(result.challenges.map((c) => c.id)).toEqual(["C-050", "C-100"]);
+  });
+
+  it("フェンス内に現れる <!-- はコメント開始として扱わない（フェンス優先）", () => {
+    const content = [
+      "# 課題台帳",
+      "",
+      "```",
+      "<!-- フェンス内なのでコメント開始として扱われないはず（閉じの --> は無い）",
+      "```",
+      "",
+      "### [C-100] フェンスの外にある実データ",
+      "",
+      "**分類欄（エージェントが記入）**",
+      "- ステータス: 未分類",
+      "",
+    ].join("\n");
+
+    const result = parseLedger(content, "fence-with-html-comment.md");
+
+    expect(result.errors).toEqual([]);
+    expect(result.challenges).toHaveLength(1);
+    expect(result.challenges[0]?.id).toBe("C-100");
+  });
+
+  it("コメント内に現れる ``` はフェンス開始として扱わない（コメント優先）", () => {
+    const content = [
+      "<!-- コメント開始",
+      "```",
+      "コメント中の ``` はフェンスとして扱われないはず",
+      "-->",
+      "",
+      "### [C-100] コメント終了後の実データ",
+      "",
+      "**分類欄（エージェントが記入）**",
+      "- ステータス: 未分類",
+      "",
+    ].join("\n");
+
+    const result = parseLedger(content, "comment-with-fence.md");
+
+    expect(result.errors).toEqual([]);
+    expect(result.challenges).toHaveLength(1);
+    expect(result.challenges[0]?.id).toBe("C-100");
+  });
+
   it("~~~ フェンスも同条件（同じ記号かつ開始以上の長さ）で閉じ判定する", () => {
     const content = [
       "# 課題台帳",
