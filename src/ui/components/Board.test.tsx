@@ -228,4 +228,137 @@ describe("Board", () => {
 
     expect(closeMock).toHaveBeenCalled();
   });
+
+  it("初期表示では完了ステータスのエントリを表示しない（Issue #50 ②）", async () => {
+    const { Board } = await import("./Board.tsx");
+    render(<Board />);
+
+    act(() => {
+      latestOptions().onSnapshot(
+        snapshot([
+          agentBoard({
+            name: "medical",
+            challenges: [
+              {
+                id: "C-001",
+                title: "完了タスク",
+                status: "完了",
+                needsHuman: false,
+              },
+              {
+                id: "C-002",
+                title: "着手中タスク",
+                status: "着手中",
+                needsHuman: false,
+              },
+            ],
+          }),
+        ]),
+      );
+    });
+
+    expect(screen.getByText("着手中タスク")).toBeInTheDocument();
+    expect(screen.queryByText("完了タスク")).not.toBeInTheDocument();
+  });
+
+  it("「完了を表示」トグルをクリックすると完了ステータスのエントリが表示される", async () => {
+    const { Board } = await import("./Board.tsx");
+    render(<Board />);
+
+    act(() => {
+      latestOptions().onSnapshot(
+        snapshot([
+          agentBoard({
+            name: "medical",
+            challenges: [
+              {
+                id: "C-001",
+                title: "完了タスク",
+                status: "完了",
+                needsHuman: false,
+              },
+            ],
+          }),
+        ]),
+      );
+    });
+
+    expect(screen.queryByText("完了タスク")).not.toBeInTheDocument();
+
+    act(() => {
+      screen.getByRole("button", { name: "完了を表示" }).click();
+    });
+
+    expect(screen.getByText("完了タスク")).toBeInTheDocument();
+  });
+
+  it("「完了確認待ち」は完了トグルOFFでも常に表示される", async () => {
+    const { Board } = await import("./Board.tsx");
+    render(<Board />);
+
+    act(() => {
+      latestOptions().onSnapshot(
+        snapshot([
+          agentBoard({
+            name: "medical",
+            challenges: [
+              {
+                id: "C-001",
+                title: "完了確認待ちタスク",
+                status: "完了確認待ち",
+                needsHuman: true,
+              },
+            ],
+          }),
+        ]),
+      );
+    });
+
+    expect(screen.getByText("完了確認待ちタスク")).toBeInTheDocument();
+  });
+
+  it("承認待ちフィルタ選択中に完了トグルを切り替えても承認待ちの表示は変わらない", async () => {
+    const { Board } = await import("./Board.tsx");
+    render(<Board />);
+
+    act(() => {
+      latestOptions().onSnapshot(
+        snapshot([
+          agentBoard({
+            name: "medical",
+            challenges: [
+              {
+                id: "C-001",
+                title: "承認待ちタスク",
+                status: "計画承認待ち",
+                needsHuman: true,
+              },
+              {
+                id: "C-002",
+                title: "完了タスク",
+                status: "完了",
+                needsHuman: false,
+              },
+            ],
+          }),
+        ]),
+      );
+    });
+
+    act(() => {
+      screen.getByRole("button", { name: "🔔 承認待ち" }).click();
+    });
+
+    expect(screen.getByText("承認待ちタスク")).toBeInTheDocument();
+    expect(screen.queryByText("完了タスク")).not.toBeInTheDocument();
+
+    act(() => {
+      screen.getByRole("button", { name: "完了を表示" }).click();
+    });
+
+    // needsHuman フィルタ選択中は完了トグルに関わらず 完了 は表示されない
+    // （needsHuman な課題のみ表示という既存フィルタの結果は変わらない）。
+    expect(screen.getByText("承認待ちタスク")).toBeInTheDocument();
+    expect(screen.queryByText("完了タスク")).not.toBeInTheDocument();
+  });
 });

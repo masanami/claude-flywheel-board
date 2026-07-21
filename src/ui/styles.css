@@ -148,6 +148,19 @@ body {
   border-color: var(--board-chip-active-bg);
 }
 
+.filter-toggle {
+  /* すべて/承認待ちの相互排他チップ群とは独立したトグルであることを示すため、
+   * 右端へ寄せて視覚的に分離する。 */
+  margin-left: auto;
+}
+
+.filter-toggle:disabled {
+  /* 承認待ちフィルタ選択中は切り替えても表示に反映されない（no-op）ため、
+   * 押しても意味が無いことが視覚的に伝わるよう半透明にする。 */
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .board-columns {
   flex: 1;
   display: flex;
