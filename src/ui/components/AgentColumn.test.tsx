@@ -44,6 +44,7 @@ function agentBoard(overrides: Partial<AgentBoard> = {}): AgentBoard {
     parseErrors: [],
     cycleStatus: "idle",
     runningRuns: [],
+    archivedChallenges: [],
     ...overrides,
   };
 }
@@ -1349,6 +1350,85 @@ describe("AgentColumn", () => {
       fireEvent.keyDown(input, { key: "Enter" });
 
       expect(screen.getByRole("button", { name: "＋ 差し込み" })).toHaveFocus();
+    });
+  });
+
+  describe("archiveMode（Issue #50 ①）", () => {
+    it("archivedChallenges をミニマル表示する（id/title/status）", () => {
+      render(
+        <AgentColumn
+          archiveMode
+          agent={agentBoard({
+            archivedChallenges: [
+              challenge({
+                id: "C-900",
+                title: "アーカイブ済みタスク",
+                status: "完了",
+              }),
+            ],
+          })}
+        />,
+      );
+
+      expect(screen.getByText("アーカイブ済みタスク")).toBeInTheDocument();
+      expect(screen.getByText("C-900")).toBeInTheDocument();
+      expect(screen.getByText("完了")).toBeInTheDocument();
+    });
+
+    it("archivedChallenges が空でもクラッシュせず空表示になる", () => {
+      render(
+        <AgentColumn
+          archiveMode
+          agent={agentBoard({ archivedChallenges: [] })}
+        />,
+      );
+
+      expect(screen.getByText("medical")).toBeInTheDocument();
+    });
+
+    it("archiveMode 中は実行中セクション・＋差し込みボタンを表示しない", () => {
+      render(
+        <AgentColumn
+          archiveMode
+          agent={agentBoard({
+            runningRuns: [
+              run({
+                kind: "adhoc",
+                key: "adhoc-1",
+                title: "実行中タスク",
+              }),
+            ],
+          })}
+        />,
+      );
+
+      expect(
+        screen.queryByRole("heading", { name: "⚡ 実行中", level: 3 }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "＋ 差し込み" }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("archiveMode 中は live challenges ではなく archivedChallenges のみを表示する", () => {
+      render(
+        <AgentColumn
+          archiveMode
+          agent={agentBoard({
+            challenges: [challenge({ id: "C-001", title: "現行タスク" })],
+            archivedChallenges: [
+              challenge({
+                id: "C-900",
+                title: "アーカイブ済みタスク",
+                status: "完了",
+              }),
+            ],
+          })}
+        />,
+      );
+
+      expect(screen.getByText("アーカイブ済みタスク")).toBeInTheDocument();
+      expect(screen.queryByText("現行タスク")).not.toBeInTheDocument();
     });
   });
 });

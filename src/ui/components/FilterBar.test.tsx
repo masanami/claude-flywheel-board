@@ -10,6 +10,8 @@ describe("FilterBar", () => {
         onChange={vi.fn()}
         showCompleted={false}
         onShowCompletedChange={vi.fn()}
+        archiveMode={false}
+        onArchiveModeChange={vi.fn()}
       />,
     );
 
@@ -26,6 +28,8 @@ describe("FilterBar", () => {
         onChange={vi.fn()}
         showCompleted={false}
         onShowCompletedChange={vi.fn()}
+        archiveMode={false}
+        onArchiveModeChange={vi.fn()}
       />,
     );
 
@@ -47,6 +51,8 @@ describe("FilterBar", () => {
         onChange={onChange}
         showCompleted={false}
         onShowCompletedChange={vi.fn()}
+        archiveMode={false}
+        onArchiveModeChange={vi.fn()}
       />,
     );
 
@@ -63,6 +69,8 @@ describe("FilterBar", () => {
         onChange={onChange}
         showCompleted={false}
         onShowCompletedChange={vi.fn()}
+        archiveMode={false}
+        onArchiveModeChange={vi.fn()}
       />,
     );
 
@@ -78,6 +86,8 @@ describe("FilterBar", () => {
         onChange={vi.fn()}
         showCompleted={true}
         onShowCompletedChange={vi.fn()}
+        archiveMode={false}
+        onArchiveModeChange={vi.fn()}
       />,
     );
 
@@ -95,6 +105,8 @@ describe("FilterBar", () => {
         onChange={vi.fn()}
         showCompleted={false}
         onShowCompletedChange={onShowCompletedChange}
+        archiveMode={false}
+        onArchiveModeChange={vi.fn()}
       />,
     );
 
@@ -110,6 +122,8 @@ describe("FilterBar", () => {
         onChange={vi.fn()}
         showCompleted={false}
         onShowCompletedChange={vi.fn()}
+        archiveMode={false}
+        onArchiveModeChange={vi.fn()}
       />,
     );
 
@@ -123,11 +137,87 @@ describe("FilterBar", () => {
         onChange={vi.fn()}
         showCompleted={false}
         onShowCompletedChange={vi.fn()}
+        archiveMode={false}
+        onArchiveModeChange={vi.fn()}
       />,
     );
 
     expect(
       screen.getByRole("button", { name: "完了を表示" }),
     ).not.toBeDisabled();
+  });
+
+  describe("アーカイブ表示トグル（Issue #50 ①）", () => {
+    it("アーカイブ表示トグルを表示し、archiveMode の値を aria-pressed に反映する", () => {
+      render(
+        <FilterBar
+          value="all"
+          onChange={vi.fn()}
+          showCompleted={false}
+          onShowCompletedChange={vi.fn()}
+          archiveMode={true}
+          onArchiveModeChange={vi.fn()}
+        />,
+      );
+
+      expect(
+        screen.getByRole("button", { name: /アーカイブ表示/ }),
+      ).toHaveAttribute("aria-pressed", "true");
+    });
+
+    it("アーカイブ表示トグルのクリックで onArchiveModeChange(!archiveMode) を呼ぶ", () => {
+      const onArchiveModeChange = vi.fn();
+      render(
+        <FilterBar
+          value="all"
+          onChange={vi.fn()}
+          showCompleted={false}
+          onShowCompletedChange={vi.fn()}
+          archiveMode={false}
+          onArchiveModeChange={onArchiveModeChange}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: /アーカイブ表示/ }));
+
+      expect(onArchiveModeChange).toHaveBeenCalledWith(true);
+    });
+
+    it("アーカイブ表示中は「すべて」「🔔 承認待ち」「完了を表示」がすべて無効化される（ライブ用フィルタとの相互作用を無効化）", () => {
+      render(
+        <FilterBar
+          value="all"
+          onChange={vi.fn()}
+          showCompleted={false}
+          onShowCompletedChange={vi.fn()}
+          archiveMode={true}
+          onArchiveModeChange={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByRole("button", { name: "すべて" })).toBeDisabled();
+      expect(
+        screen.getByRole("button", { name: "🔔 承認待ち" }),
+      ).toBeDisabled();
+      expect(screen.getByRole("button", { name: "完了を表示" })).toBeDisabled();
+    });
+
+    it("アーカイブ表示中でなければ「すべて」「🔔 承認待ち」は有効", () => {
+      render(
+        <FilterBar
+          value="all"
+          onChange={vi.fn()}
+          showCompleted={false}
+          onShowCompletedChange={vi.fn()}
+          archiveMode={false}
+          onArchiveModeChange={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByRole("button", { name: "すべて" })).not.toBeDisabled();
+      expect(
+        screen.getByRole("button", { name: "🔔 承認待ち" }),
+      ).not.toBeDisabled();
+    });
   });
 });

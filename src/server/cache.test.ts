@@ -161,6 +161,59 @@ describe("createMemoryBoardCache", () => {
     expect(snapshot.agents[0]?.parseErrors).toHaveLength(1);
   });
 
+  it("archivedChallenges を省略した replaceAgent は空配列として扱う（既存呼び出しとの後方互換）", () => {
+    const cache = createMemoryBoardCache();
+
+    cache.replaceAgent({
+      name: "medical",
+      path: "/agents/medical-agent",
+      challenges: [],
+      parseErrors: [],
+    });
+
+    expect(cache.getSnapshot().agents[0]?.archivedChallenges).toEqual([]);
+  });
+
+  it("replaceAgent で渡した archivedChallenges が getSnapshot に反映される（優先度順ソート済み）", () => {
+    const cache = createMemoryBoardCache();
+
+    cache.replaceAgent({
+      name: "medical",
+      path: "/agents/medical-agent",
+      challenges: [],
+      parseErrors: [],
+      archivedChallenges: [
+        challenge({ id: "C-900", status: "完了", priority: "P1" }),
+        challenge({ id: "C-901", status: "完了", priority: "P0" }),
+      ],
+    });
+
+    const archived = cache.getSnapshot().agents[0]?.archivedChallenges ?? [];
+    expect(archived.map((c) => c.id)).toEqual(["C-901", "C-900"]);
+  });
+
+  it("同名エージェントへの再 replaceAgent は archivedChallenges も完全に置き換わる", () => {
+    const cache = createMemoryBoardCache();
+
+    cache.replaceAgent({
+      name: "medical",
+      path: "/agents/medical-agent",
+      challenges: [],
+      parseErrors: [],
+      archivedChallenges: [challenge({ id: "C-900", status: "完了" })],
+    });
+
+    cache.replaceAgent({
+      name: "medical",
+      path: "/agents/medical-agent",
+      challenges: [],
+      parseErrors: [],
+      archivedChallenges: [],
+    });
+
+    expect(cache.getSnapshot().agents[0]?.archivedChallenges).toEqual([]);
+  });
+
   it("(agent, challengeId) 複合キー: 異なるエージェントの同一 challengeId が混線しない", () => {
     const cache = createMemoryBoardCache();
 

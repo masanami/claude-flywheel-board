@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { watch } from "chokidar";
 import type { AgentBoard, BoardCache } from "./cache.ts";
@@ -14,6 +15,12 @@ import type { ParseError } from "./parsers/types.ts";
 export const LEDGER_FILE_NAME = "challenge-ledger.md";
 export const JOURNAL_FILE_NAME = path.join("journal", "index.jsonl");
 export const RUNS_FILE_NAME = path.join(".flywheel", "runs.jsonl");
+// Issue #50 ①: 台帳のアーカイブ（完了エントリの移動先）。将来の年次分割
+// （challenge-archive-2026.md 等）に備え、固定ファイル名ではなく glob で扱う
+// （claude-flywheel 側 docs/challenge-ledger-format.md §アーカイブ・
+// skills/ingest-challenges/SKILL.md と同じ運用に揃える）。
+export const ARCHIVE_GLOB_PATTERN = "challenge-archive*.md";
+const ARCHIVE_FILE_NAME_PATTERN = /^challenge-archive.*\.md$/;
 
 export function ledgerPathFor(entry: FleetEntry): string {
   return path.join(entry.path, LEDGER_FILE_NAME);
@@ -27,15 +34,77 @@ export function runsPathFor(entry: FleetEntry): string {
   return path.join(entry.path, RUNS_FILE_NAME);
 }
 
+export function archiveGlobFor(entry: FleetEntry): string {
+  return path.join(entry.path, ARCHIVE_GLOB_PATTERN);
+}
+
 export type ScanResult = {
   challenges: Challenge[];
   journalEntries: JournalEntry[];
   matchedRuns: MatchedRun[];
+  archivedChallenges: Challenge[];
   parseErrors: ParseError[];
 };
 
 function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * 1 repo 分の challenge-archive*.md（年次分割 glob）を読み込む。
+ *
+ * クリティカル設計決定（NFR-05）: アーカイブは台帳と同じエントリ形式のため、
+ * 新しい独自パーサを書かず既存の parseLedgerFile をそのまま流用する。
+ *
+ * 空安全（クリティカル設計決定）: アーカイブファイルが1つも無い場合
+ * （entry.path 自体が存在しない場合を含む）は fs.globSync が例外を投げず
+ * 空配列を返すため、ENOENT を特別扱いする必要なく自然に
+ * `{ challenges: [], errors: [] }` になる（runs.jsonl の ENOENT 寛容処理と
+ * 同じ帰結）。列挙後の個別ファイル読み込みで生じた非ENOENTエラー（権限不足等）
+ * のみ ParseError として可視化する。
+ */
+function scanArchive(entry: FleetEntry): {
+  challenges: Challenge[];
+  errors: ParseError[];
+} {
+  const challenges: Challenge[] = [];
+  const errors: ParseError[] = [];
+
+  // fs.globSync は Node 22 で追加された比較的新しい API（package.json の
+  // engines: node>=22.18.0 で前提を満たす）。空安全の判定（存在しない cwd で
+  // 例外を投げず空配列を返す）はこの API の実装依存の挙動であり、
+  // watcher.test.ts の「repo パスが存在しない」ケースで固定して回帰検知する
+  // （セルフレビュー指摘対応: 将来の Node バージョンで挙動が変わった場合も
+  // このテストが最初に失敗する）。
+  let fileNames: string[];
+  try {
+    fileNames = fs.globSync(ARCHIVE_GLOB_PATTERN, { cwd: entry.path });
+  } catch (error) {
+    errors.push({
+      file: archiveGlobFor(entry),
+      message: `challenge-archive*.md の列挙に失敗しました: ${toErrorMessage(error)}`,
+      raw: "",
+    });
+    return { challenges, errors };
+  }
+
+  // 年次分割時も決定的な順序で連結するため、ファイル名の昇順で処理する。
+  for (const fileName of [...fileNames].sort()) {
+    const archivePath = path.join(entry.path, fileName);
+    try {
+      const result = parseLedgerFile(archivePath);
+      challenges.push(...result.challenges);
+      errors.push(...result.errors);
+    } catch (error) {
+      errors.push({
+        file: archivePath,
+        message: `${fileName} の読み込みに失敗しました: ${toErrorMessage(error)}`,
+        raw: "",
+      });
+    }
+  }
+
+  return { challenges, errors };
 }
 
 /**
@@ -95,7 +164,17 @@ export async function scanAgent(entry: FleetEntry): Promise<ScanResult> {
     });
   }
 
-  return { challenges, journalEntries, matchedRuns, parseErrors };
+  // Issue #50 ①: 台帳のアーカイブ（完了チケットを見る唯一の手段）。
+  const archiveResult = scanArchive(entry);
+  parseErrors.push(...archiveResult.errors);
+
+  return {
+    challenges,
+    journalEntries,
+    matchedRuns,
+    archivedChallenges: archiveResult.challenges,
+    parseErrors,
+  };
 }
 
 /**
@@ -107,11 +186,18 @@ export async function scanAndUpdateAgent(
   cache: BoardCache,
   onAgentUpdate?: (agent: AgentBoard) => void,
 ): Promise<void> {
-  const { challenges, journalEntries, matchedRuns, parseErrors } =
-    await scanAgent(entry);
+  const {
+    challenges,
+    journalEntries,
+    matchedRuns,
+    archivedChallenges,
+    parseErrors,
+  } = await scanAgent(entry);
 
   // ホバー要約（FR-08）: journal の該当課題への言及から導出して challenge に載せる。
-  // 導出の責務はこの合流点に一本化する（parser は素材、cache は格納に徹する）
+  // 導出の責務はこの合流点に一本化する（parser は素材、cache は格納に徹する）。
+  // アーカイブ課題は表示粒度をミニマル（id/title/status）に留める設計判断のため、
+  // summary 導出は行わない（Issue #50 ①）。
   const challengesWithSummary = challenges.map((challenge) => ({
     ...challenge,
     summary: deriveSummary(journalEntries, challenge.id),
@@ -121,6 +207,7 @@ export async function scanAndUpdateAgent(
     name: entry.name,
     path: entry.path,
     challenges: challengesWithSummary,
+    archivedChallenges,
     parseErrors,
   });
   cache.replaceJournal(entry.name, journalEntries);
@@ -190,6 +277,21 @@ export function startFleetWatcher(
     options.fullRescanIntervalMs ?? DEFAULT_FULL_RESCAN_INTERVAL_MS;
 
   const entryByWatchedPath = new Map<string, FleetEntry>();
+  // Issue #50 ①: challenge-archive*.md は年次分割で新規ファイルが後から
+  // 現れうるため、ledger/journal/runs のような固定パスの Map には載せられない。
+  // 代わりに repo ディレクトリ単位で解決する（entry.path 配下かつファイル名が
+  // アーカイブ glob に一致すれば当該 repo とみなす）。
+  //
+  // 注意（セルフレビュー指摘対応）: 当初 `archiveGlobFor(entry)`（glob文字列
+  // "challenge-archive*.md"）をそのまま watch() に渡していたが、本プロジェクトが
+  // 使用する chokidar は v5（v4 で glob サポートが撤廃済み。node_modules/chokidar
+  // の README 参照）のため、glob 文字列はリテラルパスとして扱われ実ファイルに
+  // マッチせず、アーカイブの add/change/unlink は本番で一切発火しない no-op に
+  // なっていた（実 chokidar で検証し確認済み）。代わりに repo ディレクトリ
+  // （entry.path）自体を depth: 0（直下のみ・再帰しない）で watch することで、
+  // 「entry.path 直下の challenge-archive*.md」という設計要求を満たしつつ、
+  // repo 全体を再帰監視するコストは避ける。
+  const entryByDir = new Map<string, FleetEntry>();
   const watchedPaths: string[] = [];
   for (const entry of entries) {
     const ledgerPath = ledgerPathFor(entry);
@@ -198,7 +300,18 @@ export function startFleetWatcher(
     entryByWatchedPath.set(path.resolve(ledgerPath), entry);
     entryByWatchedPath.set(path.resolve(journalPath), entry);
     entryByWatchedPath.set(path.resolve(runsPath), entry);
-    watchedPaths.push(ledgerPath, journalPath, runsPath);
+    entryByDir.set(path.resolve(entry.path), entry);
+    watchedPaths.push(ledgerPath, journalPath, runsPath, entry.path);
+  }
+
+  // アーカイブ glob 経由のイベント（changedPath は実ファイルの具体パス）を
+  // 対応する repo（entry）へ解決する。ledger/journal/runs と同様、
+  // 対応が見つからない（未知の repo・パターン不一致）場合は undefined。
+  function resolveArchiveEntry(resolvedPath: string): FleetEntry | undefined {
+    if (!ARCHIVE_FILE_NAME_PATTERN.test(path.basename(resolvedPath))) {
+      return undefined;
+    }
+    return entryByDir.get(path.dirname(resolvedPath));
   }
 
   const debounceTimers = new Map<string, NodeJS.Timeout>();
@@ -240,13 +353,22 @@ export function startFleetWatcher(
   }
 
   function handleFsEvent(changedPath: string): void {
-    const entry = entryByWatchedPath.get(path.resolve(changedPath));
+    const resolved = path.resolve(changedPath);
+    const entry =
+      entryByWatchedPath.get(resolved) ?? resolveArchiveEntry(resolved);
     if (entry) {
       scheduleRescan(entry);
     }
   }
 
-  const chokidarWatcher = watch(watchedPaths, { ignoreInitial: true });
+  // depth: 0 は entry.path（repo ディレクトリ）の直下のみを watch し、
+  // サブディレクトリ（journal/ 等）へは再帰しない（Issue #50 ①のアーカイブ
+  // ディレクトリ watch のためだけに repo 全体を再帰監視してしまわないようにする
+  // ガード。ledger/journal/runs のような個別ファイルパスの watch には影響しない）。
+  const chokidarWatcher = watch(watchedPaths, {
+    ignoreInitial: true,
+    depth: 0,
+  });
   // 監視失敗（権限不足等）で watcher プロセス全体が落ちないよう、
   // 'error' イベントには必ずハンドラを付ける（EventEmitter は未処理の
   // 'error' で throw する）。個別ファイルの読込失敗は scanAgent 側で

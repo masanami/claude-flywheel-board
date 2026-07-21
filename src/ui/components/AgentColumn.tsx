@@ -96,6 +96,10 @@ function RunningRunRow({ run, agentName }: { run: Run; agentName: string }) {
 
 type AgentColumnProps = {
   agent: AgentBoard;
+  // アーカイブビュー（Issue #50 ①）。true の間は agent.challenges ではなく
+  // agent.archivedChallenges をミニマル表示（既存 TaskCard の流用）し、
+  // 実行中セクション・並べ替え・差し込み等のライブ操作導線はすべて隠す。
+  archiveMode?: boolean;
 };
 
 // ゴーストカードのドラッグを識別する dataTransfer キー
@@ -163,7 +167,7 @@ function findNextSlot(
   return current;
 }
 
-export function AgentColumn({ agent }: AgentColumnProps) {
+export function AgentColumn({ agent, archiveMode }: AgentColumnProps) {
   const firstNeedsHumanIndex = agent.challenges.findIndex((c) => c.needsHuman);
   const [isInsertOpen, setIsInsertOpen] = useState(false);
   const [insertContent, setInsertContent] = useState("");
@@ -366,6 +370,33 @@ export function AgentColumn({ agent }: AgentColumnProps) {
       setReorderState(null);
     }
   }, [agent.challenges, reorderState]);
+
+  // アーカイブビュー（Issue #50 ①）: ライブ盤面（D&D 並べ替え・差し込み・実行中
+  // セクション）とは独立した読み取り専用の表示に切り替える。すべてのフックは
+  // 上で無条件に呼び出し済みのため、ここで早期 return しても Rules of Hooks に
+  // 反しない。表示粒度はミニマル（既存 TaskCard をそのまま流用。id/title/status
+  // 相当のみで、runningRuns 等ライブ専用の追加情報は渡さない）。
+  if (archiveMode) {
+    return (
+      <section className="agent-column">
+        <div className="agent-column-header">
+          <h2 className="agent-column-title">{agent.name}</h2>
+        </div>
+        <div className="agent-column-body">
+          {agent.archivedChallenges.map((challenge) => (
+            <div key={challenge.id} className="agent-column-row-group">
+              <div
+                className="agent-column-row"
+                data-testid={`agent-column-archive-row-${challenge.id}`}
+              >
+                <TaskCard challenge={challenge} agentName={agent.name} />
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+    );
+  }
 
   const handleDrop = (
     event: React.DragEvent<HTMLElement>,

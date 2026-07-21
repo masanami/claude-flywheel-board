@@ -20,6 +20,7 @@ function agentBoard(overrides: Partial<AgentBoard> = {}): AgentBoard {
     parseErrors: [],
     cycleStatus: "idle",
     runningRuns: [],
+    archivedChallenges: [],
     ...overrides,
   };
 }
@@ -360,5 +361,166 @@ describe("Board", () => {
     expect(toggle).toBeDisabled();
     expect(screen.getByText("承認待ちタスク")).toBeInTheDocument();
     expect(screen.queryByText("完了タスク")).not.toBeInTheDocument();
+  });
+
+  describe("アーカイブ表示（Issue #50 ①）", () => {
+    it("アーカイブ表示トグルをONにすると、challenges ではなく archivedChallenges が表示される", async () => {
+      const { Board } = await import("./Board.tsx");
+      render(<Board />);
+
+      act(() => {
+        latestOptions().onSnapshot(
+          snapshot([
+            agentBoard({
+              name: "medical",
+              challenges: [
+                {
+                  id: "C-001",
+                  title: "現行タスク",
+                  status: "着手中",
+                  needsHuman: false,
+                },
+              ],
+              archivedChallenges: [
+                {
+                  id: "C-900",
+                  title: "アーカイブ済みタスク",
+                  status: "完了",
+                  needsHuman: false,
+                },
+              ],
+            }),
+          ]),
+        );
+      });
+
+      expect(screen.getByText("現行タスク")).toBeInTheDocument();
+      expect(
+        screen.queryByText("アーカイブ済みタスク"),
+      ).not.toBeInTheDocument();
+
+      act(() => {
+        screen.getByRole("button", { name: /アーカイブ表示/ }).click();
+      });
+
+      expect(screen.getByText("アーカイブ済みタスク")).toBeInTheDocument();
+      expect(screen.queryByText("現行タスク")).not.toBeInTheDocument();
+    });
+
+    it("アーカイブが空のエージェントでもクラッシュせず空表示になる", async () => {
+      const { Board } = await import("./Board.tsx");
+      render(<Board />);
+
+      act(() => {
+        latestOptions().onSnapshot(
+          snapshot([agentBoard({ name: "medical", archivedChallenges: [] })]),
+        );
+      });
+
+      act(() => {
+        screen.getByRole("button", { name: /アーカイブ表示/ }).click();
+      });
+
+      expect(screen.getByText("medical")).toBeInTheDocument();
+    });
+
+    it("アーカイブ表示中は実行中セクションも隠れる", async () => {
+      const { Board } = await import("./Board.tsx");
+      render(<Board />);
+
+      act(() => {
+        latestOptions().onSnapshot(
+          snapshot([
+            agentBoard({
+              name: "medical",
+              runningRuns: [
+                {
+                  kind: "adhoc",
+                  key: "adhoc-1",
+                  title: "実行中タスク",
+                  startedAt: "2026-07-16T09:00:00.000Z",
+                  stale: false,
+                },
+              ],
+            }),
+          ]),
+        );
+      });
+
+      expect(
+        screen.getByRole("heading", { name: "⚡ 実行中", level: 3 }),
+      ).toBeInTheDocument();
+
+      act(() => {
+        screen.getByRole("button", { name: /アーカイブ表示/ }).click();
+      });
+
+      expect(
+        screen.queryByRole("heading", { name: "⚡ 実行中", level: 3 }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("アーカイブ表示中はライブ用フィルタ（すべて/承認待ち/完了を表示）が無効化される", async () => {
+      const { Board } = await import("./Board.tsx");
+      render(<Board />);
+
+      act(() => {
+        latestOptions().onSnapshot(snapshot([agentBoard({ name: "medical" })]));
+      });
+
+      act(() => {
+        screen.getByRole("button", { name: /アーカイブ表示/ }).click();
+      });
+
+      expect(screen.getByRole("button", { name: "すべて" })).toBeDisabled();
+      expect(
+        screen.getByRole("button", { name: "🔔 承認待ち" }),
+      ).toBeDisabled();
+      expect(screen.getByRole("button", { name: "完了を表示" })).toBeDisabled();
+    });
+
+    it("アーカイブ表示トグルをOFFに戻すとライブ表示に戻る", async () => {
+      const { Board } = await import("./Board.tsx");
+      render(<Board />);
+
+      act(() => {
+        latestOptions().onSnapshot(
+          snapshot([
+            agentBoard({
+              name: "medical",
+              challenges: [
+                {
+                  id: "C-001",
+                  title: "現行タスク",
+                  status: "着手中",
+                  needsHuman: false,
+                },
+              ],
+              archivedChallenges: [
+                {
+                  id: "C-900",
+                  title: "アーカイブ済みタスク",
+                  status: "完了",
+                  needsHuman: false,
+                },
+              ],
+            }),
+          ]),
+        );
+      });
+
+      const toggle = screen.getByRole("button", { name: /アーカイブ表示/ });
+      act(() => {
+        toggle.click();
+      });
+      act(() => {
+        toggle.click();
+      });
+
+      expect(screen.getByText("現行タスク")).toBeInTheDocument();
+      expect(
+        screen.queryByText("アーカイブ済みタスク"),
+      ).not.toBeInTheDocument();
+    });
   });
 });
