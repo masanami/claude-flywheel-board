@@ -30,11 +30,56 @@ const FONT_SIZE_PX = 14;
 export const createXtermInstance: CreateXtermInstance = (container) => {
   const terminal = new Terminal({
     // ターミナル領域はライト/ダームテーマに関わらずダーク固定（要件どおり）。
-    theme: { background: "#17181c", foreground: "#e7e7ea" },
+    theme: {
+      background: "#17181c",
+      foreground: "#e7e7ea",
+      // 補完候補（dim/ゴースト表示）用のグレー。background より明るく
+      // foreground より暗い明度に固定し、通常入力文字とはっきり区別できる
+      // ようにする（#46）。xterm.js の minimumContrastRatio は既定値が
+      // 1（＝補正なし。型定義コメント "1: The default, do nothing." 参照）
+      // のため明示指定はしない。既定のままで dim の明度差が意図せず
+      // 持ち上げられる心配は無いと確認済み。
+      brightBlack: "#6c6f78",
+    },
     convertEol: true,
     fontFamily: MONOSPACE_FONT_FAMILY,
     fontSize: FONT_SIZE_PX,
   });
+
+  // ターミナル上の選択範囲を Cmd+C で OS クリップボードへコピーできるように
+  // する（#44）。xterm.js は選択→クリップボードの自動コピーを行わないため、
+  // attachCustomKeyEventHandler でキー入力を横取りする。
+  //
+  // このハンドラは xterm.js が内部でアタッチする隠し textarea の keydown/
+  // keyup/keypress リスナの中から呼ばれるものであり、attach-input-gate.ts が
+  // capture フェーズで container に貼る keydown リスナ（ゲートを開く役割）
+  // とは別のレイヤーで動作する（両モジュールの前提はそちらのファイル冒頭
+  // コメントを参照）。capture フェーズのリスナは常にこの層より先に発火する
+  // ため、Cmd+C のキー入力そのものは通常のキー入力と同様にゲートを開く
+  // （＝互いを妨げない）。
+  //
+  // event.type === "keydown" に限定するのは、xterm.js が同一ハンドラを keyup
+  // でも呼び出すため（コピー操作後も選択は残るので isCopyShortcut かつ
+  // hasSelection() が keyup でも真になり、writeText が二重発火してしまう）。
+  //
+  // 選択がある場合のみ getSelection() をクリップボードへ書き出し、false を
+  // 返して xterm.js の通常処理（onData 発火）を止める。選択が無い通常の
+  // キー入力（Ctrl+C による SIGINT 相当のシグナル送出等）では true を返し、
+  // 既存の入力転送フローを一切妨げない。
+  terminal.attachCustomKeyEventHandler((event) => {
+    const isCopyShortcut =
+      event.type === "keydown" &&
+      event.metaKey &&
+      event.key.toLowerCase() === "c";
+    if (isCopyShortcut && terminal.hasSelection()) {
+      // クリップボード書き込みの失敗（フォーカス喪失・権限拒否等）はコピー
+      // 操作自体の失敗に留め、ターミナルの他の動作には影響させない。
+      navigator.clipboard.writeText(terminal.getSelection()).catch(() => {});
+      return false;
+    }
+    return true;
+  });
+
   const fitAddon = new FitAddon();
   terminal.loadAddon(fitAddon);
   terminal.open(container);
