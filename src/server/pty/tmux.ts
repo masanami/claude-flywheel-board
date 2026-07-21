@@ -67,8 +67,8 @@ export function createTmuxClient(deps: TmuxClientDeps = {}): TmuxClient {
     hasSession(sessionName) {
       return runHasSessionCheck("tmux", ["has-session", "-t", sessionName]);
     },
-    newSession(sessionName, cwd) {
-      return runCommand("tmux", [
+    async newSession(sessionName, cwd) {
+      await runCommand("tmux", [
         "new-session",
         "-d",
         "-s",
@@ -76,6 +76,36 @@ export function createTmuxClient(deps: TmuxClientDeps = {}): TmuxClient {
         "-c",
         cwd,
       ]);
+      // 全画面 alt-screen UI（例: `/plugin`）で単独 Esc が tmux の既定 escape-time
+      // （500ms）分だけ遅延・取りこぼしになる問題への対処（Issue #45）。
+      //
+      // escape-time は tmux 上「セッションオプション」として set-option -t
+      // <session> で設定を試みても、実機検証の結果、実際にはサーバ全体
+      // （同一 tmux サーバを共有する全セッション）に適用される（tmux の
+      // escape-time 特有の挙動）。ここでは実際の挙動に合わせて -g
+      // （グローバル/サーバスコープ）を明示的に使う。board が管理する tmux
+      // セッション同士だけでなく、同一ユーザーが同じデフォルトソケットで
+      // 使う他の tmux セッションにも影響し得るが、escape-time 0 化はローカル
+      // 用途では概ね無害なため許容する（親チケットのクリティカル設計決定でも
+      // サーバ/セッションスコープいずれも許容されている）。
+      //
+      // set-option 自体の失敗（万一 tmux サーバが直後に落ちた等）は
+      // ベストエフォートとして扱い、newSession 全体を失敗させない。
+      // セッション作成成功後に set-option だけが reject すると、
+      // ensureTmuxSession の重複セッション再確認ロジック（hasSession の
+      // 再チェックで存在すれば成功扱いにする経路）が意図せずこのエラーを
+      // 握り潰してしまう（本来は duplicate-session エラー用の回復パス）。
+      // set-option 失敗をここで明示的に吸収することで、その紛らわしい
+      // 経路に依存せず、newSession の成否をセッション作成の成否だけに
+      // 一致させる。
+      try {
+        await runCommand("tmux", ["set-option", "-g", "escape-time", "0"]);
+      } catch (error) {
+        console.warn(
+          `tmux escape-time の設定に失敗しました（セッション "${sessionName}" 自体は作成済み）:`,
+          error,
+        );
+      }
     },
     sendKeysLiteral(sessionName, command) {
       // -l（literal）フラグのみを付与し、Enter に相当する追加キー送信は行わない。
