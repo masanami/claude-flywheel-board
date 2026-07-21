@@ -54,15 +54,16 @@ medical	/path/to/medical-agent
 bi	/path/to/bi-agent
 EOF
 
-# 起動（開発）
+# 起動（開発。HMR あり）
 npm run dev
 
-# 起動（ビルド済みを配信）
-npm run build
-node src/server/index.ts
+# 起動（利用。ビルド済みを単一オリジンで配信）
+npm run start
 ```
 
-- ブラウザで http://127.0.0.1:4317 を開く（サーバは 127.0.0.1 にのみバインドされます）
+- **開発（`npm run dev`）**: Vite 開発サーバ（http://127.0.0.1:5173）で HMR が効く。UI(5173) と API/WS サーバ(4317) は別オリジンだが、`vite.config.ts` の dev proxy が `/api`・`/ws`・`/ws/terminal` を 4317 へ転送するため、5173 をブラウザで開くだけで動く
+- **利用（`npm run start`）**: `vite build` → `node src/server/index.ts` を1コマンドにまとめたもの（`npm run build && node src/server/index.ts` と同義）。ビルド済み UI を Hono が http://127.0.0.1:4317 で単一オリジン配信する
+- ブラウザで開発時は http://127.0.0.1:5173、利用時は http://127.0.0.1:4317 を開く（サーバは常に 127.0.0.1 にのみバインドされます）
 - マニフェストのパスは環境変数 `FLYWHEEL_FLEET_MANIFEST` で上書きできます
 
 ## claude-flywheel との関係

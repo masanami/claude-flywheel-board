@@ -11,6 +11,7 @@
     "dev:server": "node --watch src/server/index.ts",
     "dev:ui": "vite",
     "build": "vite build",
+    "start": "npm run build && node src/server/index.ts",
     "test": "vitest run",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
