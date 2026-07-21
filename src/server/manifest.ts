@@ -65,6 +65,17 @@ export function loadFleetManifest(overridePath?: string): FleetEntry[] {
       );
     }
 
+    // 末尾 "-shell" は手動シェルセッション（#57）用に予約する。tmux セッション名は
+    // agent が `flywheel-<name>`、手動シェルが `flywheel-<name>-shell`（session.ts）
+    // のため、agent 名 "foo-shell" を許すと agent "foo" の shell セッションと
+    // tmux セッション名が衝突し、入力・prefill の分離が破綻する。ここで拒否して
+    // 衝突を構造的に不可能にする。
+    if (name.endsWith("-shell")) {
+      throw new Error(
+        `fleet マニフェストの ${lineNo} 行目が不正です（agent 名の末尾 "-shell" は手動シェルセッション用に予約されています。別の名前にしてください）: "${line}"`,
+      );
+    }
+
     if (seenNames.has(name)) {
       throw new Error(
         `fleet マニフェストの ${lineNo} 行目が不正です（name "${name}" が重複しています）: "${line}"`,

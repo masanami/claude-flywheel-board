@@ -358,6 +358,9 @@ export function TerminalPane({
   };
 
   const handleSplitMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
+    // ドラッグ中に左右の xterm パネル上を横切ってもテキスト選択が始まらない
+    // ようにする（#44/#51 のコピー/ペースト体験を壊さないため。CodeRabbit 指摘）。
+    event.preventDefault();
     const startX = event.clientX;
     const startWidth = agentPaneWidth;
 

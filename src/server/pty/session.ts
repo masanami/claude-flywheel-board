@@ -11,13 +11,10 @@ export type TerminalSessionKind = "agent" | "shell";
  * - kind: "agent"（既定・後方互換）: `flywheel-<agent-name>`
  * - kind: "shell"（#57）: `flywheel-<agent-name>-shell`（手動シェル用の独立セッション）
  *
- * 注意（命名の前提）: 接尾辞 `-shell` は本用途で予約する。agent 名は
- * サニタイズしない仕様のため、`foo` と `foo-shell` の2エージェントが同一
- * マニフェストに併存すると、agent `foo` の shell セッション名と agent
- * `foo-shell` の agent セッション名がともに `flywheel-foo-shell` になり衝突する。
- * これは病的な命名構成（ローカルの利用者管理設定）でのみ発生し、prefill は
- * kind で別経路に遮断されるため自動実行事故には至らないが、`-shell` を末尾に
- * 持つ agent 名は避けること。
+ * 命名の前提: 接尾辞 `-shell` は本用途で予約する。agent 名 `foo-shell` を
+ * 許すと agent `foo` の shell セッション名（`flywheel-foo-shell`）と衝突しうるため、
+ * `-shell` で終わる agent 名は `loadFleetManifest`（manifest.ts）が読み込み時に
+ * 拒否する。これにより衝突は構造的に発生しない。
  */
 export function terminalSessionName(
   agentName: string,
