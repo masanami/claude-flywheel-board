@@ -24,6 +24,12 @@ type TaskCardProps = {
   onReorderConfirm?: () => void;
   // 並べ替えモード中の Escape によるキャンセル通知。
   onReorderCancel?: () => void;
+  // 読み取り専用表示（アーカイブビュー #50 ①）。true のときドラッグ・並べ替え
+  // といったライブ操作アフォーダンス（draggable / Alt+↑↓ ヒント）を抑止する。
+  // アーカイブ側は並べ替えハンドラを結線しないため、これらは無反応の空振り
+  // アフォーダンスになり、スクリーンリーダーへの誤告知にもなるため隠す。
+  // クリックでの詳細モーダル表示（読み取り）は維持する。
+  readOnly?: boolean;
 };
 
 // D&D 並べ替え（#16）でドラッグ中の課題IDを伝搬するための dataTransfer キー。
@@ -77,6 +83,7 @@ export function TaskCard({
   onReorderMove,
   onReorderConfirm,
   onReorderCancel,
+  readOnly,
 }: TaskCardProps) {
   const [isTooltipVisible, setIsTooltipVisible] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -138,7 +145,7 @@ export function TaskCard({
         ref={triggerRef}
         type="button"
         className="task-card"
-        draggable
+        draggable={!readOnly}
         data-needs-human={challenge.needsHuman || undefined}
         aria-describedby={tooltipVisible ? tooltipId : undefined}
         onMouseEnter={showTooltip}
@@ -159,6 +166,9 @@ export function TaskCard({
           }
         }}
         onDragStart={(event) => {
+          if (readOnly) {
+            return;
+          }
           event.dataTransfer.setData(CHALLENGE_DRAG_MIME, challenge.id);
           event.dataTransfer.setData(AGENT_NAME_DRAG_MIME, agentName);
           event.dataTransfer.effectAllowed = "move";
@@ -168,7 +178,9 @@ export function TaskCard({
           // キーボードでの並べ替え（#25）: Alt+ArrowUp/Down は isReordering の
           // 値に関わらず常に通知する（最初の押下がモード開始を兼ねるため、
           // 開始判定自体は呼び出し元の AgentColumn に委ねる）。
+          // 読み取り専用（アーカイブ）では並べ替え自体を無効化する。
           if (
+            !readOnly &&
             event.altKey &&
             (event.key === "ArrowUp" || event.key === "ArrowDown")
           ) {
@@ -211,7 +223,7 @@ export function TaskCard({
             </span>
           )}
         </div>
-        {isFocused && (
+        {isFocused && !readOnly && (
           <div className="task-card-reorder-hint">Alt+↑/↓ で並べ替え</div>
         )}
       </button>

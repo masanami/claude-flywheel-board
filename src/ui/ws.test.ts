@@ -47,6 +47,7 @@ function boardSnapshot(): BoardSnapshot {
         parseErrors: [],
         cycleStatus: "idle",
         runningRuns: [],
+        archivedChallenges: [],
       },
     ],
   };
@@ -60,6 +61,7 @@ function agentBoard(): AgentBoard {
     parseErrors: [],
     cycleStatus: "idle",
     runningRuns: [],
+    archivedChallenges: [],
   };
 }
 

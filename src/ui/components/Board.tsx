@@ -50,6 +50,9 @@ export function Board() {
   const [filter, setFilter] = useState<BoardFilter>("all");
   // 完了ステータスのデフォルト非表示（Issue #50 ②）。default false。
   const [showCompleted, setShowCompleted] = useState(false);
+  // アーカイブビュー（Issue #50 ①）。true の間は盤面全体をライブ台帳から
+  // challenge-archive*.md 表示へ切り替える。default false。
+  const [archiveMode, setArchiveMode] = useState(false);
 
   useEffect(() => {
     const socket = connectBoardSocket({
@@ -78,21 +81,29 @@ export function Board() {
         onChange={setFilter}
         showCompleted={showCompleted}
         onShowCompletedChange={setShowCompleted}
+        archiveMode={archiveMode}
+        onArchiveModeChange={setArchiveMode}
       />
       <div className="board-columns">
         {agents.map((agent) => (
           <AgentColumn
             key={agent.name}
-            agent={{
-              ...agent,
-              challenges: visibleChallenges(
-                agent.challenges,
-                filter,
-                showCompleted,
-              ),
-              // 承認待ちフィルタ選択時は実行中セクションも隠す（P3-2）。
-              runningRuns: filter === "needsHuman" ? [] : agent.runningRuns,
-            }}
+            archiveMode={archiveMode}
+            agent={
+              archiveMode
+                ? agent
+                : {
+                    ...agent,
+                    challenges: visibleChallenges(
+                      agent.challenges,
+                      filter,
+                      showCompleted,
+                    ),
+                    // 承認待ちフィルタ選択時は実行中セクションも隠す（P3-2）。
+                    runningRuns:
+                      filter === "needsHuman" ? [] : agent.runningRuns,
+                  }
+            }
           />
         ))}
       </div>

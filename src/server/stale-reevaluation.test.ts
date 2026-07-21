@@ -11,6 +11,7 @@ describe("startStaleReevaluation", () => {
       parseErrors: [],
       cycleStatus: "idle",
       runningRuns: [],
+      archivedChallenges: [],
       ...overrides,
     };
   }

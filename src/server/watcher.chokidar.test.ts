@@ -55,7 +55,7 @@ beforeEach(() => {
 });
 
 describe("startFleetWatcher", () => {
-  it("chokidar.watch を全 repo の challenge-ledger.md / journal/index.jsonl / .flywheel/runs.jsonl パスで呼び出す", () => {
+  it("chokidar.watch を全 repo の challenge-ledger.md / journal/index.jsonl / .flywheel/runs.jsonl / repo ディレクトリ自体（アーカイブ監視用）のパスで呼び出す（Issue #50 ①）", () => {
     const fake = mockChokidarWatch();
     const cache = createMemoryBoardCache();
     const onAgentUpdate = vi.fn();
@@ -67,15 +67,22 @@ describe("startFleetWatcher", () => {
     );
 
     expect(watch).toHaveBeenCalledTimes(1);
-    const [watchedPaths] = vi.mocked(watch).mock.calls[0] ?? [];
+    const [watchedPaths, options] = vi.mocked(watch).mock.calls[0] ?? [];
     expect(watchedPaths).toEqual([
       path.join(agentA.path, "challenge-ledger.md"),
       path.join(agentA.path, "journal", "index.jsonl"),
       path.join(agentA.path, ".flywheel", "runs.jsonl"),
+      agentA.path,
       path.join(agentB.path, "challenge-ledger.md"),
       path.join(agentB.path, "journal", "index.jsonl"),
       path.join(agentB.path, ".flywheel", "runs.jsonl"),
+      agentB.path,
     ]);
+    // アーカイブ監視のため repo ディレクトリ自体を watch 対象に含めるが、
+    // chokidar v5 は glob 非対応（v4 で撤廃済み）なので glob 文字列ではなく
+    // 実ディレクトリパスを渡し、depth: 0 で再帰監視を防ぐ（repo 全体を
+    // 監視してしまう regression を避ける）。
+    expect(options).toMatchObject({ depth: 0 });
 
     void fleetWatcher.close();
     expect(fake.close).toHaveBeenCalled();
@@ -119,6 +126,47 @@ describe("startFleetWatcher", () => {
     });
 
     fake.emit("unlink", path.join(agentA.path, "journal", "index.jsonl"));
+
+    await waitUntil(() => onAgentUpdate.mock.calls.length > 0);
+
+    expect(onAgentUpdate).toHaveBeenCalledTimes(1);
+    expect(onAgentUpdate.mock.calls[0]?.[0]?.name).toBe("agent-a");
+
+    await fleetWatcher.close();
+  });
+
+  it("challenge-archive*.md の add イベント（新規アーカイブファイルの出現）で該当 repo が再スキャンされる（Issue #50 ①）", async () => {
+    const fake = mockChokidarWatch();
+    const cache = createMemoryBoardCache();
+    const onAgentUpdate = vi.fn();
+
+    const fleetWatcher = startFleetWatcher([agentA], cache, onAgentUpdate, {
+      debounceMs: 30,
+      fullRescanIntervalMs: 10 * 60 * 1000,
+    });
+
+    // 年次分割ファイル名でも、entry.path 直下であれば同一 repo として解決される。
+    fake.emit("add", path.join(agentA.path, "challenge-archive-2026.md"));
+
+    await waitUntil(() => onAgentUpdate.mock.calls.length > 0);
+
+    expect(onAgentUpdate).toHaveBeenCalledTimes(1);
+    expect(onAgentUpdate.mock.calls[0]?.[0]?.name).toBe("agent-a");
+
+    await fleetWatcher.close();
+  });
+
+  it("challenge-archive*.md の unlink イベントでも該当 repo が再スキャンされる（Issue #50 ①）", async () => {
+    const fake = mockChokidarWatch();
+    const cache = createMemoryBoardCache();
+    const onAgentUpdate = vi.fn();
+
+    const fleetWatcher = startFleetWatcher([agentA], cache, onAgentUpdate, {
+      debounceMs: 30,
+      fullRescanIntervalMs: 10 * 60 * 1000,
+    });
+
+    fake.emit("unlink", path.join(agentA.path, "challenge-archive.md"));
 
     await waitUntil(() => onAgentUpdate.mock.calls.length > 0);
 

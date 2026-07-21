@@ -38,6 +38,13 @@ export type AgentBoard = {
   cycleStatus: AgentCycleStatus;
   /** kind: "delegate" | "adhoc" の実行中 Run のみ（cycle は cycleStatus 側で表現するため除外）。 */
   runningRuns: Run[];
+  /**
+   * Issue #50 ①: challenge-archive*.md（年次分割 glob）から読み込んだ完了課題。
+   * 表示粒度はミニマル（id/title/status 相当。既存 Challenge 型・parseLedger を
+   * そのまま流用し、summary 等の追加導出は行わない）。アーカイブファイルが
+   * 1つも無い場合は空配列（NFR-05: 独自解釈を持ち込まず、既存台帳パーサに一本化する）。
+   */
+  archivedChallenges: Challenge[];
 };
 
 export type BoardSnapshot = {
@@ -49,6 +56,8 @@ export type ReplaceAgentInput = {
   path: string;
   challenges: Challenge[];
   parseErrors: ParseError[];
+  /** 省略時は空配列（Issue #50 ①以前の既存呼び出し・テストとの後方互換）。 */
+  archivedChallenges?: Challenge[];
 };
 
 export interface BoardCache {
@@ -134,6 +143,7 @@ export function createMemoryBoardCache(
         name: input.name,
         path: input.path,
         challenges: sortChallenges(input.challenges),
+        archivedChallenges: sortChallenges(input.archivedChallenges ?? []),
         parseErrors: input.parseErrors,
       });
     },
