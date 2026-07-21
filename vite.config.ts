@@ -11,6 +11,27 @@ export default defineConfig({
   server: {
     // NFR-03: UI 開発サーバも 127.0.0.1 固定。外部から上書きできる口は作らない。
     host: "127.0.0.1",
+    // dev(5173) と Node サーバ(4317) は別オリジンのため、/api・/ws を明示的に
+    // Node サーバへ転送する（本番ビルド後は Hono が同一オリジン配信するため不要）。
+    // 転送先は常に 127.0.0.1 固定（NFR-03）。
+    proxy: {
+      "/api": {
+        target: "http://127.0.0.1:4317",
+        changeOrigin: true,
+      },
+      // WS は正規表現キーで `^/ws$` `^/ws/terminal` にスコープする。
+      // 単純な文字列プレフィックス "/ws" だと、Board.tsx が import する
+      // `/ws.ts`（Vite が実際にリクエストするソースモジュールの静的アセットパス）
+      // まで巻き込んでしまい、そちらが 404 になって画面が白くなる（既知の落とし穴）。
+      "^/ws$": {
+        target: "ws://127.0.0.1:4317",
+        ws: true,
+      },
+      "^/ws/terminal": {
+        target: "ws://127.0.0.1:4317",
+        ws: true,
+      },
+    },
   },
   build: {
     outDir: fileURLToPath(new URL("./dist/ui", import.meta.url)),
