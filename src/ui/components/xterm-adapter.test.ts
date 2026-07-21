@@ -145,6 +145,28 @@ describe("createXtermInstance", () => {
     expect(writeText).not.toHaveBeenCalled();
   });
 
+  it("選択がある状態でも Ctrl+C（ctrlKey）はコピーとして横取りせず、SIGINT 相当の入力転送を妨げない（#44 コピーは Cmd+C 限定・回帰防止）", async () => {
+    const writeText = vi.fn();
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    mockHasSelection = true;
+    mockSelectionText = "selected text";
+
+    const { createXtermInstance } = await import("./xterm-adapter.ts");
+    createXtermInstance(document.createElement("div"));
+
+    const handler = customKeyEventHandlers[0];
+    if (!handler)
+      throw new Error("attachCustomKeyEventHandler が登録されていません");
+    const event = new KeyboardEvent("keydown", { key: "c", ctrlKey: true });
+
+    const result = handler(event);
+
+    // 判定条件を metaKey || ctrlKey に誤変更すると Ctrl+C を横取りし SIGINT が
+    // 壊れる。ここで true・未書き込みを固定してその回帰を検知する。
+    expect(result).toBe(true);
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
   it("keyup イベントではクリップボードへ書き込まない（xterm.js が同一ハンドラを keydown/keyup 双方で呼ぶことによる二重発火の回帰防止）", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });

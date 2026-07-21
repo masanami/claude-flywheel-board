@@ -72,6 +72,13 @@ export const createXtermInstance: CreateXtermInstance = (container) => {
       event.metaKey &&
       event.key.toLowerCase() === "c";
     if (isCopyShortcut && terminal.hasSelection()) {
+      // Clipboard API 非対応環境（navigator.clipboard が undefined）では、
+      // .writeText へのプロパティアクセスで同期例外になるのを避けるため、
+      // コピーを諦めて通常キー処理へ委ねる（true を返す）。127.0.0.1 固定
+      // バインド＝secure context のため現実の到達性は限定的だが防御的に扱う。
+      if (!navigator.clipboard) {
+        return true;
+      }
       // クリップボード書き込みの失敗（フォーカス喪失・権限拒否等）はコピー
       // 操作自体の失敗に留め、ターミナルの他の動作には影響させない。
       navigator.clipboard.writeText(terminal.getSelection()).catch(() => {});
