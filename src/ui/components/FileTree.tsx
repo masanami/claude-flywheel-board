@@ -25,19 +25,18 @@ export function FileTree({ refreshToken, onSelectFile }: FileTreeProps) {
   const [treeState, setTreeState] = useState<TreeState>({ status: "loading" });
   // 選択状態はクリック時の視覚的フィードバックのためだけにローカル
   // （uncontrolled）に保持する。選択ファイルの内容取得・レンダリングは
-  // #69 のスコープであり、ここでは上位（PreviewPanel）へ伝えるコールバック
-  // の受け渡し口までを実装する。
+  // #69 で実装済み（onSelectFile 経由で PreviewPanel が取得・表示する）。
   // - リフレッシュ後は明示的にリセットしない（`repo/file` キーが新しい
   //   一覧に存在すれば選択状態を保持し、無くなっていれば該当ボタンが
   //   存在しないため自然にハイライトが外れる）。
   // - パネルを閉じると PreviewPanel 側で body（＝FileTree）がアンマウント
-  //   されるため、この selectedKey も破棄される。一方 PreviewPanel 自身は
-  //   アンマウントされず、PreviewPanel が #69 で「表示中ファイル」state を
-  //   持つ場合はそちらは再オープン後も残りうる。選択状態を PreviewPanel へ
-  //   持ち上げて FileTree を controlled component にするか、パネルを
-  //   閉じた時点で表示中ファイル state も破棄するかは、#69 の設計判断と
-  //   する（セルフレビュー指摘。本チケットのスコープ「選択状態を上位へ
-  //   伝えるコールバックの受け渡し口まで」を超える先取り実装はしない）。
+  //   されるため、この selectedKey も破棄される。#69 では「選択状態を
+  //   PreviewPanel へ持ち上げて controlled にする」ではなく「パネルを
+  //   閉じた時点で PreviewPanel 側の表示中ファイル state も破棄する」方を
+  //   採用した（PreviewPanel.tsx の handleToggleOpen が閉じる操作時に
+  //   selectedFile を null に戻し、表示中の Markdown 内容も idle 状態へ戻す）。
+  //   これにより両者は常に「未選択」状態で揃った状態からパネルの再オープンを
+  //   迎える。
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
 
   // マウント時（＝パネルオープン時）と refreshToken 変化時（＝リフレッシュ
