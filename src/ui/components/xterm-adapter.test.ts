@@ -6,6 +6,9 @@ const terminalCtor = vi.fn();
 // attachCustomKeyEventHandler に登録されたハンドラを捕捉し、テストから
 // キーイベントを模して直接呼び出せるようにする（#44 コピー連携の検証用）。
 const customKeyEventHandlers: Array<(event: KeyboardEvent) => boolean> = [];
+// onSelectionChange に登録されたコールバックを捕捉し、テストから選択変化を
+// 模して直接呼び出せるようにする（#73 copy-on-select の検証用）。
+const selectionChangeCallbacks: Array<() => void> = [];
 // hasSelection/getSelection の戻り値をテストごとに差し替えるための状態。
 let mockHasSelection = false;
 let mockSelectionText = "";
@@ -19,6 +22,9 @@ vi.mock("@xterm/xterm", () => ({
     open() {}
     attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean) {
       customKeyEventHandlers.push(handler);
+    }
+    onSelectionChange(callback: () => void) {
+      selectionChangeCallbacks.push(callback);
     }
     hasSelection() {
       return mockHasSelection;
@@ -49,6 +55,7 @@ describe("createXtermInstance", () => {
   beforeEach(() => {
     terminalCtor.mockClear();
     customKeyEventHandlers.length = 0;
+    selectionChangeCallbacks.length = 0;
     mockHasSelection = false;
     mockSelectionText = "";
   });
@@ -185,5 +192,103 @@ describe("createXtermInstance", () => {
 
     expect(result).toBe(true);
     expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it("選択が非空になった時点で選択テキストを即座にクリップボードへコピーする（#73 copy-on-select。TUI の再描画で選択が消える前にコピーを完了させる）", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+
+    const { createXtermInstance } = await import("./xterm-adapter.ts");
+    createXtermInstance(document.createElement("div"));
+
+    expect(selectionChangeCallbacks).toHaveLength(1);
+    const onSelectionChange = selectionChangeCallbacks[0];
+    if (!onSelectionChange)
+      throw new Error("onSelectionChange が登録されていません");
+
+    mockHasSelection = true;
+    mockSelectionText = "copied on select";
+    onSelectionChange();
+
+    expect(writeText).toHaveBeenCalledWith("copied on select");
+  });
+
+  it("選択が空になった時点ではクリップボードを上書きしない（直前にコピーした内容を残す）", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+
+    const { createXtermInstance } = await import("./xterm-adapter.ts");
+    createXtermInstance(document.createElement("div"));
+
+    const onSelectionChange = selectionChangeCallbacks[0];
+    if (!onSelectionChange)
+      throw new Error("onSelectionChange が登録されていません");
+
+    mockHasSelection = false;
+    mockSelectionText = "";
+    onSelectionChange();
+
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it("navigator.clipboard が undefined の環境では選択変化イベントで例外を投げず何も起きない", async () => {
+    vi.stubGlobal("navigator", {});
+
+    const { createXtermInstance } = await import("./xterm-adapter.ts");
+    createXtermInstance(document.createElement("div"));
+
+    const onSelectionChange = selectionChangeCallbacks[0];
+    if (!onSelectionChange)
+      throw new Error("onSelectionChange が登録されていません");
+
+    mockHasSelection = true;
+    mockSelectionText = "no clipboard api";
+
+    expect(() => onSelectionChange()).not.toThrow();
+  });
+
+  it("直前にコピーした文字列と同一の選択変化通知では writeText を再度呼ばない（ドラッグ中の高頻度発火の抑制）", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+
+    const { createXtermInstance } = await import("./xterm-adapter.ts");
+    createXtermInstance(document.createElement("div"));
+
+    const onSelectionChange = selectionChangeCallbacks[0];
+    if (!onSelectionChange)
+      throw new Error("onSelectionChange が登録されていません");
+
+    mockHasSelection = true;
+    mockSelectionText = "same text";
+    onSelectionChange();
+    onSelectionChange();
+
+    expect(writeText).toHaveBeenCalledTimes(1);
+  });
+
+  it("選択解除を挟んで再び同一文字列を選択した場合は writeText を呼び直す（dedup状態は選択解除でリセットされる。selfレビュー指摘の回帰防止）", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+
+    const { createXtermInstance } = await import("./xterm-adapter.ts");
+    createXtermInstance(document.createElement("div"));
+
+    const onSelectionChange = selectionChangeCallbacks[0];
+    if (!onSelectionChange)
+      throw new Error("onSelectionChange が登録されていません");
+
+    mockHasSelection = true;
+    mockSelectionText = "reselected text";
+    onSelectionChange();
+
+    mockHasSelection = false;
+    mockSelectionText = "";
+    onSelectionChange();
+
+    mockHasSelection = true;
+    mockSelectionText = "reselected text";
+    onSelectionChange();
+
+    expect(writeText).toHaveBeenCalledTimes(2);
   });
 });
