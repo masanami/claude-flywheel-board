@@ -129,7 +129,7 @@ if (isMainModule) {
       );
     },
   );
-  const { broadcastAgentUpdate } = attachWebSocketServer(
+  const { broadcastAgentUpdate, closeMdWatches } = attachWebSocketServer(
     server,
     cache,
     getFleetEntries,
@@ -162,6 +162,10 @@ if (isMainModule) {
       // プロセスは直後の process.exit(0) で終了するため意図的に待たない
       // （fire-and-forget）。OS 側でハンドルは回収されるため実害はない。
       void fleetWatcher.close();
+      // Issue #67 セルフレビュー指摘対応: プレビュー用動的 watch（md_subscribe
+      // 経由）も fleetWatcher と同様に chokidar ハンドルを保持するため、同じ
+      // fire-and-forget 方針でシャットダウン時に解放する。
+      void closeMdWatches();
       staleReevaluationTimer.close();
       server.close();
       process.exit(0);
