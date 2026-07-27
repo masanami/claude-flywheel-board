@@ -4,6 +4,7 @@ import type { ServerType } from "@hono/node-server";
 import type { Hono } from "hono";
 import { WebSocket, WebSocketServer } from "ws";
 import type { AgentBoard, BoardCache } from "./cache.ts";
+import type { GetFleetEntries } from "./manifest.ts";
 
 // クリティカル設計決定（親 Issue #1）: HTTP / WS とも 127.0.0.1 固定バインドを前提に、
 // Host / Origin ヘッダを検証し localhost / 127.0.0.1 以外からのアクセスを拒否する。
@@ -50,8 +51,22 @@ export function isAllowedOrigin(
 /**
  * /api/* ルートに Origin / Host 検証と board API を登録する。
  * 静的配信ミドルウェアより先に呼び出すこと（呼び出し側 index.ts の責務）。
+ *
+ * getFleetEntries（Issue #62）: md 系エンドポイント（別チケット）はすべて manifest
+ * から repo ルートを解決する必要があるため、fleet entries を遅延参照できるコール
+ * バックを受け取れるようにする（pty/bridge.ts の
+ * createTerminalWebSocketServer({ getFleetEntries }) と同じ DI パターン。
+ * TerminalBridgeDeps.getFleetEntries と同様、必須の依存として受け取る。省略時の
+ * 既定値は上位の createApp / getServeOptions 側でのみ持たせ、この関数自身は暗黙に
+ * 空 fleet へフォールバックしない）。md エンドポイント自体はこのチケットのスコープ外
+ * のため、現時点ではこの関数の本体は getFleetEntries を一切呼び出さない（今後 md
+ * 用の app.get(...) をこの関数内に追加する際の受け皿としてのみ存在する）。
  */
-export function registerApiRoutes(app: Hono, cache: BoardCache): void {
+export function registerApiRoutes(
+  app: Hono,
+  cache: BoardCache,
+  getFleetEntries: GetFleetEntries,
+): void {
   app.use("/api/*", async (c, next) => {
     if (!isAllowedHost(c.req.header("host"))) {
       return c.text("Forbidden", 403);
@@ -87,10 +102,16 @@ export type BoardWebSocketServer = {
  * @hono/node-server の serve() が返す http.Server に WebSocket（/ws）をアタッチする。
  * noServer: true で生成し、upgrade イベントを手動でハンドシェイクすることで
  * Origin / Host 検証を挟む（HTTP と同じ許可条件）。
+ *
+ * getFleetEntries（Issue #62）: registerApiRoutes と同じ受け皿（必須の依存として
+ * 受け取る。既定値は上位の createApp / getServeOptions 側でのみ持たせる）。この
+ * 関数の本体も現時点では getFleetEntries を呼び出さない（md 系 WS メッセージ種別を
+ * 追加する別チケットの受け皿）。
  */
 export function attachWebSocketServer(
   server: ServerType,
   cache: BoardCache,
+  getFleetEntries: GetFleetEntries,
 ): BoardWebSocketServer {
   const wss = new WebSocketServer({ noServer: true });
 

@@ -8,7 +8,8 @@ import { Hono } from "hono";
 import { attachWebSocketServer, registerApiRoutes } from "./api.ts";
 import type { BoardCache } from "./cache.ts";
 import { createMemoryBoardCache } from "./cache.ts";
-import { loadFleetManifest } from "./manifest.ts";
+import { NO_FLEET_ENTRIES, loadFleetManifest } from "./manifest.ts";
+import type { GetFleetEntries } from "./manifest.ts";
 import {
   TERMINAL_WS_PATH,
   createTerminalWebSocketServer,
@@ -31,11 +32,21 @@ const UI_DIST_ROOT = fileURLToPath(new URL("../../dist/ui", import.meta.url));
  * キャッシュ。破棄しても正本ファイルから再構築できる）。呼び出し側は
  * HTTP（このアプリ）と WS（attachWebSocketServer）で同一インスタンスを共有できる
  * よう、明示的に渡すこともできる。
+ *
+ * getFleetEntries は省略時 fleet entries 無し（NO_FLEET_ENTRIES）扱いになる。md 系
+ * エンドポイント（別チケット、Issue #62）が repo ルート解決のために fleet entries を
+ * 必要とするため、registerApiRoutes まで貫通させる受け皿として先に通す（実際に参照
+ * するエンドポイントの追加はこのチケットのスコープ外）。本番の起動経路
+ * （isMainModule ブロック）では常に loadFleetManifest() 由来の getFleetEntries を
+ * 明示的に渡すため、この既定値は既存呼び出し元・テストの後方互換のためだけに存在する。
  */
-export function createApp(cache: BoardCache = createMemoryBoardCache()) {
+export function createApp(
+  cache: BoardCache = createMemoryBoardCache(),
+  getFleetEntries: GetFleetEntries = NO_FLEET_ENTRIES,
+) {
   const app = new Hono();
   // api ルートは静的配信ミドルウェアより先に登録する。
-  registerApiRoutes(app, cache);
+  registerApiRoutes(app, cache, getFleetEntries);
   app.use("/*", serveStatic({ root: UI_DIST_ROOT }));
   return app;
 }
@@ -48,9 +59,10 @@ export function createApp(cache: BoardCache = createMemoryBoardCache()) {
 export function getServeOptions(
   port: number = DEFAULT_PORT,
   cache: BoardCache = createMemoryBoardCache(),
+  getFleetEntries: GetFleetEntries = NO_FLEET_ENTRIES,
 ) {
   return {
-    fetch: createApp(cache).fetch,
+    fetch: createApp(cache, getFleetEntries).fetch,
     hostname: LISTEN_HOSTNAME,
     port,
   };
@@ -90,24 +102,42 @@ export function attachTerminalUpgradeRouting(
 const isMainModule = process.argv[1] === fileURLToPath(import.meta.url);
 
 if (isMainModule) {
+  // fleet マニフェスト読込（FR-06）。fleet.tsv 自体の不正（存在しない・書式違反）は
+  // 起動を止める致命的エラーとして扱う（manifest.ts の既存方針）。個々の repo
+  // パス不存在等は scanAgent 側で ParseError 化され、この起動フローは止まらない。
+  //
+  // loadFleetManifest() の呼び出しはこの1箇所のみとし、HTTP（registerApiRoutes /
+  // createApp 経由）・WS（attachWebSocketServer）・pty ブリッジ
+  // （createTerminalWebSocketServer）のすべてが getFleetEntries 経由で
+  // 同一インスタンスを共有する（Issue #62）。この「1箇所のみ」という不変条件は
+  // NFR-01 のような他の不変条件と同様、単体テストではなくコードレビュー／grep で
+  // 検証する。isMainModule ガード配下は実プロセスの起動処理であり、テストから
+  // 到達させる対象ではないため。確認コマンド（コメント行を構造的に除外するので、
+  // この注釈コメント自身には一致しない）:
+  //   grep -n "loadFleetManifest(" src/server/index.ts | grep -v '^[0-9]*:[[:space:]]*\(//\|\*\)'
+  // → 実際の呼び出し行（`const fleetEntries = loadFleetManifest();`）1件のみに一致するはず。
+  const fleetEntries = loadFleetManifest();
+  const getFleetEntries: GetFleetEntries = () => fleetEntries;
+
   // HTTP と WS で同一の cache インスタンスを共有する。
   const cache = createMemoryBoardCache();
-  const server = serve(getServeOptions(DEFAULT_PORT, cache), (info) => {
-    console.log(
-      `claude-flywheel-board listening on http://${LISTEN_HOSTNAME}:${info.port}`,
-    );
-  });
-  const { broadcastAgentUpdate } = attachWebSocketServer(server, cache);
-
-  // fleet マニフェスト読込 → 起動時フルスキャンでキャッシュ構築 → watcher 起動
-  // （FR-06）。fleet.tsv 自体の不正（存在しない・書式違反）は起動を止める致命的
-  // エラーとして扱う（manifest.ts の既存方針）。個々の repo パス不存在等は
-  // scanAgent 側で ParseError 化され、この起動フローは止まらない。
-  const fleetEntries = loadFleetManifest();
+  const server = serve(
+    getServeOptions(DEFAULT_PORT, cache, getFleetEntries),
+    (info) => {
+      console.log(
+        `claude-flywheel-board listening on http://${LISTEN_HOSTNAME}:${info.port}`,
+      );
+    },
+  );
+  const { broadcastAgentUpdate } = attachWebSocketServer(
+    server,
+    cache,
+    getFleetEntries,
+  );
 
   // pty ブリッジ（P2-1）: /ws/terminal を既存の /ws と共存させる形で追加登録する。
   const terminalWebSocketServer = createTerminalWebSocketServer({
-    getFleetEntries: () => fleetEntries,
+    getFleetEntries,
   });
   attachTerminalUpgradeRouting(server, terminalWebSocketServer);
 
