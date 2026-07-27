@@ -69,6 +69,7 @@ describe("spawnPtyProcess", () => {
     const ptyProcess = spawnPtyProcess("/bin/cat", [], {
       cwd: process.cwd(),
     });
+    const exited = waitForExit(ptyProcess);
 
     try {
       expect(spawnSpy).toHaveBeenCalledWith(
@@ -78,6 +79,7 @@ describe("spawnPtyProcess", () => {
       );
     } finally {
       ptyProcess.kill();
+      await exited;
       spawnSpy.mockRestore();
     }
   });
