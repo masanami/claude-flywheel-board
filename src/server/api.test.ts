@@ -1,8 +1,11 @@
+import * as fs from "node:fs";
 import type { AddressInfo } from "node:net";
 import * as net from "node:net";
+import * as os from "node:os";
+import * as path from "node:path";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import {
   attachWebSocketServer,
@@ -165,15 +168,60 @@ describe("registerApiRoutes", () => {
   });
 });
 
-// Issue #62: md 系エンドポイント（別チケット）の受け皿として、fleet entries を
-// 遅延参照できる getFleetEntries コールバックを registerApiRoutes に供給できることを
-// 確認する。md エンドポイント自体はまだ存在せず、この関数の本体はまだ getFleetEntries
-// を一切参照しないため、ここで検証できるのは以下の2点に限られる（「受け手に渡した値が
-// 実際に使われる」ところまではこのチケットの範囲では検証できない。それは最初の md
-// エンドポイントを追加するチケット側で担保する）。
+describe("GET /api/md/tree（Issue #65）", () => {
+  let tempRoot: string;
+  let repoRoot: string;
+
+  beforeEach(() => {
+    tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "api-md-tree-test-"));
+    repoRoot = path.join(tempRoot, "repo");
+    fs.mkdirSync(repoRoot);
+  });
+
+  afterEach(() => {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  });
+
+  it("getFleetEntries から取得した repo 配下の .md 一覧を { repos } で返す", async () => {
+    fs.writeFileSync(path.join(repoRoot, "doc.md"), "# doc");
+    fs.writeFileSync(path.join(repoRoot, "notes.txt"), "not markdown");
+
+    const cache = createMemoryBoardCache();
+    const app = new Hono();
+    const getFleetEntries = (): readonly FleetEntry[] => [
+      { name: "myrepo", path: repoRoot },
+    ];
+    registerApiRoutes(app, cache, getFleetEntries);
+
+    const res = await app.request("/api/md/tree", {
+      headers: { host: "localhost" },
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toEqual({ repos: [{ name: "myrepo", files: ["doc.md"] }] });
+  });
+
+  it("不正な Host ヘッダの /api/md/tree リクエストは 403 を返す（既存の Host/Origin 検証を継承）", async () => {
+    const cache = createMemoryBoardCache();
+    const app = new Hono();
+    registerApiRoutes(app, cache, () => []);
+
+    const res = await app.request("/api/md/tree", {
+      headers: { host: "evil.example.com" },
+    });
+
+    expect(res.status).toBe(403);
+  });
+});
+
+// Issue #62: fleet entries を遅延参照できる getFleetEntries コールバックを
+// registerApiRoutes に供給できることを確認する。GET /api/md/tree（Issue #65）は
+// 上の describe で別途検証済みのため、ここで検証するのは以下の2点に限る。
 // (1) 第3引数を渡しても既存エンドポイントの挙動に回帰が無いこと（後方互換）
-// (2) ルート登録処理自体は getFleetEntries を呼び出さない（今後 md ハンドラを
-//     この関数内に追加する際、登録時点での eager 評価を持ち込まないための回帰ガード）
+// (2) /api/board へのリクエストのみでは getFleetEntries を呼び出さない
+//     （md 系ハンドラ内でのみリクエストのたびに呼び出す設計の回帰ガード。
+//     ルート登録時点での eager 評価を持ち込まないことも同時に確認する）
 describe("registerApiRoutes の getFleetEntries 供給経路（Issue #62）", () => {
   it("getFleetEntries を渡しても GET /api/board の応答は変わらない（後方互換）", async () => {
     const cache = createMemoryBoardCache();

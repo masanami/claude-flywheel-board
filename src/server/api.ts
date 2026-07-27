@@ -5,6 +5,7 @@ import type { Hono } from "hono";
 import { WebSocket, WebSocketServer } from "ws";
 import type { AgentBoard, BoardCache } from "./cache.ts";
 import type { GetFleetEntries } from "./manifest.ts";
+import { listMdTree } from "./md/tree.ts";
 
 // クリティカル設計決定（親 Issue #1）: HTTP / WS とも 127.0.0.1 固定バインドを前提に、
 // Host / Origin ヘッダを検証し localhost / 127.0.0.1 以外からのアクセスを拒否する。
@@ -52,15 +53,15 @@ export function isAllowedOrigin(
  * /api/* ルートに Origin / Host 検証と board API を登録する。
  * 静的配信ミドルウェアより先に呼び出すこと（呼び出し側 index.ts の責務）。
  *
- * getFleetEntries（Issue #62）: md 系エンドポイント（別チケット）はすべて manifest
+ * getFleetEntries（Issue #62）: md 系エンドポイント（Issue #65 以降）はすべて manifest
  * から repo ルートを解決する必要があるため、fleet entries を遅延参照できるコール
  * バックを受け取れるようにする（pty/bridge.ts の
  * createTerminalWebSocketServer({ getFleetEntries }) と同じ DI パターン。
  * TerminalBridgeDeps.getFleetEntries と同様、必須の依存として受け取る。省略時の
  * 既定値は上位の createApp / getServeOptions 側でのみ持たせ、この関数自身は暗黙に
- * 空 fleet へフォールバックしない）。md エンドポイント自体はこのチケットのスコープ外
- * のため、現時点ではこの関数の本体は getFleetEntries を一切呼び出さない（今後 md
- * 用の app.get(...) をこの関数内に追加する際の受け皿としてのみ存在する）。
+ * 空 fleet へフォールバックしない）。ルート登録処理自体（この関数の呼び出し時点）は
+ * getFleetEntries を呼び出さない。各 md ハンドラ内でリクエストのたびに呼び出す
+ * （eager 評価を持ち込まない）。
  */
 export function registerApiRoutes(
   app: Hono,
@@ -90,6 +91,8 @@ export function registerApiRoutes(
     }
     return c.json(cache.getLog(agent, challenge));
   });
+
+  app.get("/api/md/tree", (c) => c.json(listMdTree(getFleetEntries())));
 }
 
 export type BoardWebSocketServer = {
