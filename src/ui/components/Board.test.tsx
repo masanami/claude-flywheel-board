@@ -221,6 +221,19 @@ describe("Board", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("PreviewPanel（右サイドパネル）が組み込まれている（#64）", async () => {
+    const { Board } = await import("./Board.tsx");
+    render(<Board />);
+
+    act(() => {
+      latestOptions().onSnapshot(snapshot([agentBoard({ name: "medical" })]));
+    });
+
+    expect(
+      screen.getByRole("button", { name: "プレビューパネルを開く" }),
+    ).toBeInTheDocument();
+  });
+
   it("アンマウント時に close() を呼ぶ", async () => {
     const { Board } = await import("./Board.tsx");
     const { unmount } = render(<Board />);
