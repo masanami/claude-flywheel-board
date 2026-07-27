@@ -1,17 +1,19 @@
 import { useState } from "react";
+import { FileTree } from "./FileTree.tsx";
 
 // board 右サイドの開閉式パネル（マークダウンプレビュー機能全体の設計 —
-// docs/features/markdown-preview.md「機能全体の設計」節）のシェルのみを
-// 実装する（#64）。中身（ファイルツリー・Markdownレンダリング・ライブ更新）は
-// 後続チケット（#68/#69/#70）のスコープであり、ここでは placeholder のみ置く。
+// docs/features/markdown-preview.md「機能全体の設計」節）。開閉・幅ドラッグは
+// #64 のシェル実装、ファイルツリー（FileTree）とリフレッシュボタンの結線は
+// 本チケット（#68）で追加した。Markdownレンダリング・ライブ更新は後続チケット
+// （#69/#70）のスコープであり、選択ファイルの内容取得・表示はまだ行わない。
 //
 // 右サイドパネルは flex でボードカラム領域を圧縮して確保する
 // （下部ターミナル領域の高さ・幅には一切影響しない）。組み込み側は
 // Board.tsx を参照。本コンポーネント自体は自分の幅のみを inline style で
 // 制御し、周囲のレイアウトには関与しない（KISS）。
 //
-// board は状態ファイルへ一切書き込まない（NFR-01）。本コンポーネントは
-// 開閉・幅ドラッグの UI 状態のみを持ち、API 呼び出し・書き込み経路は
+// board は状態ファイルへ一切書き込まない（NFR-01）。本コンポーネントおよび
+// FileTree は GET /api/md/tree の読み取りのみを行い、書き込み経路は
 // 一切持たない。
 //
 // clamp() は TerminalPane.tsx にも同名の実装がある（セルフレビュー指摘:
@@ -35,6 +37,11 @@ export function PreviewPanel() {
   // セルフレビュー時に説明可能: プレースホルダ表示より初期非表示を優先）。
   const [open, setOpen] = useState(false);
   const [width, setWidth] = useState(DEFAULT_WIDTH_PX);
+  // FileTree への再取得トリガー（#68）。値の変化のみで FileTree 側の
+  // useEffect が再フェッチする（宣言的な結線。ポーリングはしない）。
+  // パネルオープン時の取得は FileTree のマウント自体が担う（body ごと
+  // 開閉でアンマウント/リマウントされるため）。
+  const [refreshToken, setRefreshToken] = useState(0);
 
   const handleResizeMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
     // ドラッグ中にテキスト選択が始まらないようにする（TerminalPane の
@@ -108,12 +115,10 @@ export function PreviewPanel() {
               className="preview-panel-refresh-button"
               data-testid="preview-panel-refresh-button"
               aria-label="ファイルツリーを更新"
-              // 結線は FileTree タスク（#68）で行うため、現時点では no-op
-              // （チケット #64 の完了条件で明示的に許容されている）。
-              // title でユーザーに準備中であることを伝える（セルフレビュー
-              // 指摘: 押しても無反応であることの手掛かりが無かった）。
-              title="ファイルツリーの更新（準備中）"
-              onClick={() => {}}
+              title="ファイルツリーを更新"
+              // refreshToken を変化させるだけで FileTree 側の useEffect が
+              // 再フェッチする（#68。宣言的な結線、ポーリングは追加しない）。
+              onClick={() => setRefreshToken((prev) => prev + 1)}
             >
               ⟳
             </button>
@@ -142,7 +147,13 @@ export function PreviewPanel() {
             data-testid="preview-panel-body"
             id="preview-panel-body"
           >
-            プレビューはここに表示されます（準備中）
+            <FileTree
+              refreshToken={refreshToken}
+              // ファイル選択の内容取得・レンダリングは #69/#70 のスコープ。
+              // ここでは選択状態を上位へ伝えるコールバックの受け渡し口までを
+              // 実装し、実際の消費先が無いため no-op のままにする（YAGNI）。
+              onSelectFile={() => {}}
+            />
           </div>
         )}
       </div>

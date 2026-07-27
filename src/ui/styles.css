@@ -841,3 +841,66 @@ body {
   color: var(--board-muted-fg);
   font-size: 0.85rem;
 }
+
+/* ファイルツリー（#68）。repo ごとにファイルパスの一覧を表示するだけの
+ * 平坦なリスト（KISS。過度な階層UIコンポーネントは導入しない）。
+ */
+.file-tree-loading,
+.file-tree-error,
+.file-tree-empty {
+  font-size: 0.8rem;
+  color: var(--board-muted-fg);
+}
+
+.file-tree-error {
+  color: var(--board-needs-human-border);
+}
+
+.file-tree-status {
+  font-size: 0.75rem;
+  color: var(--board-muted-fg);
+  margin-bottom: 0.5rem;
+}
+
+.file-tree-status-error {
+  color: var(--board-needs-human-border);
+}
+
+.file-tree-repo {
+  margin-bottom: 0.75rem;
+}
+
+.file-tree-repo-name {
+  font-weight: 600;
+  font-size: 0.8rem;
+  margin-bottom: 0.25rem;
+  color: var(--board-fg);
+}
+
+.file-tree-file-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.file-tree-file-button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: var(--board-muted-fg);
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 0.15rem 0.3rem;
+  border-radius: 3px;
+  /* repo 相対パスは空白を含まないことが多く、パネル幅を超えると通常の
+   * 折り返しが効かないため、任意の文字位置での折り返しを許可する
+   * （セルフレビュー指摘: 狭いパネル幅ではみ出す）。 */
+  overflow-wrap: anywhere;
+}
+
+.file-tree-file-button[aria-current="true"] {
+  background: var(--board-chip-active-bg);
+  color: var(--board-chip-active-fg);
+}
