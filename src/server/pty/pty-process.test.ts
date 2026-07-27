@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import * as nodePty from "node-pty";
+import { describe, expect, it, vi } from "vitest";
 import { spawnPtyProcess } from "./pty-process.ts";
 
 // node-pty 自体は Mock せず、tmux に依存しない軽量な実プロセス（/bin/echo）を
@@ -60,6 +61,24 @@ describe("spawnPtyProcess", () => {
       expect(() => ptyProcess.resume()).not.toThrow();
     } finally {
       ptyProcess.kill();
+    }
+  });
+
+  it("TERM を xterm-256color として宣言する（Issue #71: xterm-color=8色宣言だと tmux が256色のAI補完候補ゴーストテキストを8色に丸めて通常文字と同色に潰してしまう回帰防止）", async () => {
+    const spawnSpy = vi.spyOn(nodePty, "spawn");
+    const ptyProcess = spawnPtyProcess("/bin/cat", [], {
+      cwd: process.cwd(),
+    });
+
+    try {
+      expect(spawnSpy).toHaveBeenCalledWith(
+        "/bin/cat",
+        [],
+        expect.objectContaining({ name: "xterm-256color" }),
+      );
+    } finally {
+      ptyProcess.kill();
+      spawnSpy.mockRestore();
     }
   });
 });
