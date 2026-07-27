@@ -87,6 +87,45 @@ export const createXtermInstance: CreateXtermInstance = (container) => {
     return true;
   });
 
+  // 選択直後に即座にクリップボードへコピーする（copy-on-select、#73）。
+  // Claude Code の TUI はスピナー/ストリーミングで常時再描画しており、xterm.js
+  // は表示内容が書き換わると選択を解除する。そのため「選択を保持したまま
+  // Cmd+C を押す」前提（上記 attachCustomKeyEventHandler）は、再描画によって
+  // Cmd+C を押す前に選択が消えてしまい機能しないケースがある。選択が確定した
+  // 時点（onSelectionChange 発火時）で即座にコピーしておけば、後で選択が
+  // 再描画により消えてもクリップボードには既に内容が入っているため実害がない。
+  //
+  // 直前にコピーした文字列を保持し、同一内容の再通知（ドラッグ中の高頻度
+  // 発火）では writeText を呼び直さない（無駄な呼び出しの抑制。KISS を保ち
+  // 複雑なデバウンス機構は導入しない）。
+  let lastCopiedSelection: string | null = null;
+  terminal.onSelectionChange(() => {
+    if (!terminal.hasSelection()) {
+      // 選択が解除された時点で dedup 状態もリセットする。保持したままだと、
+      // 選択解除後に外部で別の内容をクリップボードにコピーし、その後
+      // ターミナルで再び同じテキストを選択し直しても再コピーされず、
+      // 「選択したのにクリップボードが古いままになる」直感に反する挙動に
+      // なるため（selfレビュー指摘）。
+      lastCopiedSelection = null;
+      return;
+    }
+    const selection = terminal.getSelection();
+    if (!selection) {
+      return;
+    }
+    if (selection === lastCopiedSelection) {
+      return;
+    }
+    if (!navigator.clipboard) {
+      return;
+    }
+    // 呼び出し直後（Promise 解決前）に来る同一内容の再通知も抑制したいため、
+    // 呼び出し前に同期的に記録する（write 失敗時は catch で握り潰すのみで、
+    // 失敗を理由に再送を許可する必要はない設計）。
+    lastCopiedSelection = selection;
+    navigator.clipboard.writeText(selection).catch(() => {});
+  });
+
   const fitAddon = new FitAddon();
   terminal.loadAddon(fitAddon);
   terminal.open(container);
