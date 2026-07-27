@@ -4,6 +4,7 @@ import { connectBoardSocket } from "../ws.ts";
 import { AgentColumn } from "./AgentColumn.tsx";
 import type { BoardFilter } from "./FilterBar.tsx";
 import { FilterBar } from "./FilterBar.tsx";
+import { PreviewPanel } from "./PreviewPanel.tsx";
 
 // 完了ステータスのデフォルト非表示（Issue #50 ②）。防波堤としての表示フィルタ
 // であり、台帳の書き込み・パース挙動には一切影響しない（NFR-01）。
@@ -84,28 +85,36 @@ export function Board() {
         archiveMode={archiveMode}
         onArchiveModeChange={setArchiveMode}
       />
-      <div className="board-columns">
-        {agents.map((agent) => (
-          <AgentColumn
-            key={agent.name}
-            archiveMode={archiveMode}
-            agent={
-              archiveMode
-                ? agent
-                : {
-                    ...agent,
-                    challenges: visibleChallenges(
-                      agent.challenges,
-                      filter,
-                      showCompleted,
-                    ),
-                    // 承認待ちフィルタ選択時は実行中セクションも隠す（P3-2）。
-                    runningRuns:
-                      filter === "needsHuman" ? [] : agent.runningRuns,
-                  }
-            }
-          />
-        ))}
+      {/* 右サイドパネル（PreviewPanel）は flex でボードカラム領域を圧縮して
+          確保する（下部ターミナル領域の高さ・幅には一切影響しない。
+          docs/features/markdown-preview.md「機能全体の設計」節）。この行
+          （board-main-row）のみを横並びにし、FilterBar は従来通り縦積みの
+          最上部に残す（#64）。 */}
+      <div className="board-main-row">
+        <div className="board-columns">
+          {agents.map((agent) => (
+            <AgentColumn
+              key={agent.name}
+              archiveMode={archiveMode}
+              agent={
+                archiveMode
+                  ? agent
+                  : {
+                      ...agent,
+                      challenges: visibleChallenges(
+                        agent.challenges,
+                        filter,
+                        showCompleted,
+                      ),
+                      // 承認待ちフィルタ選択時は実行中セクションも隠す（P3-2）。
+                      runningRuns:
+                        filter === "needsHuman" ? [] : agent.runningRuns,
+                    }
+              }
+            />
+          ))}
+        </div>
+        <PreviewPanel />
       </div>
     </div>
   );

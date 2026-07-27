@@ -161,8 +161,36 @@ body {
   cursor: not-allowed;
 }
 
+/* board-columns と PreviewPanel を横並びにする行（#64）。この行だけが
+ * flex row であり、FilterBar は従来通り縦積みの最上部に残る。PreviewPanel
+ * が開いた分だけ board-columns 側が圧縮される（下部ターミナル領域には
+ * 一切影響しない。docs/features/markdown-preview.md「機能全体の設計」節）。
+ */
+.board-main-row {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  /* セルフレビュー指摘（2周目）: board-columns に min-width を持たせたこと
+   * で、狭いウィンドウ幅 + 広いパネル幅の組み合わせでは行全体の内容幅が
+   * ビューポートを超えうる。この行自身がスクロールコンテナを持たないと、
+   * はみ出しが document レベルの横スクロールとして board の外（下部
+   * ターミナル領域を含む画面全体）へ漏れてしまう。overflow-x: auto で
+   * はみ出しをこの行の内側に閉じ込め、.terminal-pane 側には一切影響しない
+   * ようにする。
+   */
+  overflow-x: auto;
+}
+
 .board-columns {
   flex: 1;
+  /* PreviewPanel は最大 800px の固定幅（flex-shrink:0）を持つため、狭い
+   * ウィンドウ幅かつパネルを広げた組み合わせでは board-columns 側が 0px
+   * まで潰れ得る（セルフレビュー指摘: #57 の terminal-pane-panel-shell
+   * min-width と同型の問題）。agent-column の最小 flex-basis（280px）を
+   * 下回らない範囲は確保し、それ以上は overflow-x: auto の横スクロールに
+   * 委ねる。
+   */
+  min-width: 280px;
   display: flex;
   gap: 1rem;
   padding: 1rem;
@@ -753,4 +781,63 @@ body {
   flex-shrink: 0;
   cursor: col-resize;
   background: var(--terminal-resize-handle-bg);
+}
+
+/* マークダウンプレビュー右サイドパネル（#64）。.board-main-row 内で
+ * board-columns と横並びになる。閉じている間は幅を指定せず、ヘッダ
+ * （開くボタンのみ）分の幅に自然に収まる。
+ */
+.preview-panel {
+  flex-shrink: 0;
+  display: flex;
+  background: var(--board-column-bg);
+  border-left: 1px solid var(--board-border);
+}
+
+.preview-panel-resize-handle {
+  width: 4px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: var(--board-border);
+}
+
+.preview-panel-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.preview-panel-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid var(--board-border);
+}
+
+.preview-panel-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.preview-panel-refresh-button,
+.preview-panel-toggle-button {
+  border: none;
+  background: transparent;
+  color: var(--board-fg);
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 0.2rem 0.4rem;
+}
+
+.preview-panel-body {
+  flex: 1;
+  min-height: 0;
+  padding: 0.75rem;
+  overflow-y: auto;
+  color: var(--board-muted-fg);
+  font-size: 0.85rem;
 }
