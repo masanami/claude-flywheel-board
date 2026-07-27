@@ -6,6 +6,16 @@ const FLEET_MANIFEST_ENV_KEY = "FLYWHEEL_FLEET_MANIFEST";
 
 export type FleetEntry = { name: string; path: string };
 
+/**
+ * fleet entries を遅延参照するためのコールバック型（Issue #62）。
+ * pty/bridge.ts（先行実装）・api.ts・index.ts で同一シグネチャを個別に手書きすると
+ * ドリフトの元になるため、FleetEntry を所有するこのモジュールで一元定義し共有する。
+ */
+export type GetFleetEntries = () => readonly FleetEntry[];
+
+/** fleet entries 未供給時の既定値（空の fleet 扱い）。呼び出し元が省略した場合に使う。 */
+export const NO_FLEET_ENTRIES: GetFleetEntries = () => [];
+
 export function resolveFleetManifestPath(overridePath?: string): string {
   if (overridePath) {
     return overridePath;

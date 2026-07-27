@@ -2,7 +2,7 @@ import type { IncomingMessage } from "node:http";
 import type { Socket } from "node:net";
 import { WebSocket, WebSocketServer } from "ws";
 import { isAllowedHost, isAllowedOrigin } from "../api.ts";
-import type { FleetEntry } from "../manifest.ts";
+import type { FleetEntry, GetFleetEntries } from "../manifest.ts";
 import { parseClientMessage } from "./messages.ts";
 import { createNodePtySpawner } from "./pty-process.ts";
 import type { PtyProcess, SpawnTerminalPty } from "./pty-process.ts";
@@ -19,7 +19,7 @@ export const TERMINAL_WS_PATH = "/ws/terminal";
 
 export type TerminalBridgeDeps = {
   /** fleet マニフェストの entry 一覧。呼び出し側が読み込んだものを渡す（このモジュールは manifest.ts を直接読まない）。 */
-  getFleetEntries: () => readonly FleetEntry[];
+  getFleetEntries: GetFleetEntries;
   tmux?: TmuxClient;
   spawnPty?: SpawnTerminalPty;
   /** バックプレッシャー制御（低水位監視）の setInterval DI 用。既定 global setInterval。 */
