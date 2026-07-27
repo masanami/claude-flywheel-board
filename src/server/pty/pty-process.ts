@@ -39,7 +39,11 @@ export function spawnPtyProcess(
   options: SpawnPtyOptions,
 ): PtyProcess {
   const ptyProcess = nodePty.spawn(file, args, {
-    name: "xterm-color",
+    // xterm.js 側は 256色/truecolor を描画できるが、ここを "xterm-color"（8色の
+    // 古い terminfo）で宣言すると、tmux が「接続先端末は8色までしか出せない」と
+    // 判断し、Claude Code の 256色グレー/dim（AI 補完候補の表示等）を 8 色に丸めて
+    // 通常文字と同色に潰してしまう（Issue #71）。実能力に合わせて 256色を宣言する。
+    name: "xterm-256color",
     cols: options.cols ?? DEFAULT_COLS,
     rows: options.rows ?? DEFAULT_ROWS,
     cwd: options.cwd,
