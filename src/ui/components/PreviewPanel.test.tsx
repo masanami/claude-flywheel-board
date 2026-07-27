@@ -1,11 +1,24 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { act } from "react";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PreviewPanel } from "./PreviewPanel.tsx";
 
-// PreviewPanel シェル（#64）: 開閉・幅ドラッグ・レイアウトのみを検証する。
-// 中身（ファイルツリー・Markdownレンダリング・ライブ更新）は後続チケット
-// （#68/#69/#70）のスコープのため、ここでは placeholder の存在のみ確認する。
+// PreviewPanel: 開閉・幅ドラッグ（#64）・FileTree/リフレッシュボタンの結線
+// （#68）を検証する。FileTree 自体の一覧表示・選択挙動の詳細は
+// FileTree.test.tsx の責務のため、ここでは「body 内に FileTree が組み込まれ、
+// リフレッシュボタン押下で再取得がトリガーされる」ことのみを確認する。
+// Markdownレンダリング・ライブ更新は後続チケット（#69/#70）のスコープ。
+
+// パネルを開くと FileTree がマウントされ GET /api/md/tree を叩くため、
+// 個別の挙動を検証しないテストでは解決しない Promise で最小限のスタブを
+// 当てる（CardDetailModal.test.tsx と同じ流儀）。
+beforeEach(() => {
+  vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("PreviewPanel", () => {
   it("初期状態では閉じており、開くボタンが表示される", () => {
@@ -63,31 +76,64 @@ describe("PreviewPanel", () => {
     ).toHaveAttribute("aria-expanded", "true");
   });
 
-  it("パネルヘッダにリフレッシュボタンの placeholder が表示され、クリックしても状態が変化しない（no-op）", () => {
+  it("パネルを開くと本文領域内に FileTree が組み込まれる", () => {
     render(<PreviewPanel />);
 
     act(() => {
       screen.getByRole("button", { name: "プレビューパネルを開く" }).click();
     });
 
-    const panel = screen.getByTestId("preview-panel");
-    const refreshButton = screen.getByTestId("preview-panel-refresh-button");
-    expect(refreshButton).toBeInTheDocument();
-    const widthBefore = panel.style.width;
+    const body = screen.getByTestId("preview-panel-body");
+    expect(body).toContainElement(screen.getByText(/読み込み中/));
+  });
 
+  it("パネルヘッダのリフレッシュボタン押下で FileTree のツリー再取得（fetch）がトリガーされる（#68 結線）", () => {
+    const fetchMock = vi.fn().mockReturnValue(new Promise(() => {}));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<PreviewPanel />);
+
+    act(() => {
+      screen.getByRole("button", { name: "プレビューパネルを開く" }).click();
+    });
+
+    // パネルオープン時（FileTree のマウント）で1回目の取得が起きている。
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith("/api/md/tree");
+
+    const refreshButton = screen.getByTestId("preview-panel-refresh-button");
     act(() => {
       refreshButton.click();
     });
 
-    // no-op であることを、クリック前後で状態（開閉・幅・本文表示）が
-    // 一切変化しないことで確認する（例外を投げないことだけの検証は
-    // no-op の証明にならないため、意味のあるアサーションに置き換えた
-    // — セルフレビュー指摘）。
-    expect(panel.style.width).toBe(widthBefore);
-    expect(screen.getByTestId("preview-panel-body")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    // クリック前後で開閉・幅などパネル自体の状態には影響しないことも
+    // あわせて確認する（リフレッシュはツリー再取得のみをトリガーする）。
     expect(
       screen.getByRole("button", { name: "プレビューパネルを閉じる" }),
     ).toBeInTheDocument();
+  });
+
+  it("パネルを閉じてから再度開くと、ツリーが再取得される（オープン時取得。#68 完了条件）", () => {
+    const fetchMock = vi.fn().mockReturnValue(new Promise(() => {}));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<PreviewPanel />);
+
+    act(() => {
+      screen.getByRole("button", { name: "プレビューパネルを開く" }).click();
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      screen.getByRole("button", { name: "プレビューパネルを閉じる" }).click();
+    });
+    act(() => {
+      screen.getByRole("button", { name: "プレビューパネルを開く" }).click();
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("閉じている間は幅調整ハンドルがDOMに存在しない", () => {
