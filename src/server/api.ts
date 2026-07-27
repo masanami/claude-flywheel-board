@@ -8,6 +8,8 @@ import type { AgentBoard, BoardCache } from "./cache.ts";
 import type { GetFleetEntries } from "./manifest.ts";
 import { validateMdPath } from "./md/path-validation.ts";
 import { listMdTree } from "./md/tree.ts";
+import type { MdFileChangedMessage } from "./md/watch.ts";
+import { createMdWatchRegistry, handleMdClientMessage } from "./md/watch.ts";
 
 /**
  * `GET /api/md/file` が読み取りを許可する上限サイズ（親 Issue #61 のクリティカル
@@ -160,6 +162,13 @@ export type BoardWebSocketServer = {
   wss: WebSocketServer;
   /** repo 単位の全量置き換え（watcher 由来）を接続中の全クライアントへ配信する。 */
   broadcastAgentUpdate(agent: AgentBoard): void;
+  /**
+   * Issue #67 の md watch レジストリが保持する chokidar watch をすべて解除する
+   * （サーバシャットダウン用）。既存 FleetWatcher.close() と同じ位置付けで、
+   * 呼び出し元（index.ts の SIGINT/SIGTERM ハンドラ）から fire-and-forget で
+   * 呼ばれる想定。
+   */
+  closeMdWatches(): Promise<void>;
 };
 
 /**
@@ -168,9 +177,10 @@ export type BoardWebSocketServer = {
  * Origin / Host 検証を挟む（HTTP と同じ許可条件）。
  *
  * getFleetEntries（Issue #62）: registerApiRoutes と同じ受け皿（必須の依存として
- * 受け取る。既定値は上位の createApp / getServeOptions 側でのみ持たせる）。この
- * 関数の本体も現時点では getFleetEntries を呼び出さない（md 系 WS メッセージ種別を
- * 追加する別チケットの受け皿）。
+ * 受け取る。既定値は上位の createApp / getServeOptions 側でのみ持たせる）。
+ * Issue #67 の md watch レジストリ（createMdWatchRegistry）へこのコールバックを
+ * そのまま渡し、md_subscribe ハンドラ内で repo ルート解決のたびに呼び出す
+ * （eager 評価しない DI パターンは維持する）。
  */
 export function attachWebSocketServer(
   server: ServerType,
@@ -178,6 +188,30 @@ export function attachWebSocketServer(
   getFleetEntries: GetFleetEntries,
 ): BoardWebSocketServer {
   const wss = new WebSocketServer({ noServer: true });
+
+  // セルフレビュー指摘対応（DRY）: 「JSON化 → 接続中の OPEN なクライアントへ
+  // 送る」という配信ループは broadcastAgentUpdate と md_file_changed の配信で
+  // 完全に重複していたため、共通の broadcastJson に集約する（バックプレッシャー
+  // 対応（#26）等、将来この配信経路に手を入れる箇所を1つに保つ）。
+  function broadcastJson(payload: unknown): void {
+    const json = JSON.stringify(payload);
+    for (const client of wss.clients) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(json);
+      }
+    }
+  }
+
+  // Issue #67: プレビュー用の動的 watch（開いている1ファイルのみ）を仲介する
+  // レジストリ。fleet 全体の再帰監視を行う既存 watcher.ts（board 用キャッシュ
+  // 責務）とは別モジュールとして分離済み（#36 の責務分離方針）。
+  function broadcastMdFileChanged(message: MdFileChangedMessage): void {
+    broadcastJson(message);
+  }
+  const mdWatchRegistry = createMdWatchRegistry(
+    getFleetEntries,
+    broadcastMdFileChanged,
+  );
 
   server.on(
     "upgrade",
@@ -207,16 +241,36 @@ export function attachWebSocketServer(
 
   wss.on("connection", (ws: WebSocket) => {
     ws.send(JSON.stringify({ type: "snapshot", board: cache.getSnapshot() }));
+
+    // Issue #67: md_subscribe / md_unsubscribe（クライアント→サーバ）。
+    // 既存の snapshot / agent_update はサーバ→クライアント一方向 push のみ
+    // だったため、このメッセージ種別が最初の ws.on("message", ...) 追加になる。
+    ws.on("message", (data) => {
+      handleMdClientMessage(mdWatchRegistry, ws, data.toString());
+    });
+
+    // WS 切断時にも該当クライアントの購読を確実に除去する（親 Issue #61 の
+    // クリティカル設計決定）。close イベントを取り逃すと refcount が
+    // 減らないまま chokidar watch が残り続けてしまう。
+    ws.on("close", () => {
+      mdWatchRegistry.unsubscribeClient(ws);
+    });
+    // ws は EventEmitter のため、close を伴わない異常切断（'error'）だけが
+    // 発生するケースでも購読を取りこぼさないよう、pty/bridge.ts の
+    // cleanupOnDisconnect と同じ方針で 'error' でも同じクリーンアップを行う
+    // （セルフレビュー指摘対応）。
+    ws.on("error", () => {
+      mdWatchRegistry.unsubscribeClient(ws);
+    });
   });
 
   function broadcastAgentUpdate(agent: AgentBoard): void {
-    const message = JSON.stringify({ type: "agent_update", agent });
-    for (const client of wss.clients) {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(message);
-      }
-    }
+    broadcastJson({ type: "agent_update", agent });
   }
 
-  return { wss, broadcastAgentUpdate };
+  return {
+    wss,
+    broadcastAgentUpdate,
+    closeMdWatches: () => mdWatchRegistry.closeAll(),
+  };
 }

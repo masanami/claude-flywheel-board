@@ -669,6 +669,290 @@ describe("attachWebSocketServer 統合テスト", () => {
   });
 });
 
+describe("attachWebSocketServer の md_subscribe / md_unsubscribe（Issue #67）", () => {
+  let server: ReturnType<typeof serve> | undefined;
+  let tempRoot: string;
+  let repoRoot: string;
+
+  beforeEach(() => {
+    tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "api-md-watch-test-"));
+    repoRoot = path.join(tempRoot, "repo");
+    fs.mkdirSync(repoRoot);
+  });
+
+  afterEach(() => {
+    server?.close();
+    server = undefined;
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  });
+
+  async function waitUntil(
+    condition: () => boolean,
+    { timeoutMs = 3000, intervalMs = 20 } = {},
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (condition()) {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+    throw new Error(`waitUntil: タイムアウトしました（${timeoutMs}ms）`);
+  }
+
+  async function connectClient(
+    getFleetEntries: () => readonly FleetEntry[],
+  ): Promise<WebSocket> {
+    const cache = createMemoryBoardCache();
+    const app = new Hono();
+    registerApiRoutes(app, cache, getFleetEntries);
+
+    await new Promise<void>((resolve, reject) => {
+      server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: 0 }, () =>
+        resolve(),
+      );
+      server.on("error", reject);
+    });
+    if (!server) {
+      throw new Error("server が起動していない");
+    }
+    attachWebSocketServer(server, cache, getFleetEntries);
+
+    const address = server.address() as AddressInfo;
+    const ws = new WebSocket(`ws://127.0.0.1:${address.port}/ws`, {
+      headers: { origin: "http://localhost:5173" },
+    });
+    // snapshot（接続直後の1通目）を待ち、以降のテストは md_* メッセージだけを
+    // 見れば済むようにする。
+    await new Promise<void>((resolve, reject) => {
+      ws.once("message", () => resolve());
+      ws.once("error", reject);
+    });
+    return ws;
+  }
+
+  function collectMessages(ws: WebSocket): unknown[] {
+    const messages: unknown[] = [];
+    ws.on("message", (data) => {
+      messages.push(JSON.parse(data.toString()));
+    });
+    return messages;
+  }
+
+  it("存在しない repo への md_subscribe は md_subscribe_error を該当クライアントへ返す", async () => {
+    const ws = await connectClient(() => []);
+    const messages = collectMessages(ws);
+
+    ws.send(
+      JSON.stringify({ type: "md_subscribe", repo: "unknown", path: "doc.md" }),
+    );
+
+    await waitUntil(() => messages.length > 0);
+    expect(messages[0]).toEqual({
+      type: "md_subscribe_error",
+      repo: "unknown",
+      path: "doc.md",
+    });
+
+    ws.close();
+  });
+
+  // Issue #67 完了条件（AC-7 の WS 経路）: `../` を含むパス・絶対パス・
+  // シンボリックリンク経由の repo 外パス・`.md` 以外の拡張子はすべて
+  // md_subscribe_error を返し、watch を開始しない。HTTP 側（GET /api/md/file、
+  // 上の describe("GET /api/md/file（Issue #66）")）と同じ拒否ケースを、
+  // WS md_subscribe 経路でも単体テストとして担保する。「watch が開始されない」
+  // ことは、拒否対象のファイルを直接書き換えても md_file_changed が届かない
+  // ことで確認する（chokidar 自体はモックせず、実 fs で確証する）。
+  describe("md_subscribe のパス検証（#63 共有ロジックの WS 経路適用）", () => {
+    async function assertSubscribeRejectedAndNoWatch(
+      getFleetEntries: () => readonly FleetEntry[],
+      subscribeMessage: { repo: string; path: string },
+      targetFilePath: string,
+    ): Promise<void> {
+      const ws = await connectClient(getFleetEntries);
+      const messages = collectMessages(ws);
+
+      ws.send(JSON.stringify({ type: "md_subscribe", ...subscribeMessage }));
+      await waitUntil(() => messages.length > 0);
+      expect(messages[0]).toEqual({
+        type: "md_subscribe_error",
+        ...subscribeMessage,
+      });
+
+      // セルフレビュー指摘対応: もし実装に不具合があり検証失敗時にも誤って
+      // watch を開始してしまっていた場合、その chokidar watch の確立には
+      // 一定の時間がかかる（正常系テストが「watch 確立を待ってから書き込む」
+      // としているのと同じ理由）。エラー受信直後に即書き込むと、たとえ
+      // バグで watch が開始されていても確立前の書き込みとして見逃され、
+      // このアサーションが「たまたま」パスしてしまいうる。正常系と同じ猶予を
+      // 置いてから書き込むことで、このテストが watch 未開始を実際に検証できる
+      // ようにする。
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      // 検証失敗時は watch を開始しないため、対象ファイルを書き換えても
+      // md_file_changed は届かないはず（書き換え後も一定時間待って確認する）。
+      fs.writeFileSync(
+        targetFilePath,
+        `${fs.readFileSync(targetFilePath, "utf-8")}\n# changed`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(
+        messages.some(
+          (m) => (m as { type?: string }).type === "md_file_changed",
+        ),
+      ).toBe(false);
+
+      ws.close();
+    }
+
+    it("../ を含む相対パスで repo 外への脱出を試みると md_subscribe_error を返し watch を開始しない", async () => {
+      const outsidePath = path.join(tempRoot, "outside.md");
+      fs.writeFileSync(outsidePath, "# outside");
+      const getFleetEntries = (): readonly FleetEntry[] => [
+        { name: "myrepo", path: repoRoot },
+      ];
+
+      await assertSubscribeRejectedAndNoWatch(
+        getFleetEntries,
+        { repo: "myrepo", path: "../outside.md" },
+        outsidePath,
+      );
+    });
+
+    it("絶対パスを path に渡すと md_subscribe_error を返し watch を開始しない", async () => {
+      const outsideAbsolutePath = path.join(tempRoot, "abs-outside.md");
+      fs.writeFileSync(outsideAbsolutePath, "# outside abs");
+      const getFleetEntries = (): readonly FleetEntry[] => [
+        { name: "myrepo", path: repoRoot },
+      ];
+
+      await assertSubscribeRejectedAndNoWatch(
+        getFleetEntries,
+        { repo: "myrepo", path: outsideAbsolutePath },
+        outsideAbsolutePath,
+      );
+    });
+
+    it("シンボリックリンク経由で repo 外の実体を指す場合は md_subscribe_error を返し watch を開始しない", async () => {
+      const outsideDir = path.join(tempRoot, "outside-dir");
+      fs.mkdirSync(outsideDir);
+      const secretPath = path.join(outsideDir, "secret.md");
+      fs.writeFileSync(secretPath, "# secret");
+      fs.symlinkSync(secretPath, path.join(repoRoot, "link.md"));
+      const getFleetEntries = (): readonly FleetEntry[] => [
+        { name: "myrepo", path: repoRoot },
+      ];
+
+      await assertSubscribeRejectedAndNoWatch(
+        getFleetEntries,
+        { repo: "myrepo", path: "link.md" },
+        secretPath,
+      );
+    });
+
+    it(".md 以外の拡張子は md_subscribe_error を返し watch を開始しない", async () => {
+      const notesPath = path.join(repoRoot, "notes.txt");
+      fs.writeFileSync(notesPath, "not markdown");
+      const getFleetEntries = (): readonly FleetEntry[] => [
+        { name: "myrepo", path: repoRoot },
+      ];
+
+      await assertSubscribeRejectedAndNoWatch(
+        getFleetEntries,
+        { repo: "myrepo", path: "notes.txt" },
+        notesPath,
+      );
+    });
+  });
+
+  it("有効な .md ファイルを md_subscribe すると、ファイル変更時に md_file_changed を受信する", async () => {
+    const docPath = path.join(repoRoot, "doc.md");
+    fs.writeFileSync(docPath, "# doc");
+    const getFleetEntries = (): readonly FleetEntry[] => [
+      { name: "myrepo", path: repoRoot },
+    ];
+    const ws = await connectClient(getFleetEntries);
+    const messages = collectMessages(ws);
+
+    ws.send(
+      JSON.stringify({ type: "md_subscribe", repo: "myrepo", path: "doc.md" }),
+    );
+    // chokidar の watch 確立を待ってから書き込む（確立前の書き込みは
+    // 見逃されうるため、実 chokidar を使う結合テストの定石として少し待つ）。
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    fs.writeFileSync(docPath, "# doc changed");
+
+    await waitUntil(() =>
+      messages.some((m) => (m as { type?: string }).type === "md_file_changed"),
+    );
+    const changed = messages.find(
+      (m) => (m as { type?: string }).type === "md_file_changed",
+    );
+    expect(changed).toEqual({
+      type: "md_file_changed",
+      repo: "myrepo",
+      path: "doc.md",
+    });
+
+    ws.close();
+  });
+
+  it("md_unsubscribe 後はファイル変更を通知されない", async () => {
+    const docPath = path.join(repoRoot, "doc.md");
+    fs.writeFileSync(docPath, "# doc");
+    const getFleetEntries = (): readonly FleetEntry[] => [
+      { name: "myrepo", path: repoRoot },
+    ];
+    const ws = await connectClient(getFleetEntries);
+    const messages = collectMessages(ws);
+
+    ws.send(
+      JSON.stringify({ type: "md_subscribe", repo: "myrepo", path: "doc.md" }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    ws.send(
+      JSON.stringify({
+        type: "md_unsubscribe",
+        repo: "myrepo",
+        path: "doc.md",
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    fs.writeFileSync(docPath, "# doc changed after unsubscribe");
+    // unsubscribe 後も一定時間待つが、md_file_changed は来ないはず。
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    expect(
+      messages.some((m) => (m as { type?: string }).type === "md_file_changed"),
+    ).toBe(false);
+
+    ws.close();
+  });
+
+  it("WS 切断後もファイル変更検知でサーバがクラッシュしない（クリーンアップの回帰確認）", async () => {
+    const docPath = path.join(repoRoot, "doc.md");
+    fs.writeFileSync(docPath, "# doc");
+    const getFleetEntries = (): readonly FleetEntry[] => [
+      { name: "myrepo", path: repoRoot },
+    ];
+    const ws = await connectClient(getFleetEntries);
+
+    ws.send(
+      JSON.stringify({ type: "md_subscribe", repo: "myrepo", path: "doc.md" }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    await new Promise<void>((resolve) => {
+      ws.once("close", () => resolve());
+      ws.close();
+    });
+
+    // 切断後の変更検知が例外を投げないことを確認する（クラッシュしなければ成功）。
+    fs.writeFileSync(docPath, "# doc changed after close");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  });
+});
+
 // Issue #62: attachWebSocketServer 版の getFleetEntries 供給経路。registerApiRoutes と
 // 同じ観点（後方互換・アタッチ/接続時に eager 評価しないこと）を検証する。ただし
 // registerApiRoutes 側と同様、この関数の本体はまだ getFleetEntries を一切参照しない
