@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { act } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
 import { prefill } from "../terminal-control.ts";
 import type { TerminalSocketOptions } from "../terminal-ws.ts";
@@ -120,8 +120,13 @@ function buildHarness(agents: string[]): Harness {
   };
 }
 
+beforeEach(() => {
+  localStorage.clear();
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
+  localStorage.clear();
 });
 
 describe("TerminalPane", () => {
@@ -480,7 +485,7 @@ describe("TerminalPane", () => {
       const handle = screen.getByTestId("terminal-split-handle-medical");
       expect(handle).toHaveAttribute("role", "separator");
       expect(handle).toHaveAttribute("aria-orientation", "vertical");
-      expect(handle).toHaveAttribute("aria-valuenow", "480");
+      expect(handle).toHaveAttribute("aria-valuenow", "720");
       expect(handle).toHaveAttribute("aria-valuemin", "200");
       expect(handle).toHaveAttribute("aria-valuemax", "1200");
       expect(handle).toHaveAttribute("tabIndex", "0");
@@ -510,7 +515,7 @@ describe("TerminalPane", () => {
       });
 
       expect(agentPanel.style.width).not.toBe(widthBefore);
-      expect(agentPanel.style.width).toBe("600px");
+      expect(agentPanel.style.width).toBe("840px");
     });
 
     it("ArrowRight キーでエージェントペイン幅が32px増える", async () => {
@@ -533,8 +538,8 @@ describe("TerminalPane", () => {
         fireEvent.keyDown(handle, { key: "ArrowRight" });
       });
 
-      expect(agentPanel.style.width).toBe("512px");
-      expect(handle).toHaveAttribute("aria-valuenow", "512");
+      expect(agentPanel.style.width).toBe("752px");
+      expect(handle).toHaveAttribute("aria-valuenow", "752");
     });
 
     it("ArrowLeft キーでエージェントペイン幅が32px減る", async () => {
@@ -557,8 +562,8 @@ describe("TerminalPane", () => {
         fireEvent.keyDown(handle, { key: "ArrowLeft" });
       });
 
-      expect(agentPanel.style.width).toBe("448px");
-      expect(handle).toHaveAttribute("aria-valuenow", "448");
+      expect(agentPanel.style.width).toBe("688px");
+      expect(handle).toHaveAttribute("aria-valuenow", "688");
     });
 
     it("上限（1200px）到達後は ArrowRight を押しても超えない", async () => {
@@ -609,6 +614,95 @@ describe("TerminalPane", () => {
       });
 
       expect(agentPanel.style.width).toBe("200px");
+    });
+
+    it("スプリッターのドラッグでリサイズすると、幅が localStorage に保存される（#72）", async () => {
+      const harness = buildHarness(["medical"]);
+
+      render(
+        <TerminalPane
+          connect={harness.connect}
+          createXterm={harness.createXterm}
+          fetchAgents={harness.fetchAgents}
+        />,
+      );
+
+      await screen.findByText("medical");
+
+      const handle = screen.getByTestId("terminal-split-handle-medical");
+
+      act(() => {
+        fireEvent.mouseDown(handle, { clientX: 480 });
+        fireEvent.mouseMove(window, { clientX: 600 });
+        fireEvent.mouseUp(window);
+      });
+
+      expect(localStorage.getItem("terminal-pane.agent-pane-width")).toBe(
+        "840",
+      );
+    });
+
+    it("マウント時に localStorage の妥当な保存値があれば、その値で初期幅を復元する（デフォルト値ではない）（#72）", async () => {
+      localStorage.setItem("terminal-pane.agent-pane-width", "900");
+      const harness = buildHarness(["medical"]);
+
+      render(
+        <TerminalPane
+          connect={harness.connect}
+          createXterm={harness.createXterm}
+          fetchAgents={harness.fetchAgents}
+        />,
+      );
+
+      await screen.findByText("medical");
+
+      const agentPanel = screen.getByTestId("terminal-panel-medical-agent");
+      const handle = screen.getByTestId("terminal-split-handle-medical");
+      expect(agentPanel.style.width).toBe("900px");
+      expect(handle).toHaveAttribute("aria-valuenow", "900");
+    });
+
+    it.each([
+      ["非数値文字列", "not-a-number"],
+      ["上限を超える範囲外の値", "99999"],
+      ["下限を下回る範囲外の値", "1"],
+      ["空文字列", ""],
+    ])(
+      "localStorage の値が不正（%s）な場合はデフォルト幅（720px）にフォールバックする（#72）",
+      async (_label, storedValue) => {
+        localStorage.setItem("terminal-pane.agent-pane-width", storedValue);
+        const harness = buildHarness(["medical"]);
+
+        render(
+          <TerminalPane
+            connect={harness.connect}
+            createXterm={harness.createXterm}
+            fetchAgents={harness.fetchAgents}
+          />,
+        );
+
+        await screen.findByText("medical");
+
+        const agentPanel = screen.getByTestId("terminal-panel-medical-agent");
+        expect(agentPanel.style.width).toBe("720px");
+      },
+    );
+
+    it("localStorage に保存値が無い場合はデフォルト幅（720px）で初期化する（#72）", async () => {
+      const harness = buildHarness(["medical"]);
+
+      render(
+        <TerminalPane
+          connect={harness.connect}
+          createXterm={harness.createXterm}
+          fetchAgents={harness.fetchAgents}
+        />,
+      );
+
+      await screen.findByText("medical");
+
+      const agentPanel = screen.getByTestId("terminal-panel-medical-agent");
+      expect(agentPanel.style.width).toBe("720px");
     });
   });
 
