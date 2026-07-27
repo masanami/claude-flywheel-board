@@ -34,8 +34,14 @@ const DEFAULT_HEIGHT_PX = 320;
 // 依存しない、テスト容易でシンプルな実装にする（KISS）。
 const MIN_AGENT_PANE_WIDTH_PX = 200;
 const MAX_AGENT_PANE_WIDTH_PX = 1200;
-const DEFAULT_AGENT_PANE_WIDTH_PX = 480;
+// #72: 初期値480pxは内容が折り返して見づらいという報告があり、720px（約1.5倍、
+// 既存 MAX=1200px の範囲内）に拡大した。
+const DEFAULT_AGENT_PANE_WIDTH_PX = 720;
 const SPLIT_STEP_PX = 32;
+
+// #72: ユーザーがリサイズした agentPaneWidth を記憶する localStorage キー。
+// エージェントごとの記憶は作らない（YAGNI）。全エージェント共通の単一値。
+const AGENT_PANE_WIDTH_STORAGE_KEY = "terminal-pane.agent-pane-width";
 
 type PaneKind = "agent" | "shell";
 const PANE_KINDS: readonly PaneKind[] = ["agent", "shell"];
@@ -47,6 +53,30 @@ function buildTerminalWebSocketUrl(agent: string, kind: PaneKind): string {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
+}
+
+// #72: マウント時に localStorage から前回リサイズ幅を復元する。保存値が
+// 欠損・非数値・範囲外（パース不能な文字列を含む）な場合は必ずデフォルトへ
+// フォールバックする。localStorage 自体が例外を投げる環境（プライベート
+// ブラウジング等）でも board を落とさないよう try/catch で保護する。
+function readStoredAgentPaneWidth(): number {
+  try {
+    const raw = window.localStorage.getItem(AGENT_PANE_WIDTH_STORAGE_KEY);
+    if (raw === null) {
+      return DEFAULT_AGENT_PANE_WIDTH_PX;
+    }
+    const parsed = Number(raw);
+    if (
+      !Number.isFinite(parsed) ||
+      parsed < MIN_AGENT_PANE_WIDTH_PX ||
+      parsed > MAX_AGENT_PANE_WIDTH_PX
+    ) {
+      return DEFAULT_AGENT_PANE_WIDTH_PX;
+    }
+    return parsed;
+  } catch {
+    return DEFAULT_AGENT_PANE_WIDTH_PX;
+  }
 }
 
 /** agent + kind の複合キー。ペインごとの接続・xterm・container ref を一意に識別する。 */
@@ -95,9 +125,11 @@ export function TerminalPane({
     new Set(),
   );
   const [collapsed, setCollapsed] = useState(false);
+  // height は #72 のスコープ外のため意図的に非永続（毎回 DEFAULT_HEIGHT_PX から
+  // 開始する）。agentPaneWidth のみ localStorage で記憶する（下記）。
   const [height, setHeight] = useState(DEFAULT_HEIGHT_PX);
-  const [agentPaneWidth, setAgentPaneWidth] = useState(
-    DEFAULT_AGENT_PANE_WIDTH_PX,
+  const [agentPaneWidth, setAgentPaneWidth] = useState<number>(
+    readStoredAgentPaneWidth,
   );
 
   const connectionsRef = useRef<Map<string, AgentConnection>>(new Map());
@@ -333,6 +365,20 @@ export function TerminalPane({
   useEffect(() => {
     refitActiveConnection();
   }, [agentPaneWidth, refitActiveConnection]);
+
+  // #72: リサイズ（ドラッグ・キーボード操作）のたびに agentPaneWidth を
+  // localStorage へ永続化する。次回マウント時に readStoredAgentPaneWidth() で
+  // 復元される。localStorage が使えない環境でも board は落とさない。
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        AGENT_PANE_WIDTH_STORAGE_KEY,
+        String(agentPaneWidth),
+      );
+    } catch {
+      // 永続化を諦めるだけで、board 自体は落とさない。
+    }
+  }, [agentPaneWidth]);
 
   const handleTabClick = (agent: string) => {
     setActiveAgent(agent);
