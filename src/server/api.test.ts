@@ -215,6 +215,255 @@ describe("GET /api/md/tree（Issue #65）", () => {
   });
 });
 
+describe("GET /api/md/file（Issue #66）", () => {
+  let tempRoot: string;
+  let repoRoot: string;
+
+  beforeEach(() => {
+    tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "api-md-file-test-"));
+    repoRoot = path.join(tempRoot, "repo");
+    fs.mkdirSync(repoRoot);
+  });
+
+  afterEach(() => {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  });
+
+  function buildAppWithRepo() {
+    const cache = createMemoryBoardCache();
+    const app = new Hono();
+    const getFleetEntries = (): readonly FleetEntry[] => [
+      { name: "myrepo", path: repoRoot },
+    ];
+    registerApiRoutes(app, cache, getFleetEntries);
+    return app;
+  }
+
+  it("検証通過した .md ファイルの内容を { content } で返す", async () => {
+    fs.writeFileSync(path.join(repoRoot, "doc.md"), "# doc content");
+    const app = buildAppWithRepo();
+
+    const res = await app.request("/api/md/file?repo=myrepo&path=doc.md", {
+      headers: { host: "localhost" },
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toEqual({ content: "# doc content" });
+  });
+
+  it("存在しないファイルは 404 を返す", async () => {
+    const app = buildAppWithRepo();
+
+    const res = await app.request("/api/md/file?repo=myrepo&path=missing.md", {
+      headers: { host: "localhost" },
+    });
+
+    expect(res.status).toBe(404);
+  });
+
+  it("検証・stat 通過後に読み取りが失敗する場合（権限無し等）も 404 を返す（500 で存在有無を漏らさない）", async () => {
+    const unreadablePath = path.join(repoRoot, "unreadable.md");
+    fs.writeFileSync(unreadablePath, "# secret");
+    fs.chmodSync(unreadablePath, 0o000);
+    const app = buildAppWithRepo();
+
+    try {
+      const res = await app.request(
+        "/api/md/file?repo=myrepo&path=unreadable.md",
+        { headers: { host: "localhost" } },
+      );
+
+      expect(res.status).toBe(404);
+    } finally {
+      // afterEach の rmSync がディレクトリごと削除できるよう権限を戻す。
+      fs.chmodSync(unreadablePath, 0o644);
+    }
+  });
+
+  it("検証通過後の読み取り失敗はクライアントへ 404 を返しつつ console.warn で記録する（運用時の切り分けのため。設定ミス等を「.md が読めない」と見分けられなくしないという動機は tree.ts の repo ルート走査失敗記録と同じだが、tree.ts の非ルート走査失敗の黙殺方針をそのまま踏襲したものではない）", async () => {
+    const unreadablePath = path.join(repoRoot, "unreadable-logged.md");
+    fs.writeFileSync(unreadablePath, "# secret");
+    fs.chmodSync(unreadablePath, 0o000);
+    const app = buildAppWithRepo();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      await app.request("/api/md/file?repo=myrepo&path=unreadable-logged.md", {
+        headers: { host: "localhost" },
+      });
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      fs.chmodSync(unreadablePath, 0o644);
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("存在しない repo 名は 404 を返す", async () => {
+    const app = buildAppWithRepo();
+
+    const res = await app.request("/api/md/file?repo=unknown&path=doc.md", {
+      headers: { host: "localhost" },
+    });
+
+    expect(res.status).toBe(404);
+  });
+
+  it(".md 以外の拡張子は 404 を返す", async () => {
+    fs.writeFileSync(path.join(repoRoot, "notes.txt"), "not markdown");
+    const app = buildAppWithRepo();
+
+    const res = await app.request("/api/md/file?repo=myrepo&path=notes.txt", {
+      headers: { host: "localhost" },
+    });
+
+    expect(res.status).toBe(404);
+  });
+
+  it("../ を含む相対パスで repo 外への脱出を試みると 404 を返す", async () => {
+    fs.writeFileSync(path.join(tempRoot, "outside.md"), "# outside");
+    const app = buildAppWithRepo();
+
+    const res = await app.request(
+      "/api/md/file?repo=myrepo&path=../outside.md",
+      { headers: { host: "localhost" } },
+    );
+
+    expect(res.status).toBe(404);
+  });
+
+  it("絶対パスを path クエリに渡すと 404 を返す", async () => {
+    const outsideAbsolutePath = path.join(tempRoot, "abs-outside.md");
+    fs.writeFileSync(outsideAbsolutePath, "# outside abs");
+    const app = buildAppWithRepo();
+
+    const res = await app.request(
+      `/api/md/file?repo=myrepo&path=${encodeURIComponent(outsideAbsolutePath)}`,
+      { headers: { host: "localhost" } },
+    );
+
+    expect(res.status).toBe(404);
+  });
+
+  it("シンボリックリンク経由で repo 外の実体を指す場合は 404 を返す", async () => {
+    const outsideDir = path.join(tempRoot, "outside-dir");
+    fs.mkdirSync(outsideDir);
+    fs.writeFileSync(path.join(outsideDir, "secret.md"), "# secret");
+    fs.symlinkSync(
+      path.join(outsideDir, "secret.md"),
+      path.join(repoRoot, "link.md"),
+    );
+    const app = buildAppWithRepo();
+
+    const res = await app.request("/api/md/file?repo=myrepo&path=link.md", {
+      headers: { host: "localhost" },
+    });
+
+    expect(res.status).toBe(404);
+  });
+
+  it("repo / path クエリパラメータが欠落している場合は 404 を返す", async () => {
+    fs.writeFileSync(path.join(repoRoot, "doc.md"), "# doc content");
+    const app = buildAppWithRepo();
+
+    const resNoRepo = await app.request("/api/md/file?path=doc.md", {
+      headers: { host: "localhost" },
+    });
+    const resNoPath = await app.request("/api/md/file?repo=myrepo", {
+      headers: { host: "localhost" },
+    });
+    const resNeither = await app.request("/api/md/file", {
+      headers: { host: "localhost" },
+    });
+
+    expect(resNoRepo.status).toBe(404);
+    expect(resNoPath.status).toBe(404);
+    expect(resNeither.status).toBe(404);
+  });
+
+  it("検証通過済みファイルが 1MB 超の場合は本文を読み込まずに 413 を返す", async () => {
+    const oversizedPath = path.join(repoRoot, "oversized.md");
+    fs.writeFileSync(oversizedPath, "a".repeat(1024 * 1024 + 1));
+    const app = buildAppWithRepo();
+    const readFileSpy = vi.spyOn(fs.promises, "readFile");
+
+    try {
+      const res = await app.request(
+        "/api/md/file?repo=myrepo&path=oversized.md",
+        { headers: { host: "localhost" } },
+      );
+
+      expect(res.status).toBe(413);
+      expect(readFileSpy).not.toHaveBeenCalled();
+    } finally {
+      // 先行アサーション（413判定）が失敗した場合でも spy を確実に解除し、
+      // 後続テストへ漏れないようにする。
+      readFileSpy.mockRestore();
+    }
+  });
+
+  it("マルチバイト文字のみで構成され UTF-16 コードユニット数は 1MB 未満だがバイト数は 1MB 超のファイルは 413 を返す（バイト基準の判定であることの回帰ガード）", async () => {
+    // "あ" は UTF-8 で3バイト・UTF-16では1コードユニット。350,000文字なら
+    // バイト数は 1,050,000（1MB超）だが文字数（コードユニット数）は 1MB 未満となり、
+    // サイズ判定が stat.size（バイト）ではなく content.length（文字数）等に
+    // リファクタされた場合の回帰を検出できる。
+    const multibytePath = path.join(repoRoot, "multibyte.md");
+    const multibyteContent = "あ".repeat(350000);
+    fs.writeFileSync(multibytePath, multibyteContent);
+    expect(Buffer.byteLength(multibyteContent, "utf-8")).toBeGreaterThan(
+      1024 * 1024,
+    );
+    expect(multibyteContent.length).toBeLessThan(1024 * 1024);
+    const app = buildAppWithRepo();
+
+    const res = await app.request(
+      "/api/md/file?repo=myrepo&path=multibyte.md",
+      { headers: { host: "localhost" } },
+    );
+
+    expect(res.status).toBe(413);
+  });
+
+  it("ファイルサイズが 1MB ちょうどの場合は 200 を返す", async () => {
+    const exactPath = path.join(repoRoot, "exact.md");
+    fs.writeFileSync(exactPath, "a".repeat(1024 * 1024));
+    const app = buildAppWithRepo();
+
+    const res = await app.request("/api/md/file?repo=myrepo&path=exact.md", {
+      headers: { host: "localhost" },
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.content).toHaveLength(1024 * 1024);
+  });
+
+  it("ファイルサイズが 1MB 未満の場合は 200 を返す", async () => {
+    const underPath = path.join(repoRoot, "under.md");
+    fs.writeFileSync(underPath, "a".repeat(1024 * 1024 - 1));
+    const app = buildAppWithRepo();
+
+    const res = await app.request("/api/md/file?repo=myrepo&path=under.md", {
+      headers: { host: "localhost" },
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.content).toHaveLength(1024 * 1024 - 1);
+  });
+
+  it("不正な Host ヘッダの /api/md/file リクエストは 403 を返す（既存の Host/Origin 検証を継承）", async () => {
+    const app = buildAppWithRepo();
+
+    const res = await app.request("/api/md/file?repo=myrepo&path=doc.md", {
+      headers: { host: "evil.example.com" },
+    });
+
+    expect(res.status).toBe(403);
+  });
+});
+
 // Issue #62: fleet entries を遅延参照できる getFleetEntries コールバックを
 // registerApiRoutes に供給できることを確認する。GET /api/md/tree（Issue #65）は
 // 上の describe で別途検証済みのため、ここで検証するのは以下の2点に限る。
