@@ -882,6 +882,17 @@ body {
   color: var(--board-needs-human-border);
 }
 
+/* md_subscribe_error 受信時の注記（#70）。エラーではなく「ライブ更新だけ
+ * 無効」という軽い注意喚起のため、エラー色より控えめな枠線で下の
+ * Markdown 本文と区切るだけに留める（KISS）。 */
+.preview-panel-live-update-disabled {
+  font-size: 0.8rem;
+  color: var(--board-needs-human-border);
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--board-border);
+}
+
 /* GFM テーブル・コードブロック・引用の最低限の可読性のみ整える
  * （見た目の作り込みは本チケットのスコープ外。KISS）。
  */

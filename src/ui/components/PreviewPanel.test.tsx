@@ -2,6 +2,8 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import mermaid from "mermaid";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as mdLiveChannelModule from "../md-live-channel.ts";
+import type { MdLiveChannel } from "../md-live-channel.ts";
 import { PreviewPanel } from "./PreviewPanel.tsx";
 
 // mermaid は実際に diagram をレンダリングすると重く jsdom 依存の懸念もあるため、
@@ -17,11 +19,11 @@ vi.mock("mermaid", () => ({
 
 // PreviewPanel: 開閉・幅ドラッグ（#64）・FileTree/リフレッシュボタンの結線
 // （#68）・選択ファイルの取得＋react-markdown レンダリング（#69。下部の
-// 「Markdownレンダリング」describe を参照）を検証する。FileTree 自体の
+// 「Markdownレンダリング」describe を参照）・ライブ更新の WS 結線
+// （#70。下部の「ライブ更新」describe を参照）を検証する。FileTree 自体の
 // 一覧表示・選択挙動の詳細は FileTree.test.tsx の責務のため、開閉・結線の
 // テストでは「body 内に FileTree が組み込まれ、リフレッシュボタン押下で
-// 再取得がトリガーされる」ことのみを確認する。ライブ更新（WS md_subscribe・
-// 保存時の自動再取得）は #70 のスコープであり、本ファイルでは扱わない。
+// 再取得がトリガーされる」ことのみを確認する。
 
 // パネルを開くと FileTree がマウントされ GET /api/md/tree を叩くため、
 // 個別の挙動を検証しないテストでは解決しない Promise で最小限のスタブを
@@ -768,6 +770,310 @@ describe("PreviewPanel", () => {
       expect(
         screen.getByText("ファイルツリーからファイルを選択してください"),
       ).toBeInTheDocument();
+    });
+  });
+
+  describe("ライブ更新（#70: WS 結線）", () => {
+    // mdLive は Board.tsx が唯一の WS 接続を橋渡しするための最小限の受け口
+    // （../md-live-channel.ts）。ここでは PreviewPanel が mdLive.subscribe /
+    // unsubscribe を正しいタイミングで呼び、mdLive.handlers 経由で届く
+    // md_file_changed / md_subscribe_error を「現在開いているファイルと
+    // 一致する場合のみ」処理することを検証する。WS 自体の送受信ロジック
+    // （JSON シリアライズ・readyState ガード等）は ws.test.ts の責務。
+    function createFakeMdLive(): MdLiveChannel {
+      return {
+        subscribe: vi.fn(),
+        unsubscribe: vi.fn(),
+        handlers: {},
+      };
+    }
+
+    function stubFetch() {
+      const fetchMock = vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith("/api/md/tree")) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () =>
+              Promise.resolve({
+                repos: [{ name: "repo-a", files: ["docs/note.md", "b.md"] }],
+              }),
+          });
+        }
+        if (url.startsWith("/api/md/file")) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({ content: "# Hello" }),
+          });
+        }
+        throw new Error(`unexpected fetch url in test: ${url}`);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      return fetchMock;
+    }
+
+    async function openPanelAndSelectFile(mdLive: MdLiveChannel) {
+      render(<PreviewPanel mdLive={mdLive} />);
+      act(() => {
+        screen.getByRole("button", { name: "プレビューパネルを開く" }).click();
+      });
+      const fileButton = await screen.findByRole("button", {
+        name: "docs/note.md",
+      });
+      act(() => {
+        fileButton.click();
+      });
+      await screen.findByText("Hello");
+    }
+
+    it("ファイルを開いたとき mdLive.subscribe を repo/path 付きで呼ぶ", async () => {
+      const mdLive = createFakeMdLive();
+      stubFetch();
+
+      await openPanelAndSelectFile(mdLive);
+
+      expect(mdLive.subscribe).toHaveBeenCalledWith("repo-a", "docs/note.md");
+    });
+
+    it("md_file_changed 受信時、開いているファイルと repo/path が一致する場合のみ GET /api/md/file を再フェッチする", async () => {
+      const mdLive = createFakeMdLive();
+      const fetchMock = stubFetch();
+
+      await openPanelAndSelectFile(mdLive);
+      const callsAfterSelect = fetchMock.mock.calls.length;
+
+      act(() => {
+        mdLive.handlers.onFileChanged?.({
+          type: "md_file_changed",
+          repo: "repo-a",
+          path: "docs/note.md",
+        });
+      });
+
+      await waitFor(() => {
+        expect(fetchMock.mock.calls.length).toBeGreaterThan(callsAfterSelect);
+      });
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        "/api/md/file?repo=repo-a&path=docs%2Fnote.md",
+      );
+    });
+
+    it("md_file_changed の repo/path が開いているファイルと一致しない場合は再フェッチしない", async () => {
+      const mdLive = createFakeMdLive();
+      const fetchMock = stubFetch();
+
+      await openPanelAndSelectFile(mdLive);
+      const callsAfterSelect = fetchMock.mock.calls.length;
+
+      act(() => {
+        mdLive.handlers.onFileChanged?.({
+          type: "md_file_changed",
+          repo: "repo-a",
+          path: "other.md",
+        });
+      });
+
+      // 再フェッチが起きないことを、非同期処理が発生しないまま確認する。
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(fetchMock.mock.calls.length).toBe(callsAfterSelect);
+    });
+
+    it("パネルを閉じる操作時、開いていたファイルの repo/path 付きで mdLive.unsubscribe を呼ぶ", async () => {
+      const mdLive = createFakeMdLive();
+      stubFetch();
+
+      await openPanelAndSelectFile(mdLive);
+
+      act(() => {
+        screen
+          .getByRole("button", { name: "プレビューパネルを閉じる" })
+          .click();
+      });
+
+      expect(mdLive.unsubscribe).toHaveBeenCalledWith("repo-a", "docs/note.md");
+    });
+
+    it("別ファイルへの切替時は mdLive.unsubscribe を呼ばない（サーバの自動切替に委ねる）", async () => {
+      const mdLive = createFakeMdLive();
+      stubFetch();
+
+      await openPanelAndSelectFile(mdLive);
+
+      const fileBButton = screen.getByRole("button", { name: "b.md" });
+      act(() => {
+        fileBButton.click();
+      });
+
+      expect(mdLive.subscribe).toHaveBeenCalledWith("repo-a", "docs/note.md");
+      expect(mdLive.subscribe).toHaveBeenCalledWith("repo-a", "b.md");
+      expect(mdLive.unsubscribe).not.toHaveBeenCalled();
+    });
+
+    it("セルフレビュー指摘: WS 再接続時（mdLive.handlers.onReconnected 呼び出し）、選択中のファイルを再度 mdLive.subscribe する", async () => {
+      const mdLive = createFakeMdLive();
+      stubFetch();
+
+      await openPanelAndSelectFile(mdLive);
+      const subscribeCallsAfterSelect = (
+        mdLive.subscribe as ReturnType<typeof vi.fn>
+      ).mock.calls.length;
+
+      act(() => {
+        mdLive.handlers.onReconnected?.();
+      });
+
+      expect(
+        (mdLive.subscribe as ReturnType<typeof vi.fn>).mock.calls.length,
+      ).toBeGreaterThan(subscribeCallsAfterSelect);
+      expect(mdLive.subscribe).toHaveBeenLastCalledWith(
+        "repo-a",
+        "docs/note.md",
+      );
+    });
+
+    it("セルフレビュー指摘: ファイル未選択の状態で mdLive.handlers.onReconnected が呼ばれても例外を投げず、subscribe も呼ばない", () => {
+      const mdLive = createFakeMdLive();
+      stubFetch();
+
+      render(<PreviewPanel mdLive={mdLive} />);
+      act(() => {
+        screen.getByRole("button", { name: "プレビューパネルを開く" }).click();
+      });
+
+      expect(() => {
+        act(() => {
+          mdLive.handlers.onReconnected?.();
+        });
+      }).not.toThrow();
+      expect(mdLive.subscribe).not.toHaveBeenCalled();
+    });
+
+    it("セルフレビュー指摘（2周目）: md_subscribe_error で注記が出た後に onReconnected が呼ばれると、注記もリセットされる（表示残骸を残さない）", async () => {
+      const mdLive = createFakeMdLive();
+      stubFetch();
+
+      await openPanelAndSelectFile(mdLive);
+
+      act(() => {
+        mdLive.handlers.onSubscribeError?.({
+          type: "md_subscribe_error",
+          repo: "repo-a",
+          path: "docs/note.md",
+        });
+      });
+      expect(
+        screen.getByTestId("preview-panel-live-update-disabled"),
+      ).toBeInTheDocument();
+
+      act(() => {
+        mdLive.handlers.onReconnected?.();
+      });
+
+      expect(
+        screen.queryByTestId("preview-panel-live-update-disabled"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("md_subscribe_error 受信時に「ライブ更新は無効」の注記を表示する", async () => {
+      const mdLive = createFakeMdLive();
+      stubFetch();
+
+      await openPanelAndSelectFile(mdLive);
+
+      act(() => {
+        mdLive.handlers.onSubscribeError?.({
+          type: "md_subscribe_error",
+          repo: "repo-a",
+          path: "docs/note.md",
+        });
+      });
+
+      expect(
+        screen.getByTestId("preview-panel-live-update-disabled"),
+      ).toHaveTextContent("ライブ更新は無効");
+    });
+
+    it("セルフレビュー指摘: パネルを閉じると「ライブ更新は無効」の注記もリセットされ、再度開いても表示残骸として残らない", async () => {
+      const mdLive = createFakeMdLive();
+      stubFetch();
+
+      await openPanelAndSelectFile(mdLive);
+
+      act(() => {
+        mdLive.handlers.onSubscribeError?.({
+          type: "md_subscribe_error",
+          repo: "repo-a",
+          path: "docs/note.md",
+        });
+      });
+      expect(
+        screen.getByTestId("preview-panel-live-update-disabled"),
+      ).toBeInTheDocument();
+
+      act(() => {
+        screen
+          .getByRole("button", { name: "プレビューパネルを閉じる" })
+          .click();
+      });
+      act(() => {
+        screen.getByRole("button", { name: "プレビューパネルを開く" }).click();
+      });
+
+      expect(
+        screen.queryByTestId("preview-panel-live-update-disabled"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("md_subscribe_error の repo/path が開いているファイルと一致しない場合は注記を表示しない", async () => {
+      const mdLive = createFakeMdLive();
+      stubFetch();
+
+      await openPanelAndSelectFile(mdLive);
+
+      act(() => {
+        mdLive.handlers.onSubscribeError?.({
+          type: "md_subscribe_error",
+          repo: "repo-a",
+          path: "other.md",
+        });
+      });
+
+      expect(
+        screen.queryByTestId("preview-panel-live-update-disabled"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("mdLive を渡さずにレンダリングしても例外を投げない（Board.tsx を介さない既存テスト向けの既定値）", () => {
+      expect(() => {
+        render(<PreviewPanel />);
+        act(() => {
+          screen
+            .getByRole("button", { name: "プレビューパネルを開く" })
+            .click();
+        });
+      }).not.toThrow();
+    });
+
+    it("セルフレビュー指摘: mdLive 未指定時の既定チャネルは、再レンダーのたびに再生成されない（安定した参照を保つ）", () => {
+      const spy = vi.spyOn(mdLiveChannelModule, "createNoopMdLiveChannel");
+
+      render(<PreviewPanel />);
+      const callsAfterMount = spy.mock.calls.length;
+      expect(callsAfterMount).toBeGreaterThan(0);
+
+      // 開閉ボタンのクリックで PreviewPanel は再レンダーされる。デフォルト
+      // チャネルが毎レンダー再生成される実装だと、ここで呼び出し回数が
+      // 増えてしまう（[selectedFile, mdLive] 依存の effect が意図せず
+      // 再実行され続けることの間接的な証拠）。
+      act(() => {
+        screen.getByRole("button", { name: "プレビューパネルを開く" }).click();
+      });
+
+      expect(spy.mock.calls.length).toBe(callsAfterMount);
+      spy.mockRestore();
     });
   });
 });

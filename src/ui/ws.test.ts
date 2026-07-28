@@ -6,8 +6,16 @@ type Listener = (event: unknown) => void;
 
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
+  // 実際の WebSocket の readyState 定数（送信可否の判定に使う）。
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSING = 2;
+  static readonly CLOSED = 3;
+
   readonly url: string;
   closeCalled = false;
+  readyState = FakeWebSocket.CONNECTING;
+  readonly send = vi.fn();
   private readonly listeners = new Map<string, Set<Listener>>();
 
   constructor(url: string) {
@@ -27,10 +35,19 @@ class FakeWebSocket {
 
   close(): void {
     this.closeCalled = true;
+    this.readyState = FakeWebSocket.CLOSED;
     this.dispatch("close", {});
   }
 
   dispatch(type: string, event: unknown): void {
+    // open/close イベントの実 WebSocket と同じ意味を持たせる（readyState の
+    // 遷移を伴わないと send() のガードを検証できないため）。
+    if (type === "open") {
+      this.readyState = FakeWebSocket.OPEN;
+    }
+    if (type === "close") {
+      this.readyState = FakeWebSocket.CLOSED;
+    }
     for (const listener of this.listeners.get(type) ?? []) {
       listener(event);
     }
@@ -331,5 +348,190 @@ describe("connectBoardSocket", () => {
 
     FakeWebSocket.instances[0]?.dispatch("open", {});
     expect(onStatusChange).toHaveBeenNthCalledWith(2, "open");
+  });
+
+  describe("md_subscribe / md_unsubscribe 送信（Issue #70: 同一 WS 接続への結線）", () => {
+    it("subscribeMd() は type: md_subscribe を repo/path 付きで送信する", () => {
+      const boardSocket = connectBoardSocket({
+        url: "ws://localhost:1234/ws",
+        onSnapshot: vi.fn(),
+        onAgentUpdate: vi.fn(),
+        WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+      });
+      const socket = FakeWebSocket.instances[0];
+      socket?.dispatch("open", {});
+
+      boardSocket.subscribeMd("repo-a", "docs/note.md");
+
+      expect(socket?.send).toHaveBeenCalledWith(
+        JSON.stringify({
+          type: "md_subscribe",
+          repo: "repo-a",
+          path: "docs/note.md",
+        }),
+      );
+    });
+
+    it("unsubscribeMd() は type: md_unsubscribe を repo/path 付きで送信する", () => {
+      const boardSocket = connectBoardSocket({
+        url: "ws://localhost:1234/ws",
+        onSnapshot: vi.fn(),
+        onAgentUpdate: vi.fn(),
+        WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+      });
+      const socket = FakeWebSocket.instances[0];
+      socket?.dispatch("open", {});
+
+      boardSocket.unsubscribeMd("repo-a", "docs/note.md");
+
+      expect(socket?.send).toHaveBeenCalledWith(
+        JSON.stringify({
+          type: "md_unsubscribe",
+          repo: "repo-a",
+          path: "docs/note.md",
+        }),
+      );
+    });
+
+    it("ソケットが open していない間に subscribeMd() を呼んでも例外を投げず送信もしない", () => {
+      const boardSocket = connectBoardSocket({
+        url: "ws://localhost:1234/ws",
+        onSnapshot: vi.fn(),
+        onAgentUpdate: vi.fn(),
+        WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+      });
+      const socket = FakeWebSocket.instances[0];
+      // dispatch("open") を呼んでいないため readyState は CONNECTING のまま。
+
+      expect(() => {
+        boardSocket.subscribeMd("repo-a", "docs/note.md");
+      }).not.toThrow();
+      expect(socket?.send).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("md_file_changed / md_subscribe_error 受信（Issue #70）", () => {
+    it("type: md_file_changed のメッセージを受信したら onMdFileChanged を呼ぶ", () => {
+      const onMdFileChanged = vi.fn();
+
+      connectBoardSocket({
+        url: "ws://localhost:1234/ws",
+        onSnapshot: vi.fn(),
+        onAgentUpdate: vi.fn(),
+        onMdFileChanged,
+        WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+      });
+
+      const socket = FakeWebSocket.instances[0];
+      socket?.dispatch("message", {
+        data: JSON.stringify({
+          type: "md_file_changed",
+          repo: "repo-a",
+          path: "docs/note.md",
+        }),
+      });
+
+      expect(onMdFileChanged).toHaveBeenCalledWith({
+        type: "md_file_changed",
+        repo: "repo-a",
+        path: "docs/note.md",
+      });
+    });
+
+    it("type: md_subscribe_error のメッセージを受信したら onMdSubscribeError を呼ぶ", () => {
+      const onMdSubscribeError = vi.fn();
+
+      connectBoardSocket({
+        url: "ws://localhost:1234/ws",
+        onSnapshot: vi.fn(),
+        onAgentUpdate: vi.fn(),
+        onMdSubscribeError,
+        WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+      });
+
+      const socket = FakeWebSocket.instances[0];
+      socket?.dispatch("message", {
+        data: JSON.stringify({
+          type: "md_subscribe_error",
+          repo: "repo-a",
+          path: "docs/note.md",
+        }),
+      });
+
+      expect(onMdSubscribeError).toHaveBeenCalledWith({
+        type: "md_subscribe_error",
+        repo: "repo-a",
+        path: "docs/note.md",
+      });
+    });
+
+    it("md_file_changed で repo/path が文字列でない場合は無視する", () => {
+      const onMdFileChanged = vi.fn();
+
+      connectBoardSocket({
+        url: "ws://localhost:1234/ws",
+        onSnapshot: vi.fn(),
+        onAgentUpdate: vi.fn(),
+        onMdFileChanged,
+        WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+      });
+
+      const socket = FakeWebSocket.instances[0];
+      socket?.dispatch("message", {
+        data: JSON.stringify({ type: "md_file_changed", repo: 1, path: 2 }),
+      });
+
+      expect(onMdFileChanged).not.toHaveBeenCalled();
+    });
+
+    it("md_subscribe_error で repo/path が文字列でない場合は無視する", () => {
+      const onMdSubscribeError = vi.fn();
+
+      connectBoardSocket({
+        url: "ws://localhost:1234/ws",
+        onSnapshot: vi.fn(),
+        onAgentUpdate: vi.fn(),
+        onMdSubscribeError,
+        WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+      });
+
+      const socket = FakeWebSocket.instances[0];
+      socket?.dispatch("message", {
+        data: JSON.stringify({
+          type: "md_subscribe_error",
+          repo: 1,
+          path: 2,
+        }),
+      });
+
+      expect(onMdSubscribeError).not.toHaveBeenCalled();
+    });
+
+    it("onMdFileChanged/onMdSubscribeError を渡さない場合でも例外を投げない", () => {
+      connectBoardSocket({
+        url: "ws://localhost:1234/ws",
+        onSnapshot: vi.fn(),
+        onAgentUpdate: vi.fn(),
+        WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+      });
+
+      const socket = FakeWebSocket.instances[0];
+      expect(() => {
+        socket?.dispatch("message", {
+          data: JSON.stringify({
+            type: "md_file_changed",
+            repo: "repo-a",
+            path: "docs/note.md",
+          }),
+        });
+        socket?.dispatch("message", {
+          data: JSON.stringify({
+            type: "md_subscribe_error",
+            repo: "repo-a",
+            path: "docs/note.md",
+          }),
+        });
+      }).not.toThrow();
+    });
   });
 });

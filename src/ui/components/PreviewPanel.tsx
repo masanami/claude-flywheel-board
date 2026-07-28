@@ -4,15 +4,25 @@ import Markdown from "react-markdown";
 import type { Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
+import {
+  type MdLiveChannel,
+  createNoopMdLiveChannel,
+} from "../md-live-channel.ts";
 import { FileTree } from "./FileTree.tsx";
 
 // board 右サイドの開閉式パネル（マークダウンプレビュー機能全体の設計 —
 // docs/features/markdown-preview.md「機能全体の設計」節）。開閉・幅ドラッグは
 // #64 のシェル実装、ファイルツリー（FileTree）とリフレッシュボタンの結線は
-// #68 で追加した。本チケット（#69）で選択ファイルの内容取得（GET
-// /api/md/file）と react-markdown によるレンダリングを結線する。ライブ更新
-// （WS md_subscribe・保存時の自動再取得）は #70 のスコープであり、本ファイル
-// では手を出さない。
+// #68 で追加した。選択ファイルの内容取得（GET /api/md/file）と
+// react-markdown によるレンダリングは #69 で結線した。本チケット（#70）で
+// ライブ更新（WS md_subscribe/md_unsubscribe・md_file_changed 受信時の
+// 再フェッチ・md_subscribe_error 時の注記表示）を結線する。
+//
+// クリティカル設計決定（親 Issue #61）: PreviewPanel は新しい WS 接続を
+// 追加で開かない。Board.tsx が保有する唯一の /ws 接続を mdLive
+// （../md-live-channel.ts）経由で再利用する。プレビュー対象の切替時は
+// サーバの自動解除（1クライアント1購読）に委ねるため明示的な
+// md_unsubscribe は送らず、パネルを閉じる操作時にのみ送信する。
 //
 // 右サイドパネルは flex でボードカラム領域を圧縮して確保する
 // （下部ターミナル領域の高さ・幅には一切影響しない）。組み込み側は
@@ -67,6 +77,7 @@ type FileContentState =
 const GENERIC_FILE_ERROR_MESSAGE = "ファイルの取得に失敗しました";
 const TOO_LARGE_ERROR_MESSAGE = "サイズが大きすぎるため表示できません";
 const MERMAID_RENDER_ERROR_MESSAGE = "mermaid 図の描画に失敗しました";
+const LIVE_UPDATE_DISABLED_MESSAGE = "ライブ更新は無効です";
 
 // mermaid.initialize は冪等（mermaid 公式ドキュメント）なので、レンダリング
 // のたびに呼び直して securityLevel: "strict" を主張し直す（セルフレビュー
@@ -270,7 +281,28 @@ const markdownComponents: Components = {
   },
 };
 
-export function PreviewPanel() {
+export function PreviewPanel({
+  mdLive: mdLiveProp,
+}: { mdLive?: MdLiveChannel } = {}) {
+  // Board.tsx 経由で唯一の WS 接続と橋渡しする（#70）。Board.tsx を介さず
+  // 単体でレンダリングする既存テストのため、prop 未指定時は何もしない
+  // チャネルを既定値として使う。
+  //
+  // セルフレビュー指摘: デフォルト引数（`mdLive = createNoopMdLiveChannel()`）
+  // は JS の仕様上、prop が未指定のたびに——つまり再レンダーのたびに——
+  // 新しいオブジェクトを生成してしまう。この値は下の各 useEffect の依存配列
+  // （[selectedFile, mdLive]）に入っているため、prop 省略時は毎レンダーで
+  // md_subscribe 再送・handlers 差し替えが起き続ける（Board 経由では
+  // useRef で参照が固定されるため顕在化しないが、既定値だけが不安定だった）。
+  // useRef による遅延初期化で、コンポーネントのライフタイム内は同一
+  // インスタンスを使い続けるようにする（テスト間の state 漏れ防止のため
+  // モジュールスコープの単一定数にはしない）。
+  const noopMdLiveRef = useRef<MdLiveChannel | undefined>(undefined);
+  if (!noopMdLiveRef.current) {
+    noopMdLiveRef.current = createNoopMdLiveChannel();
+  }
+  const mdLive = mdLiveProp ?? noopMdLiveRef.current;
+
   // 初期状態は閉じておく（設計判断: 起動直後から広いパネルを占有させず、
   // 明示的に開いたときだけファイルツリー・プレビューを表示する）。
   const [open, setOpen] = useState(false);
@@ -285,11 +317,82 @@ export function PreviewPanel() {
   const [fileContent, setFileContent] = useState<FileContentState>({
     status: "idle",
   });
+  // md_file_changed 受信時の再フェッチトリガー（#70）。selectedFile は
+  // 変えずにこの値だけを進めることで、下の GET /api/md/file 取得 effect を
+  // 再実行させる（refreshToken と同じ宣言的な再取得パターン）。
+  const [mdReloadToken, setMdReloadToken] = useState(0);
+  // md_subscribe_error を受けたら true にし、「ライブ更新は無効」の注記を
+  // 表示する（#70）。新しいファイルを開く・購読し直すたびにリセットする。
+  const [liveUpdateDisabled, setLiveUpdateDisabled] = useState(false);
 
-  // 選択ファイルが変わるたびに GET /api/md/file を取得する。CardDetailModal /
+  // 選択ファイルが変わるたびに md_subscribe を送信する（#70）。プレビュー
+  // 対象の切替時にクライアントから明示的な md_unsubscribe は送らない
+  // （サーバが1クライアント1購読の自動解除に委ねる。親 Issue #61 の決定）。
+  useEffect(() => {
+    if (!selectedFile) {
+      return;
+    }
+    setLiveUpdateDisabled(false);
+    mdLive.subscribe(selectedFile.repo, selectedFile.path);
+  }, [selectedFile, mdLive]);
+
+  // WS から届く md_file_changed / md_subscribe_error / onReconnected を、
+  // 現在開いているファイルと一致する場合のみ処理する（#70）。mdLive.handlers
+  // は PreviewPanel が唯一の購読者であることを前提にした単一スロットのため、
+  // selectedFile が変わるたびに最新のクロージャで差し替える。
+  useEffect(() => {
+    mdLive.handlers.onFileChanged = (message) => {
+      if (
+        selectedFile &&
+        message.repo === selectedFile.repo &&
+        message.path === selectedFile.path
+      ) {
+        setMdReloadToken((prev) => prev + 1);
+      }
+    };
+    mdLive.handlers.onSubscribeError = (message) => {
+      if (
+        selectedFile &&
+        message.repo === selectedFile.repo &&
+        message.path === selectedFile.path
+      ) {
+        setLiveUpdateDisabled(true);
+      }
+    };
+    // セルフレビュー指摘: WS は切断されると自動再接続するが（ws.ts の既存
+    // ロジック）、サーバ側の購読はクライアント接続単位で保持されるため、
+    // 再接続後の新しい接続には以前の md_subscribe が引き継がれない。
+    // selectedFile 自体は変化しないため上の subscribe effect（[selectedFile,
+    // mdLive] 依存）は再実行されず、無警告のままライブ更新が恒久的に
+    // 止まってしまう。Board 側は WS が open 状態になるたび（初回接続・
+    // 再接続の両方）に onReconnected を呼ぶので、選択中のファイルがあれば
+    // 再度 subscribe し直す。
+    mdLive.handlers.onReconnected = () => {
+      if (selectedFile) {
+        // セルフレビュー指摘（2周目）: subscribe だけ呼び直すと、一時的な
+        // md_subscribe_error（例: アトミック保存中の一瞬の不在で realpath
+        // 解決が失敗する等）で注記を表示した後に再接続で購読が回復しても
+        // 「ライブ更新は無効です」が表示残骸として残り続ける（selectedFile
+        // が変わらないため subscribe effect 側のリセットは通らない）。
+        // 再購読のたびに一旦リセットし、購読が失敗すれば
+        // onSubscribeError が改めて true に戻す。
+        setLiveUpdateDisabled(false);
+        mdLive.subscribe(selectedFile.repo, selectedFile.path);
+      }
+    };
+    return () => {
+      mdLive.handlers.onFileChanged = undefined;
+      mdLive.handlers.onSubscribeError = undefined;
+      mdLive.handlers.onReconnected = undefined;
+    };
+  }, [selectedFile, mdLive]);
+
+  // 選択ファイルが変わる、または md_file_changed により再フェッチが
+  // トリガーされるたびに GET /api/md/file を取得する。CardDetailModal /
   // FileTree と同じ fetch パターン（cancelled フラグ・AbortController不使用）。
-  // ライブ更新（保存時の自動再取得）は #70 のスコープであり、ここでは選択の
-  // たびに一度取得するだけ。
+  // ファイル内容は WS からは受け取らず、常にこの HTTP 経路で取得する
+  // （親 Issue #61 の決定）。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: mdReloadToken は本体で読まないが、md_file_changed 受信のたびに再フェッチを発火させる意図的なトリガー依存（FileTree.tsx の refreshToken と同じパターン。#70）
   useEffect(() => {
     if (!selectedFile) {
       setFileContent({ status: "idle" });
@@ -331,7 +434,7 @@ export function PreviewPanel() {
     return () => {
       cancelled = true;
     };
-  }, [selectedFile]);
+  }, [selectedFile, mdReloadToken]);
 
   // セルフレビュー指摘: FileTree はクリックのたびに無条件で onSelectFile を
   // 呼ぶため、既に表示中のファイルを再クリックしただけでも
@@ -352,9 +455,24 @@ export function PreviewPanel() {
   // という食い違いが生じる（FileTree.tsx が #69 への申し送りとして明記して
   // いた論点）。閉じる操作の時点で選択ファイル・取得内容を破棄し、FileTree
   // 側のライフサイクル（開くたびに白紙から選び直す）に合わせる。
+  //
+  // #70: WS 接続自体は維持されたままパネルだけを閉じるため、サーバ側の
+  // 自動解除（subscribe 切替・WS 切断）は働かない。watch リークを防ぐため、
+  // 閉じる操作時に限り明示的に md_unsubscribe を送信する（親 Issue #61 の
+  // 決定）。
   const handleToggleOpen = () => {
     if (open) {
+      if (selectedFile) {
+        mdLive.unsubscribe(selectedFile.repo, selectedFile.path);
+      }
       setSelectedFile(null);
+      // セルフレビュー指摘: liveUpdateDisabled は「選択ファイルが変わった
+      // 際にのみリセットする」効果（subscribe effect 内）に頼っていたため、
+      // 閉じる操作（selectedFile を null にするだけの経路）ではリセット
+      // されず、再オープン直後（ファイル未選択）に「ライブ更新は無効です」
+      // という表示残骸が残っていた（購読していないファイルの無効警告が
+      // 出続ける）。閉じる時点で明示的にリセットする。
+      setLiveUpdateDisabled(false);
     }
     setOpen((prev) => !prev);
   };
@@ -476,6 +594,14 @@ export function PreviewPanel() {
               className="preview-panel-markdown"
               data-testid="preview-panel-markdown"
             >
+              {liveUpdateDisabled && (
+                <div
+                  className="preview-panel-live-update-disabled"
+                  data-testid="preview-panel-live-update-disabled"
+                >
+                  {LIVE_UPDATE_DISABLED_MESSAGE}
+                </div>
+              )}
               {fileContent.status === "idle" && (
                 <div className="preview-panel-markdown-placeholder">
                   ファイルツリーからファイルを選択してください
