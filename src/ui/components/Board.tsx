@@ -1,5 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AgentBoard, Challenge, LedgerStatus } from "../board-types.ts";
+import {
+  type MdLiveChannel,
+  createNoopMdLiveChannel,
+} from "../md-live-channel.ts";
 import { connectBoardSocket } from "../ws.ts";
 import { AgentColumn } from "./AgentColumn.tsx";
 import type { BoardFilter } from "./FilterBar.tsx";
@@ -55,6 +59,13 @@ export function Board() {
   // challenge-archive*.md 表示へ切り替える。default false。
   const [archiveMode, setArchiveMode] = useState(false);
 
+  // Issue #70: PreviewPanel との橋渡し（md-live-channel.ts 参照）。Board が
+  // 保有する唯一の WS 接続の subscribeMd/unsubscribeMd をそのまま転送し、
+  // WS から届いた md_file_changed/md_subscribe_error は mdLive.handlers の
+  // 現在の差し替え先へ転送するだけに留める（「一致するファイルか」の判定・
+  // 再フェッチ・注記表示は PreviewPanel 側の責務）。
+  const mdLiveRef = useRef<MdLiveChannel>(createNoopMdLiveChannel());
+
   useEffect(() => {
     const socket = connectBoardSocket({
       url: buildWebSocketUrl(),
@@ -64,7 +75,26 @@ export function Board() {
       onAgentUpdate: (agent) => {
         setAgents((prev) => upsertAgent(prev ?? [], agent));
       },
+      onMdFileChanged: (message) => {
+        mdLiveRef.current.handlers.onFileChanged?.(message);
+      },
+      onMdSubscribeError: (message) => {
+        mdLiveRef.current.handlers.onSubscribeError?.(message);
+      },
+      // セルフレビュー指摘: WS は切断されると自動再接続するが、サーバ側の
+      // 購読は接続単位で保持されるため、再接続後の新しい接続には以前の
+      // md_subscribe が引き継がれない（無警告のままライブ更新が恒久的に
+      // 止まる）。open に遷移するたび（初回接続・再接続の両方）に
+      // onReconnected を呼び、PreviewPanel が選択中のファイルを再購読する
+      // 機会を与える。
+      onStatusChange: (status) => {
+        if (status === "open") {
+          mdLiveRef.current.handlers.onReconnected?.();
+        }
+      },
     });
+    mdLiveRef.current.subscribe = socket.subscribeMd;
+    mdLiveRef.current.unsubscribe = socket.unsubscribeMd;
 
     return () => {
       socket.close();
@@ -114,7 +144,7 @@ export function Board() {
             />
           ))}
         </div>
-        <PreviewPanel />
+        <PreviewPanel mdLive={mdLiveRef.current} />
       </div>
     </div>
   );
