@@ -324,6 +324,17 @@ export function PreviewPanel({
   // md_subscribe_error を受けたら true にし、「ライブ更新は無効」の注記を
   // 表示する（#70）。新しいファイルを開く・購読し直すたびにリセットする。
   const [liveUpdateDisabled, setLiveUpdateDisabled] = useState(false);
+  // blocker修正: GET /api/md/file 取得 effect（[selectedFile, mdReloadToken]
+  // 依存）は「新しいファイルが選択された」場合と「同じファイルのまま
+  // md_file_changed / onReconnected によりサイレントリフレッシュがトリガー
+  // された」場合の両方で再実行される。後者で無条件に loading 状態へ落とすと
+  // 表示中の <Markdown> がアンマウントされ、.preview-panel-markdown の
+  // スクロール位置が（実ブラウザでは scrollHeight のクランプにより）先頭へ
+  // ジャンプしてしまう。直前にこの effect が実際にフェッチした selectedFile
+  // を記録しておき、参照が変わった（＝新しいファイルが選択された）場合のみ
+  // loading 表示に落とす。サイレントリフレッシュでは直前の内容を保持した
+  // まま裏で取得し、成功/失敗時にのみ置き換える。
+  const lastFetchedFileRef = useRef<SelectedFile | null>(null);
 
   // 選択ファイルが変わるたびに md_subscribe を送信する（#70）。プレビュー
   // 対象の切替時にクライアントから明示的な md_unsubscribe は送らない
@@ -378,6 +389,12 @@ export function PreviewPanel({
         // onSubscribeError が改めて true に戻す。
         setLiveUpdateDisabled(false);
         mdLive.subscribe(selectedFile.repo, selectedFile.path);
+        // blocker修正: WS 切断中（サーバ再起動等）に発生したファイル変更は
+        // 対応する md_file_changed を受け取れないため、再接続時に subscribe
+        // し直すだけでは次の保存まで反映されない。再接続のたびに一度だけ
+        // 再フェッチする（サイレントリフレッシュとして扱われるため、blocker 1
+        // の修正と合わせて表示が乱れることはない）。
+        setMdReloadToken((prev) => prev + 1);
       }
     };
     return () => {
@@ -396,11 +413,24 @@ export function PreviewPanel({
   useEffect(() => {
     if (!selectedFile) {
       setFileContent({ status: "idle" });
+      lastFetchedFileRef.current = null;
       return;
     }
 
+    // selectedFile は同一ファイルの再選択では state 更新自体が起きない
+    // （handleSelectFile のガード）ため、参照比較だけで「新しいファイルが
+    // 選択されたのか」「同じファイルのままサイレントリフレッシュが
+    // トリガーされたのか」を区別できる。
+    const isFileChange = lastFetchedFileRef.current !== selectedFile;
+    lastFetchedFileRef.current = selectedFile;
+
     let cancelled = false;
-    setFileContent({ status: "loading" });
+    if (isFileChange) {
+      setFileContent({ status: "loading" });
+    }
+    // isFileChange が false（サイレントリフレッシュ）の場合はここで
+    // fileContent を更新しない。直前の表示内容（success/error のいずれか）
+    // をそのまま保持し、下の then/catch で結果が届いた時点でのみ置き換える。
 
     const url = `/api/md/file?repo=${encodeURIComponent(selectedFile.repo)}&path=${encodeURIComponent(selectedFile.path)}`;
 

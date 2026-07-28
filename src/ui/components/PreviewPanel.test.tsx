@@ -860,6 +860,147 @@ describe("PreviewPanel", () => {
       );
     });
 
+    it("md_file_changed によるサイレントリフレッシュ中はローディング表示にならず、直前の内容とスクロール位置を保持する（blocker修正: 保存のたびに先頭へジャンプする不具合の回帰防止）", async () => {
+      const mdLive = createFakeMdLive();
+      let fileFetchCount = 0;
+      let resolveSecondFetch!: (value: {
+        ok: boolean;
+        status: number;
+        json: () => Promise<unknown>;
+      }) => void;
+      const fetchMock = vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith("/api/md/tree")) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () =>
+              Promise.resolve({
+                repos: [{ name: "repo-a", files: ["docs/note.md"] }],
+              }),
+          });
+        }
+        if (url.startsWith("/api/md/file")) {
+          fileFetchCount++;
+          if (fileFetchCount === 1) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: () => Promise.resolve({ content: "# Hello" }),
+            });
+          }
+          // 2回目以降（md_file_changed によるサイレントリフレッシュ）は
+          // 解決タイミングを手動制御し、pending 中の表示状態を検証する。
+          return new Promise((resolve) => {
+            resolveSecondFetch = resolve;
+          });
+        }
+        throw new Error(`unexpected fetch url in test: ${url}`);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      await openPanelAndSelectFile(mdLive);
+
+      const markdownContainer = screen.getByTestId("preview-panel-markdown");
+      // 保存前にユーザーがスクロールしていた状態を模す。
+      markdownContainer.scrollTop = 120;
+
+      act(() => {
+        mdLive.handlers.onFileChanged?.({
+          type: "md_file_changed",
+          repo: "repo-a",
+          path: "docs/note.md",
+        });
+      });
+
+      await waitFor(() => {
+        expect(fileFetchCount).toBe(2);
+      });
+
+      // 再フェッチが完了する前でも loading 表示に落ちず、直前の内容と
+      // スクロール位置（同一 DOM ノードが維持されていること）が保持される。
+      expect(
+        screen.queryByText("ファイルを読み込んでいます..."),
+      ).not.toBeInTheDocument();
+      expect(screen.getByText("Hello")).toBeInTheDocument();
+      expect(screen.getByTestId("preview-panel-markdown").scrollTop).toBe(120);
+
+      act(() => {
+        resolveSecondFetch({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ content: "# Updated" }),
+        });
+      });
+
+      await screen.findByText("Updated");
+      expect(screen.queryByText("Hello")).not.toBeInTheDocument();
+    });
+
+    it("md_file_changed によるサイレントリフレッシュが失敗した場合はエラーメッセージへ遷移する（成功時と非対称に握りつぶさない）", async () => {
+      const mdLive = createFakeMdLive();
+      let fileFetchCount = 0;
+      const fetchMock = vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith("/api/md/tree")) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () =>
+              Promise.resolve({
+                repos: [{ name: "repo-a", files: ["docs/note.md"] }],
+              }),
+          });
+        }
+        if (url.startsWith("/api/md/file")) {
+          fileFetchCount++;
+          if (fileFetchCount === 1) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: () => Promise.resolve({ content: "# Hello" }),
+            });
+          }
+          return Promise.reject(new Error("network error"));
+        }
+        throw new Error(`unexpected fetch url in test: ${url}`);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      await openPanelAndSelectFile(mdLive);
+
+      act(() => {
+        mdLive.handlers.onFileChanged?.({
+          type: "md_file_changed",
+          repo: "repo-a",
+          path: "docs/note.md",
+        });
+      });
+
+      expect(
+        await screen.findByText("ファイルの取得に失敗しました"),
+      ).toBeInTheDocument();
+    });
+
+    it("WS 再接続時（onReconnected）、選択中のファイルを再フェッチする（切断中に発生した変更の取りこぼし防止。blocker修正）", async () => {
+      const mdLive = createFakeMdLive();
+      const fetchMock = stubFetch();
+
+      await openPanelAndSelectFile(mdLive);
+      const callsAfterSelect = fetchMock.mock.calls.length;
+
+      act(() => {
+        mdLive.handlers.onReconnected?.();
+      });
+
+      await waitFor(() => {
+        expect(fetchMock.mock.calls.length).toBeGreaterThan(callsAfterSelect);
+      });
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        "/api/md/file?repo=repo-a&path=docs%2Fnote.md",
+      );
+    });
+
     it("md_file_changed の repo/path が開いているファイルと一致しない場合は再フェッチしない", async () => {
       const mdLive = createFakeMdLive();
       const fetchMock = stubFetch();
