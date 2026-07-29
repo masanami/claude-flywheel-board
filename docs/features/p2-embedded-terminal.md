@@ -60,7 +60,7 @@ fleet の管理者として、ボード上のエージェントカラムやカ�
 ### アーキテクチャ決定
 
 - 実体は「UI 側 xterm.js ⇔（WS）⇔ サーバ側 node-pty ⇔ `tmux attach` ⇔ tmux セッション」。tmux をバックエンドにすることで永続化（FR-11）を tmux に委譲し、board 側にセッション状態を持たない
-- セッションのライフサイクル: タブ初回アクティブ時に `tmux has-session -t flywheel-<name>` → なければ `tmux new-session -d -s flywheel-<name> -c <repo-path>` → node-pty で `tmux attach -t flywheel-<name>` を spawn。WS 切断時は pty プロセスを kill するだけ（tmux セッションは残る）
+- セッションのライフサイクル: タブ初回アクティブ時に `tmux has-session -t flywheel-<name>` → なければ `tmux new-session -d -s flywheel-<name> -c <repo-path>` → node-pty で `tmux attach -t flywheel-<name>` を spawn。WS 切断時は pty プロセスを kill するだけ（tmux セッションは残る）。board が発行するこれらの tmux コマンドは全て専用ソケット `-L board` 上で実行し、デフォルトソケットから隔離する（#55。詳細は architecture.md §3.5「ソケット隔離」）
 - 必要時のみ追加 window（同一セッション内）を作る。複数ブラウザタブから同一セッションへの同時 attach は tmux の標準挙動（画面共有）に任せる
 - **指示文の生成（FR-09/13）は UI 側の責務**: D&D・差し込みの位置指定を自然文の指示（例: 「課題 C-047 の優先度を C-044 より上に変更してください」）に翻訳し、prefill API に渡す。ブリッジは文字列を流し込むだけで意味を解釈しない
 
@@ -68,7 +68,7 @@ fleet の管理者として、ボード上のエージェントカラムやカ�
 
 埋め込みターミナル（xterm.js）の体験品質 — 特に**日本語 IME との相性**（変換中テキストの表示・確定タイミング）— の作り込みコストが実運用で見合わないと判明した場合の撤退先を、あらかじめ定めておく:
 
-- **撤退先の姿**: board の責務を「tmux セッション準備＋prefill まで」に縮め、閲覧・対話は**ユーザー自身のターミナルで `tmux attach -t flywheel-<agent>`**（ネイティブのフォント・IME・入力）。ボードには「セッション状態表示＋attach コマンドのコピー」だけ残す
+- **撤退先の姿**: board の責務を「tmux セッション準備＋prefill まで」に縮め、閲覧・対話は**ユーザー自身のターミナルで `tmux -L board attach -t flywheel-<agent>`**（ネイティブのフォント・IME・入力。`-L board` は board 専用ソケットを指す。#55）。ボードには「セッション状態表示＋attach コマンドのコピー」だけ残す
 - **撤退コストが小さい根拠**: サーバ側（tmux セッション管理 `src/server/pty/tmux.ts`・prefill・D&D/差し込みの指示生成動線）は撤退後も**そのまま使う**。捨てるのは UI の TerminalPane（xterm.js・pty attach・クライアント WS）に閉じる
 - **撤退時に必要な改訂**:
   - requirements.md FR-10/FR-11（常設ターミナル→セッション状態表示＋ネイティブ attach）

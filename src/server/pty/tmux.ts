@@ -1,5 +1,16 @@
 import { execFile } from "node:child_process";
 
+/**
+ * board が発行する全 tmux コマンドを隔離する専用ソケット名（Issue #55）。
+ *
+ * board の tmux 操作をデフォルトソケットから切り離し、独立した tmux サーバに
+ * 閉じ込める。1箇所でも `-L TMUX_SOCKET` を付け忘れると「一部デフォルト・
+ * 一部専用ソケット」の split-brain になり has-session がセッションを
+ * 見つけられず壊れるため、tmux を呼び出す全箇所（tmux.ts・pty-process.ts）が
+ * この定数を import して使う。
+ */
+export const TMUX_SOCKET = "board";
+
 export type TmuxClient = {
   hasSession(sessionName: string): Promise<boolean>;
   newSession(sessionName: string, cwd: string): Promise<void>;
@@ -65,10 +76,18 @@ export function createTmuxClient(deps: TmuxClientDeps = {}): TmuxClient {
 
   return {
     hasSession(sessionName) {
-      return runHasSessionCheck("tmux", ["has-session", "-t", sessionName]);
+      return runHasSessionCheck("tmux", [
+        "-L",
+        TMUX_SOCKET,
+        "has-session",
+        "-t",
+        sessionName,
+      ]);
     },
     async newSession(sessionName, cwd) {
       await runCommand("tmux", [
+        "-L",
+        TMUX_SOCKET,
         "new-session",
         "-d",
         "-s",
@@ -83,11 +102,10 @@ export function createTmuxClient(deps: TmuxClientDeps = {}): TmuxClient {
       // <session> で設定を試みても、実機検証の結果、実際にはサーバ全体
       // （同一 tmux サーバを共有する全セッション）に適用される（tmux の
       // escape-time 特有の挙動）。ここでは実際の挙動に合わせて -g
-      // （グローバル/サーバスコープ）を明示的に使う。board が管理する tmux
-      // セッション同士だけでなく、同一ユーザーが同じデフォルトソケットで
-      // 使う他の tmux セッションにも影響し得るが、escape-time 0 化はローカル
-      // 用途では概ね無害なため許容する（親チケットのクリティカル設計決定でも
-      // サーバ/セッションスコープいずれも許容されている）。
+      // （グローバル/サーバスコープ）を明示的に使う。適用範囲は board 専用
+      // ソケット（`-L board`。TMUX_SOCKET。Issue #55）上のサーバに閉じるため、
+      // board が管理する tmux セッション同士にしか影響せず、同一ユーザーが
+      // デフォルトソケットで使う他の tmux セッションへは波及しない。
       //
       // set-option 自体の失敗（万一 tmux サーバが直後に落ちた等）は
       // ベストエフォートとして扱い、newSession 全体を失敗させない。
@@ -99,7 +117,14 @@ export function createTmuxClient(deps: TmuxClientDeps = {}): TmuxClient {
       // 経路に依存せず、newSession の成否をセッション作成の成否だけに
       // 一致させる。
       try {
-        await runCommand("tmux", ["set-option", "-g", "escape-time", "0"]);
+        await runCommand("tmux", [
+          "-L",
+          TMUX_SOCKET,
+          "set-option",
+          "-g",
+          "escape-time",
+          "0",
+        ]);
       } catch (error) {
         console.warn(
           `tmux escape-time の設定に失敗しました（セッション "${sessionName}" 自体は作成済み）:`,
@@ -112,6 +137,8 @@ export function createTmuxClient(deps: TmuxClientDeps = {}): TmuxClient {
       // `--` で以降をオプションとして解釈させないガードを挟む（command が
       // `-` で始まっていても tmux 側のフラグとして誤解釈されない defense-in-depth）。
       return runCommand("tmux", [
+        "-L",
+        TMUX_SOCKET,
         "send-keys",
         "-t",
         sessionName,

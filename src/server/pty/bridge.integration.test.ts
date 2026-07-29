@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import type { FleetEntry } from "../manifest.ts";
 import { createTerminalWebSocketServer } from "./bridge.ts";
+import { TMUX_SOCKET } from "./tmux.ts";
 
 const { Terminal: HeadlessTerminal } = xtermHeadlessPkg;
 
@@ -22,20 +23,32 @@ function hasTmux(): boolean {
   }
 }
 
+// board が発行する tmux コマンドは全て専用ソケット（-L board）上で実行される
+// （Issue #55）。このテストのヘルパーもデフォルトソケットではなく同じソケットを
+// 見に行かないと、実際にはセッションが存在するのに検知できず split-brain 状態で
+// テストがタイムアウトする。
 function killTmuxSession(sessionName: string): Promise<void> {
   return new Promise((resolve) => {
-    execFile("tmux", ["kill-session", "-t", sessionName], () => {
-      // セッションが既に無い場合もエラーになるが、クリーンアップなので握り潰す。
-      resolve();
-    });
+    execFile(
+      "tmux",
+      ["-L", TMUX_SOCKET, "kill-session", "-t", sessionName],
+      () => {
+        // セッションが既に無い場合もエラーになるが、クリーンアップなので握り潰す。
+        resolve();
+      },
+    );
   });
 }
 
 function tmuxSessionExists(sessionName: string): Promise<boolean> {
   return new Promise((resolve) => {
-    execFile("tmux", ["has-session", "-t", sessionName], (error) => {
-      resolve(!error);
-    });
+    execFile(
+      "tmux",
+      ["-L", TMUX_SOCKET, "has-session", "-t", sessionName],
+      (error) => {
+        resolve(!error);
+      },
+    );
   });
 }
 
@@ -43,7 +56,7 @@ function capturePane(sessionName: string): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
       "tmux",
-      ["capture-pane", "-t", sessionName, "-p"],
+      ["-L", TMUX_SOCKET, "capture-pane", "-t", sessionName, "-p"],
       (error, stdout) => {
         if (error) {
           reject(error);

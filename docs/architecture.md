@@ -99,6 +99,7 @@ infra	/Users/masami/agents/infra-agent
 - **実体**: UI 側 xterm.js ⇔ サーバ側 node-pty ⇔ **tmux**。
 - **tmux をバックエンド**にする理由: board（サーバ・ブラウザ）を閉じてもセッションが生存し、re-attach できる（FR-11）。長時間の run-cycle・対話セッションと共存するため必須。
 - **セッション規約**: tmux セッション名 `flywheel-<agent-name>`（エージェント対話）、cwd＝エージェント repo ルート。#57 で手動コマンド操作用の独立セッション `flywheel-<agent-name>-shell`（同一 cwd）を追加し、**1 エージェント = 対話 + 手動シェルの 2 セッション**を常設する（FR-10）。tmux pane 分割ではなく別セッション方式を採る理由（prefill が手動シェルに落ちない・コピペ連携維持・リサイズ機構の再利用）は #57 の設計決定を参照。
+- **ソケット隔離**（#55）: board が発行する全 tmux コマンド（has-session / new-session / set-option / send-keys / attach）は、デフォルトソケットではなく **専用ソケット `-L board`** 上でのみ実行する（`src/server/pty/tmux.ts` の `TMUX_SOCKET` 定数）。board を独立した tmux サーバに閉じ込めることで、`set-option -g escape-time 0` 等の board 側設定がユーザーの他の tmux 利用に波及しないようにする。#57 で追加する `-shell` セッションも同じソケット上に作成すること（1箇所でも付け忘れると has-session がセッションを見失う split-brain になる）。
 - **配置**: 画面下部を占有する**常設領域**。エージェントごとの**タブ**で切り替え、折りたたみ・高さ調整ができる（FR-10）。各タブは**左=エージェント対話 / 右=手動シェルの常時2分割**（スプリッターで比率変更・#57）。「開く」ボタンは置かない — カード・カラム起点の操作はすべて「該当タブをアクティブにしてプリフィル」に翻訳される。
 - **UI 動線**:
   - ⚠応答なしカード／カード詳細 →「再開コマンドを挿入」: journal / runs.jsonl の session_id から `cd .flywheel/repos/<name> && claude -p --resume <session-id>` を該当タブに**プリフィル**（実行はしない。Enter は人間が押す）（FR-12）。

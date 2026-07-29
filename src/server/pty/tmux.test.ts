@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { createTmuxClient, ensureTmuxSession, stripNewlines } from "./tmux.ts";
+import {
+  TMUX_SOCKET,
+  createTmuxClient,
+  ensureTmuxSession,
+  stripNewlines,
+} from "./tmux.ts";
 
 describe("stripNewlines", () => {
   it("改行 (\\n) を除去する", () => {
@@ -28,6 +33,8 @@ describe("createTmuxClient", () => {
 
     expect(result).toBe(true);
     expect(runHasSessionCheck).toHaveBeenCalledWith("tmux", [
+      "-L",
+      TMUX_SOCKET,
       "has-session",
       "-t",
       "flywheel-medical",
@@ -48,6 +55,8 @@ describe("createTmuxClient", () => {
     await tmux.newSession("flywheel-medical", "/repos/medical-agent");
 
     expect(runCommand).toHaveBeenCalledWith("tmux", [
+      "-L",
+      TMUX_SOCKET,
       "new-session",
       "-d",
       "-s",
@@ -64,6 +73,8 @@ describe("createTmuxClient", () => {
     await tmux.newSession("flywheel-medical", "/repos/medical-agent");
 
     expect(runCommand).toHaveBeenCalledWith("tmux", [
+      "-L",
+      TMUX_SOCKET,
       "set-option",
       "-g",
       "escape-time",
@@ -81,17 +92,19 @@ describe("createTmuxClient", () => {
 
     await tmux.newSession("flywheel-medical", "/repos/medical-agent");
 
-    const newSessionIndex = calls.findIndex(
-      (args) => args[0] === "new-session",
+    const newSessionIndex = calls.findIndex((args) =>
+      args.includes("new-session"),
     );
-    const setOptionIndex = calls.findIndex((args) => args[0] === "set-option");
+    const setOptionIndex = calls.findIndex((args) =>
+      args.includes("set-option"),
+    );
     expect(newSessionIndex).toBeGreaterThanOrEqual(0);
     expect(setOptionIndex).toBeGreaterThan(newSessionIndex);
   });
 
   it("newSession は new-session が失敗した場合、set-option を実行せずにエラーを伝播する", async () => {
     const runCommand = vi.fn().mockImplementation((_command, args) => {
-      if (args[0] === "new-session") {
+      if (args.includes("new-session")) {
         return Promise.reject(new Error("tmux binary not found"));
       }
       return Promise.resolve(undefined);
@@ -110,7 +123,7 @@ describe("createTmuxClient", () => {
 
   it("newSession は set-option（escape-time 設定）が失敗しても、セッション自体は作成済みとして成功扱いにする（ベストエフォート。design-reviewer 指摘: set-option 失敗を ensureTmuxSession の重複セッション再確認ロジックに黙って握り潰させない）", async () => {
     const runCommand = vi.fn().mockImplementation((_command, args) => {
-      if (args[0] === "set-option") {
+      if (args.includes("set-option")) {
         return Promise.reject(new Error("no server running"));
       }
       return Promise.resolve(undefined);
@@ -122,6 +135,8 @@ describe("createTmuxClient", () => {
     ).resolves.toBeUndefined();
 
     expect(runCommand).toHaveBeenCalledWith("tmux", [
+      "-L",
+      TMUX_SOCKET,
       "new-session",
       "-d",
       "-s",
@@ -138,6 +153,8 @@ describe("createTmuxClient", () => {
     await tmux.sendKeysLiteral("flywheel-medical", "git status");
 
     expect(runCommand).toHaveBeenCalledWith("tmux", [
+      "-L",
+      TMUX_SOCKET,
       "send-keys",
       "-t",
       "flywheel-medical",
@@ -154,6 +171,8 @@ describe("createTmuxClient", () => {
     await tmux.sendKeysLiteral("flywheel-medical", "--help");
 
     expect(runCommand).toHaveBeenCalledWith("tmux", [
+      "-L",
+      TMUX_SOCKET,
       "send-keys",
       "-t",
       "flywheel-medical",
@@ -171,8 +190,10 @@ describe("createTmuxClient", () => {
 
     const call = runCommand.mock.calls[0];
     expect(call?.[1]).not.toContain("Enter");
-    expect(call?.[1]?.[5]).not.toMatch(/[\r\n]/);
+    expect(call?.[1]?.[7]).not.toMatch(/[\r\n]/);
     expect(call?.[1]).toEqual([
+      "-L",
+      TMUX_SOCKET,
       "send-keys",
       "-t",
       "flywheel-medical",
@@ -182,13 +203,13 @@ describe("createTmuxClient", () => {
     ]);
   });
 
-  it("sendKeysLiteral が組み立てる引数配列は常に6要素（余分な Enter 引数を追加しない）", async () => {
+  it("sendKeysLiteral が組み立てる引数配列は常に8要素（余分な Enter 引数を追加しない）", async () => {
     const runCommand = vi.fn().mockResolvedValue(undefined);
     const tmux = createTmuxClient({ runCommand });
 
     await tmux.sendKeysLiteral("flywheel-medical", "ls");
 
-    expect(runCommand.mock.calls[0]?.[1]).toHaveLength(6);
+    expect(runCommand.mock.calls[0]?.[1]).toHaveLength(8);
   });
 });
 

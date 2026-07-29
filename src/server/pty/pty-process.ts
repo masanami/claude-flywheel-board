@@ -1,4 +1,5 @@
 import * as nodePty from "node-pty";
+import { TMUX_SOCKET } from "./tmux.ts";
 
 export type PtyExitEvent = { exitCode: number; signal?: number };
 
@@ -78,9 +79,11 @@ export function spawnPtyProcess(
 }
 
 /**
- * `tmux attach -t <sessionName> \; refresh-client` を spawn する
- * （cwd＝エージェント repo ルート）。WS `/ws/terminal` 接続確立後、node-pty で
- * pty ⇔ WS の双方向ストリームを開始するために使う（architecture.md §3.5）。
+ * `tmux -L board attach -t <sessionName> \; refresh-client` を spawn する
+ * （cwd＝エージェント repo ルート）。board 専用ソケット（TMUX_SOCKET。Issue #55）
+ * 上でのみ attach し、デフォルトソケットとの split-brain を避ける。WS
+ * `/ws/terminal` 接続確立後、node-pty で pty ⇔ WS の双方向ストリームを
+ * 開始するために使う（architecture.md §3.5）。
  *
  * `refresh-client` を続けるのは、attach 直後のハンドシェイク中に xterm.js 側へ
  * 部分的な制御列が描画残骸（文字化け行）として残ることがあるため。attach 完了後に
@@ -91,7 +94,7 @@ export function createNodePtySpawner(): SpawnTerminalPty {
   return (sessionName, cwd) =>
     spawnPtyProcess(
       "tmux",
-      ["attach", "-t", sessionName, ";", "refresh-client"],
+      ["-L", TMUX_SOCKET, "attach", "-t", sessionName, ";", "refresh-client"],
       { cwd },
     );
 }
