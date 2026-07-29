@@ -1,6 +1,7 @@
 import * as nodePty from "node-pty";
 import { describe, expect, it, vi } from "vitest";
-import { spawnPtyProcess } from "./pty-process.ts";
+import { createNodePtySpawner, spawnPtyProcess } from "./pty-process.ts";
+import { TMUX_SOCKET } from "./tmux.ts";
 
 // node-pty 自体は Mock せず、tmux に依存しない軽量な実プロセス（/bin/echo）を
 // spawn して、PtyProcess インタフェースへの変換（onData/onExit/write/resize/kill）
@@ -80,6 +81,45 @@ describe("spawnPtyProcess", () => {
     } finally {
       ptyProcess.kill();
       await exited;
+      spawnSpy.mockRestore();
+    }
+  });
+});
+
+describe("createNodePtySpawner", () => {
+  it("board 専用ソケット（-L board）を指定して tmux attach を組み立てる（Issue #55: split-brain 回帰防止。デフォルトソケットへの attach を許すと board が発行する他の tmux コマンド（has-session 等）と食い違い、セッションを見失う）", () => {
+    // 引数の組み立てのみを検証したいため、実プロセスを spawn しない
+    // （tmux 依存の結合テストは bridge.integration.test.ts 側で行う方針。
+    // ファイル冒頭コメント参照）。call-through させると存在しない
+    // セッション/cwd に対して実際に `tmux -L board attach` が起動してしまう。
+    const spawnSpy = vi.spyOn(nodePty, "spawn").mockReturnValue({
+      onData: vi.fn(),
+      onExit: vi.fn(),
+      write: vi.fn(),
+      resize: vi.fn(),
+      kill: vi.fn(),
+      pause: vi.fn(),
+      resume: vi.fn(),
+    } as unknown as nodePty.IPty);
+
+    try {
+      const spawner = createNodePtySpawner();
+      spawner("flywheel-medical", "/repos/medical-agent");
+
+      expect(spawnSpy).toHaveBeenCalledWith(
+        "tmux",
+        [
+          "-L",
+          TMUX_SOCKET,
+          "attach",
+          "-t",
+          "flywheel-medical",
+          ";",
+          "refresh-client",
+        ],
+        expect.objectContaining({ cwd: "/repos/medical-agent" }),
+      );
+    } finally {
       spawnSpy.mockRestore();
     }
   });

@@ -39,7 +39,9 @@ flowchart LR
 | **tmux** | ✅（ターミナル機能に） | 埋め込みターミナルのバックエンド。`brew install tmux`。**未インストールだとボード表示は動くが、ターミナルタブの接続が失敗する** |
 | npm | ✅ | 依存インストール |
 
-> tmux を採用している理由: board やブラウザを閉じても Claude Code セッションが生存し（re-attach 可能）、`tmux attach -t flywheel-<agent>` で手元のネイティブターミナルからも同じセッションを併用できるため。
+> tmux を採用している理由: board やブラウザを閉じても Claude Code セッションが生存し（re-attach 可能）、手元のネイティブターミナルからも同じセッションを併用できるため。board が発行する tmux コマンドは専用ソケット（`-L board`）に隔離されているため、ネイティブターミナルから attach する場合も `tmux -L board attach -t flywheel-<agent>` を使うこと（`-L board` を省略するとデフォルトソケットを見てしまい、セッションが見つからない）。
+>
+> **移行時の注意**: この隔離が導入される前にデフォルトソケット上で作成された既存の `flywheel-<agent>` セッションは、board の専用ソケットからは見えない（孤児化する）。board 起動後に古いセッションと新しいセッションが同一 repo に対して並存すると、片方のターミナル操作がもう片方の Claude Code セッションに伝わらなくなる。移行時は `tmux attach -t flywheel-<agent>` で旧セッションの作業を終えてから `tmux kill-session -t flywheel-<agent>` で終了し、board 側に新しいセッションを作らせること。
 
 ### 手順
 
