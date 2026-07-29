@@ -1,9 +1,12 @@
+import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import type { AddressInfo } from "node:net";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { serve } from "@hono/node-server";
+import type { FSWatcher } from "chokidar";
+import { watch } from "chokidar";
 import { Hono } from "hono";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
@@ -15,6 +18,14 @@ import {
 } from "./api.ts";
 import { createMemoryBoardCache } from "./cache.ts";
 import type { FleetEntry } from "./manifest.ts";
+
+// Issue #88: md_subscribe/md_unsubscribe（Issue #67）ブロックが実 chokidar・
+// 固定 sleep に依存し、負荷の高い CI で偽陽性・偽陰性を招きうるため、
+// src/server/md/watch.test.ts と同じパターンで chokidar 自体をモックする。
+// このモジュールモックはファイル全体（このファイルが依存する api.ts →
+// md/watch.ts → chokidar の依存グラフ全体）に透過的に効く。他の describe
+// ブロックは chokidar に依存しないため影響しない。
+vi.mock("chokidar", () => ({ watch: vi.fn() }));
 
 describe("isAllowedHost", () => {
   it("localhost を許可する", () => {
@@ -689,10 +700,23 @@ describe("attachWebSocketServer の md_subscribe / md_unsubscribe（Issue #67）
   let tempRoot: string;
   let repoRoot: string;
 
+  // src/server/md/watch.test.ts と同じ FakeFSWatcher パターン。close は
+  // Promise を返す chokidar.FSWatcher の契約に合わせる。
+  class FakeFSWatcher extends EventEmitter {
+    close = vi.fn().mockResolvedValue(undefined);
+  }
+
+  function mockChokidarWatch(): FakeFSWatcher {
+    const fake = new FakeFSWatcher();
+    vi.mocked(watch).mockReturnValueOnce(fake as unknown as FSWatcher);
+    return fake;
+  }
+
   beforeEach(() => {
     tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "api-md-watch-test-"));
     repoRoot = path.join(tempRoot, "repo");
     fs.mkdirSync(repoRoot);
+    vi.mocked(watch).mockReset();
   });
 
   afterEach(() => {
@@ -776,14 +800,16 @@ describe("attachWebSocketServer の md_subscribe / md_unsubscribe（Issue #67）
   // シンボリックリンク経由の repo 外パス・`.md` 以外の拡張子はすべて
   // md_subscribe_error を返し、watch を開始しない。HTTP 側（GET /api/md/file、
   // 上の describe("GET /api/md/file（Issue #66）")）と同じ拒否ケースを、
-  // WS md_subscribe 経路でも単体テストとして担保する。「watch が開始されない」
-  // ことは、拒否対象のファイルを直接書き換えても md_file_changed が届かない
-  // ことで確認する（chokidar 自体はモックせず、実 fs で確証する）。
+  // WS md_subscribe 経路でも単体テストとして担保する。パス検証（validateMdPath）
+  // の合否自体は path-validation.test.ts で単体テストとして担保済みのため
+  // ここでは再検証しない。「watch が開始されない」ことは、chokidar をモックし
+  // `vi.mocked(watch)` が呼ばれていないことを直接アサートして確認する
+  // （Issue #88: 実ファイルへの書き込み＋固定 sleep 待機での間接確認は
+  // 決定的でなく負荷の高い CI で偽陰性を招きうるため廃止）。
   describe("md_subscribe のパス検証（#63 共有ロジックの WS 経路適用）", () => {
     async function assertSubscribeRejectedAndNoWatch(
       getFleetEntries: () => readonly FleetEntry[],
       subscribeMessage: { repo: string; path: string },
-      targetFilePath: string,
     ): Promise<void> {
       const ws = await connectClient(getFleetEntries);
       const messages = collectMessages(ws);
@@ -794,28 +820,7 @@ describe("attachWebSocketServer の md_subscribe / md_unsubscribe（Issue #67）
         type: "md_subscribe_error",
         ...subscribeMessage,
       });
-
-      // セルフレビュー指摘対応: もし実装に不具合があり検証失敗時にも誤って
-      // watch を開始してしまっていた場合、その chokidar watch の確立には
-      // 一定の時間がかかる（正常系テストが「watch 確立を待ってから書き込む」
-      // としているのと同じ理由）。エラー受信直後に即書き込むと、たとえ
-      // バグで watch が開始されていても確立前の書き込みとして見逃され、
-      // このアサーションが「たまたま」パスしてしまいうる。正常系と同じ猶予を
-      // 置いてから書き込むことで、このテストが watch 未開始を実際に検証できる
-      // ようにする。
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      // 検証失敗時は watch を開始しないため、対象ファイルを書き換えても
-      // md_file_changed は届かないはず（書き換え後も一定時間待って確認する）。
-      fs.writeFileSync(
-        targetFilePath,
-        `${fs.readFileSync(targetFilePath, "utf-8")}\n# changed`,
-      );
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      expect(
-        messages.some(
-          (m) => (m as { type?: string }).type === "md_file_changed",
-        ),
-      ).toBe(false);
+      expect(vi.mocked(watch)).not.toHaveBeenCalled();
 
       ws.close();
     }
@@ -827,11 +832,10 @@ describe("attachWebSocketServer の md_subscribe / md_unsubscribe（Issue #67）
         { name: "myrepo", path: repoRoot },
       ];
 
-      await assertSubscribeRejectedAndNoWatch(
-        getFleetEntries,
-        { repo: "myrepo", path: "../outside.md" },
-        outsidePath,
-      );
+      await assertSubscribeRejectedAndNoWatch(getFleetEntries, {
+        repo: "myrepo",
+        path: "../outside.md",
+      });
     });
 
     it("絶対パスを path に渡すと md_subscribe_error を返し watch を開始しない", async () => {
@@ -841,11 +845,10 @@ describe("attachWebSocketServer の md_subscribe / md_unsubscribe（Issue #67）
         { name: "myrepo", path: repoRoot },
       ];
 
-      await assertSubscribeRejectedAndNoWatch(
-        getFleetEntries,
-        { repo: "myrepo", path: outsideAbsolutePath },
-        outsideAbsolutePath,
-      );
+      await assertSubscribeRejectedAndNoWatch(getFleetEntries, {
+        repo: "myrepo",
+        path: outsideAbsolutePath,
+      });
     });
 
     it("シンボリックリンク経由で repo 外の実体を指す場合は md_subscribe_error を返し watch を開始しない", async () => {
@@ -858,11 +861,10 @@ describe("attachWebSocketServer の md_subscribe / md_unsubscribe（Issue #67）
         { name: "myrepo", path: repoRoot },
       ];
 
-      await assertSubscribeRejectedAndNoWatch(
-        getFleetEntries,
-        { repo: "myrepo", path: "link.md" },
-        secretPath,
-      );
+      await assertSubscribeRejectedAndNoWatch(getFleetEntries, {
+        repo: "myrepo",
+        path: "link.md",
+      });
     });
 
     it(".md 以外の拡張子は md_subscribe_error を返し watch を開始しない", async () => {
@@ -872,11 +874,10 @@ describe("attachWebSocketServer の md_subscribe / md_unsubscribe（Issue #67）
         { name: "myrepo", path: repoRoot },
       ];
 
-      await assertSubscribeRejectedAndNoWatch(
-        getFleetEntries,
-        { repo: "myrepo", path: "notes.txt" },
-        notesPath,
-      );
+      await assertSubscribeRejectedAndNoWatch(getFleetEntries, {
+        repo: "myrepo",
+        path: "notes.txt",
+      });
     });
   });
 
@@ -886,16 +887,26 @@ describe("attachWebSocketServer の md_subscribe / md_unsubscribe（Issue #67）
     const getFleetEntries = (): readonly FleetEntry[] => [
       { name: "myrepo", path: repoRoot },
     ];
+    const fake = mockChokidarWatch();
     const ws = await connectClient(getFleetEntries);
     const messages = collectMessages(ws);
 
     ws.send(
       JSON.stringify({ type: "md_subscribe", repo: "myrepo", path: "doc.md" }),
     );
-    // chokidar の watch 確立を待ってから書き込む（確立前の書き込みは
-    // 見逃されうるため、実 chokidar を使う結合テストの定石として少し待つ）。
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    fs.writeFileSync(docPath, "# doc changed");
+    // chokidar はモックされているため実ファイル監視の確立を待つ必要はなく、
+    // サーバ側で subscribe 処理が完了した（chokidar.watch が呼ばれた）ことを
+    // 待てば足りる。以降は FakeFSWatcher へ change イベントを同期的に注入する。
+    await waitUntil(() => vi.mocked(watch).mock.calls.length > 0);
+    // セルフレビュー指摘対応: fake.emit("change") は watch() へ渡された引数と
+    // 無関係に発火できてしまうため、これだけでは「サーバが実 validateMdPath で
+    // 解決した正しい resolvedPath を chokidar.watch へ渡している」ことを検証
+    // できない。呼び出し引数を明示的にアサートし、この経路の実効性を担保する。
+    expect(vi.mocked(watch)).toHaveBeenCalledWith(
+      fs.realpathSync(docPath),
+      expect.objectContaining({ ignoreInitial: true }),
+    );
+    fake.emit("change");
 
     await waitUntil(() =>
       messages.some((m) => (m as { type?: string }).type === "md_file_changed"),
@@ -918,13 +929,14 @@ describe("attachWebSocketServer の md_subscribe / md_unsubscribe（Issue #67）
     const getFleetEntries = (): readonly FleetEntry[] => [
       { name: "myrepo", path: repoRoot },
     ];
+    const fake = mockChokidarWatch();
     const ws = await connectClient(getFleetEntries);
     const messages = collectMessages(ws);
 
     ws.send(
       JSON.stringify({ type: "md_subscribe", repo: "myrepo", path: "doc.md" }),
     );
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await waitUntil(() => vi.mocked(watch).mock.calls.length > 0);
     ws.send(
       JSON.stringify({
         type: "md_unsubscribe",
@@ -932,10 +944,35 @@ describe("attachWebSocketServer の md_subscribe / md_unsubscribe（Issue #67）
         path: "doc.md",
       }),
     );
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    fs.writeFileSync(docPath, "# doc changed after unsubscribe");
-    // unsubscribe 後も一定時間待つが、md_file_changed は来ないはず。
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    // unsubscribe により refcount が 0 になり chokidar watch が close される
+    // （＝サーバ側で unsubscribe 処理が完了した）ことを待つ。
+    await waitUntil(() => fake.close.mock.calls.length > 0);
+    fake.emit("change");
+
+    // セルフレビュー指摘対応: 「届かないこと」自体には決定的な待ち条件が無い
+    // ため、固定 sleep ではなく「往復が保証されたセンチネル」で待つ。
+    // fake.emit("change") は同期呼び出しであり、それが引き起こす（本来は
+    // 起きないはずの）サーバ→クライアント送信は、この直後に送るセンチネルの
+    // 処理より必ず先に発生する。同一 WS 接続上の送信順序は保存されるため、
+    // センチネルの応答が届いた時点で md_file_changed が来ていなければ、以後も
+    // 届かないと判定できる。センチネルには存在しない repo への md_subscribe を
+    // 使う（validateMdPath がエントリ探索の時点で同期的に弾くため chokidar には
+    // 触れず、本テストの前提を汚さない）。
+    ws.send(
+      JSON.stringify({
+        type: "md_subscribe",
+        repo: "sentinel-unknown-repo",
+        path: "sentinel.md",
+      }),
+    );
+    await waitUntil(() =>
+      messages.some(
+        (m) =>
+          (m as { type?: string; repo?: string }).type ===
+            "md_subscribe_error" &&
+          (m as { repo?: string }).repo === "sentinel-unknown-repo",
+      ),
+    );
 
     expect(
       messages.some((m) => (m as { type?: string }).type === "md_file_changed"),
@@ -950,21 +987,24 @@ describe("attachWebSocketServer の md_subscribe / md_unsubscribe（Issue #67）
     const getFleetEntries = (): readonly FleetEntry[] => [
       { name: "myrepo", path: repoRoot },
     ];
+    const fake = mockChokidarWatch();
     const ws = await connectClient(getFleetEntries);
 
     ws.send(
       JSON.stringify({ type: "md_subscribe", repo: "myrepo", path: "doc.md" }),
     );
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await waitUntil(() => vi.mocked(watch).mock.calls.length > 0);
 
     await new Promise<void>((resolve) => {
       ws.once("close", () => resolve());
       ws.close();
     });
+    // WS close ハンドラでの unsubscribeClient 完了（refcount 0 による
+    // chokidar watch の close 呼び出し）を待ってからイベントを発火する。
+    await waitUntil(() => fake.close.mock.calls.length > 0);
 
     // 切断後の変更検知が例外を投げないことを確認する（クラッシュしなければ成功）。
-    fs.writeFileSync(docPath, "# doc changed after close");
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(() => fake.emit("change")).not.toThrow();
   });
 });
 
