@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentBoard, BoardSnapshot } from "../board-types.ts";
@@ -6,6 +6,8 @@ import type { BoardSocketOptions } from "../ws.ts";
 
 const connectBoardSocket = vi.fn();
 const closeMock = vi.fn();
+const subscribeMdMock = vi.fn();
+const unsubscribeMdMock = vi.fn();
 
 vi.mock("../ws.ts", () => ({
   connectBoardSocket: (options: BoardSocketOptions) =>
@@ -40,11 +42,18 @@ function latestOptions(): BoardSocketOptions {
 beforeEach(() => {
   connectBoardSocket.mockReset();
   closeMock.mockReset();
-  connectBoardSocket.mockReturnValue({ close: closeMock });
+  subscribeMdMock.mockReset();
+  unsubscribeMdMock.mockReset();
+  connectBoardSocket.mockReturnValue({
+    close: closeMock,
+    subscribeMd: subscribeMdMock,
+    unsubscribeMd: unsubscribeMdMock,
+  });
 });
 
 afterEach(() => {
   vi.resetModules();
+  vi.unstubAllGlobals();
 });
 
 describe("Board", () => {
@@ -219,6 +228,19 @@ describe("Board", () => {
     expect(
       screen.queryByRole("heading", { name: "⚡ 実行中", level: 3 }),
     ).not.toBeInTheDocument();
+  });
+
+  it("PreviewPanel（右サイドパネル）が組み込まれている（#64）", async () => {
+    const { Board } = await import("./Board.tsx");
+    render(<Board />);
+
+    act(() => {
+      latestOptions().onSnapshot(snapshot([agentBoard({ name: "medical" })]));
+    });
+
+    expect(
+      screen.getByRole("button", { name: "プレビューパネルを開く" }),
+    ).toBeInTheDocument();
   });
 
   it("アンマウント時に close() を呼ぶ", async () => {
@@ -521,6 +543,214 @@ describe("Board", () => {
       expect(
         screen.queryByText("アーカイブ済みタスク"),
       ).not.toBeInTheDocument();
+    });
+  });
+
+  describe("ライブ更新結線（Issue #70）", () => {
+    // PreviewPanel 内部の「repo/path が一致する場合のみ処理する」判定ロジック
+    // 自体は PreviewPanel.test.tsx の責務。ここでは Board.tsx が
+    // connectBoardSocket から得た BoardSocket の subscribeMd/unsubscribeMd の
+    // 転送（送信方向）に加え、connectBoardSocket に渡す
+    // onMdFileChanged/onMdSubscribeError が実際に PreviewPanel まで届く
+    // こと（受信方向の転送）も検証する。セルフレビュー指摘: 送信方向のみの
+    // テストでは Board.tsx の onMdFileChanged/onMdSubscribeError 転送コードを
+    // まるごと削除しても全テストが緑のままになってしまう空白があった。
+    function stubTreeFetch() {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            repos: [{ name: "repo-a", files: ["docs/note.md"] }],
+          }),
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      return fetchMock;
+    }
+
+    function stubTreeAndFileFetch() {
+      const fetchMock = vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith("/api/md/tree")) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () =>
+              Promise.resolve({
+                repos: [{ name: "repo-a", files: ["docs/note.md"] }],
+              }),
+          });
+        }
+        if (url.startsWith("/api/md/file")) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({ content: "# Hello" }),
+          });
+        }
+        throw new Error(`unexpected fetch url in test: ${url}`);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      return fetchMock;
+    }
+
+    it("PreviewPanel でファイルを選択すると、Board 経由で socket.subscribeMd が repo/path 付きで呼ばれる", async () => {
+      stubTreeFetch();
+      const { Board } = await import("./Board.tsx");
+      render(<Board />);
+
+      act(() => {
+        latestOptions().onSnapshot(snapshot([agentBoard({ name: "medical" })]));
+      });
+
+      act(() => {
+        screen.getByRole("button", { name: "プレビューパネルを開く" }).click();
+      });
+
+      const fileButton = await screen.findByRole("button", {
+        name: "docs/note.md",
+      });
+      act(() => {
+        fileButton.click();
+      });
+
+      expect(subscribeMdMock).toHaveBeenCalledWith("repo-a", "docs/note.md");
+    });
+
+    it("PreviewPanel を閉じると、Board 経由で socket.unsubscribeMd が開いていたファイルの repo/path 付きで呼ばれる", async () => {
+      stubTreeFetch();
+      const { Board } = await import("./Board.tsx");
+      render(<Board />);
+
+      act(() => {
+        latestOptions().onSnapshot(snapshot([agentBoard({ name: "medical" })]));
+      });
+
+      act(() => {
+        screen.getByRole("button", { name: "プレビューパネルを開く" }).click();
+      });
+
+      const fileButton = await screen.findByRole("button", {
+        name: "docs/note.md",
+      });
+      act(() => {
+        fileButton.click();
+      });
+
+      act(() => {
+        screen
+          .getByRole("button", { name: "プレビューパネルを閉じる" })
+          .click();
+      });
+
+      expect(unsubscribeMdMock).toHaveBeenCalledWith("repo-a", "docs/note.md");
+    });
+
+    it("connectBoardSocket の onMdFileChanged が呼ばれると、開いているファイルと一致する場合に PreviewPanel が再フェッチする（受信方向の転送）", async () => {
+      const fetchMock = stubTreeAndFileFetch();
+      const { Board } = await import("./Board.tsx");
+      render(<Board />);
+
+      act(() => {
+        latestOptions().onSnapshot(snapshot([agentBoard({ name: "medical" })]));
+      });
+
+      act(() => {
+        screen.getByRole("button", { name: "プレビューパネルを開く" }).click();
+      });
+
+      const fileButton = await screen.findByRole("button", {
+        name: "docs/note.md",
+      });
+      act(() => {
+        fileButton.click();
+      });
+      await screen.findByText("Hello");
+      const callsAfterSelect = fetchMock.mock.calls.length;
+
+      act(() => {
+        latestOptions().onMdFileChanged?.({
+          type: "md_file_changed",
+          repo: "repo-a",
+          path: "docs/note.md",
+        });
+      });
+
+      await waitFor(() => {
+        expect(fetchMock.mock.calls.length).toBeGreaterThan(callsAfterSelect);
+      });
+    });
+
+    it("connectBoardSocket の onMdSubscribeError が呼ばれると、PreviewPanel に「ライブ更新は無効」の注記が表示される（受信方向の転送）", async () => {
+      stubTreeAndFileFetch();
+      const { Board } = await import("./Board.tsx");
+      render(<Board />);
+
+      act(() => {
+        latestOptions().onSnapshot(snapshot([agentBoard({ name: "medical" })]));
+      });
+
+      act(() => {
+        screen.getByRole("button", { name: "プレビューパネルを開く" }).click();
+      });
+
+      const fileButton = await screen.findByRole("button", {
+        name: "docs/note.md",
+      });
+      act(() => {
+        fileButton.click();
+      });
+      await screen.findByText("Hello");
+
+      act(() => {
+        latestOptions().onMdSubscribeError?.({
+          type: "md_subscribe_error",
+          repo: "repo-a",
+          path: "docs/note.md",
+        });
+      });
+
+      expect(
+        screen.getByTestId("preview-panel-live-update-disabled"),
+      ).toBeInTheDocument();
+    });
+
+    it("セルフレビュー指摘: WS が（再）接続した（onStatusChange('open')）際、選択中のファイルを再度 socket.subscribeMd する", async () => {
+      stubTreeFetch();
+      const { Board } = await import("./Board.tsx");
+      render(<Board />);
+
+      act(() => {
+        latestOptions().onSnapshot(snapshot([agentBoard({ name: "medical" })]));
+      });
+
+      act(() => {
+        screen.getByRole("button", { name: "プレビューパネルを開く" }).click();
+      });
+
+      const fileButton = await screen.findByRole("button", {
+        name: "docs/note.md",
+      });
+      act(() => {
+        fileButton.click();
+      });
+
+      const callsAfterSelect = subscribeMdMock.mock.calls.length;
+      expect(callsAfterSelect).toBeGreaterThan(0);
+
+      // 切断→自動再接続を模して onStatusChange("open") を発火させる
+      // （ws.ts の実装では再接続のたびに呼ばれる。ws.test.ts の責務）。
+      act(() => {
+        latestOptions().onStatusChange?.("open");
+      });
+
+      expect(subscribeMdMock.mock.calls.length).toBeGreaterThan(
+        callsAfterSelect,
+      );
+      expect(subscribeMdMock).toHaveBeenLastCalledWith(
+        "repo-a",
+        "docs/note.md",
+      );
     });
   });
 });

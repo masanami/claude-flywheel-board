@@ -161,8 +161,36 @@ body {
   cursor: not-allowed;
 }
 
+/* board-columns と PreviewPanel を横並びにする行（#64）。この行だけが
+ * flex row であり、FilterBar は従来通り縦積みの最上部に残る。PreviewPanel
+ * が開いた分だけ board-columns 側が圧縮される（下部ターミナル領域には
+ * 一切影響しない。docs/features/markdown-preview.md「機能全体の設計」節）。
+ */
+.board-main-row {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  /* セルフレビュー指摘（2周目）: board-columns に min-width を持たせたこと
+   * で、狭いウィンドウ幅 + 広いパネル幅の組み合わせでは行全体の内容幅が
+   * ビューポートを超えうる。この行自身がスクロールコンテナを持たないと、
+   * はみ出しが document レベルの横スクロールとして board の外（下部
+   * ターミナル領域を含む画面全体）へ漏れてしまう。overflow-x: auto で
+   * はみ出しをこの行の内側に閉じ込め、.terminal-pane 側には一切影響しない
+   * ようにする。
+   */
+  overflow-x: auto;
+}
+
 .board-columns {
   flex: 1;
+  /* PreviewPanel は最大 800px の固定幅（flex-shrink:0）を持つため、狭い
+   * ウィンドウ幅かつパネルを広げた組み合わせでは board-columns 側が 0px
+   * まで潰れ得る（セルフレビュー指摘: #57 の terminal-pane-panel-shell
+   * min-width と同型の問題）。agent-column の最小 flex-basis（280px）を
+   * 下回らない範囲は確保し、それ以上は overflow-x: auto の横スクロールに
+   * 委ねる。
+   */
+  min-width: 280px;
   display: flex;
   gap: 1rem;
   padding: 1rem;
@@ -753,4 +781,221 @@ body {
   flex-shrink: 0;
   cursor: col-resize;
   background: var(--terminal-resize-handle-bg);
+}
+
+/* マークダウンプレビュー右サイドパネル（#64）。.board-main-row 内で
+ * board-columns と横並びになる。閉じている間は幅を指定せず、ヘッダ
+ * （開くボタンのみ）分の幅に自然に収まる。
+ */
+.preview-panel {
+  flex-shrink: 0;
+  display: flex;
+  background: var(--board-column-bg);
+  border-left: 1px solid var(--board-border);
+}
+
+.preview-panel-resize-handle {
+  width: 4px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: var(--board-border);
+}
+
+.preview-panel-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.preview-panel-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid var(--board-border);
+}
+
+.preview-panel-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.preview-panel-refresh-button,
+.preview-panel-toggle-button {
+  border: none;
+  background: transparent;
+  color: var(--board-fg);
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 0.2rem 0.4rem;
+}
+
+.preview-panel-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  font-size: 0.85rem;
+}
+
+/* ファイルツリー（左）とレンダリング結果（右）を横並びにする（#69）。
+ * ファイルツリー側は独自スクロール・固定幅、レンダリング側は残り幅を使う。
+ * ファイルツリー側の文字色は元々 .preview-panel-body の muted-fg を継承
+ * していたため、ここで明示的に引き継ぐ（プレースホルダ的な一覧表示のため
+ * 本文色より薄くしてよい）。
+ */
+.preview-panel-file-tree {
+  flex-shrink: 0;
+  width: 35%;
+  max-width: 180px;
+  padding: 0.75rem;
+  overflow-y: auto;
+  color: var(--board-muted-fg);
+  border-right: 1px solid var(--board-border);
+}
+
+/* レンダリング結果は「読み物」であり、一覧・プレースホルダ用の muted-fg
+ * ではなく本文色（--board-fg）で表示する（セルフレビュー指摘: 実際の
+ * Markdown 本文までミュートグレーで表示され読みにくかった）。
+ * プレースホルダ・ローディング・エラー表示は個別に muted-fg / エラー色を
+ * 指定し直す。
+ */
+.preview-panel-markdown {
+  flex: 1;
+  min-width: 0;
+  padding: 0.75rem;
+  overflow-y: auto;
+  color: var(--board-fg);
+}
+
+.preview-panel-markdown-placeholder,
+.preview-panel-markdown-loading {
+  font-size: 0.8rem;
+  color: var(--board-muted-fg);
+}
+
+.preview-panel-markdown-error,
+.preview-panel-mermaid-error {
+  font-size: 0.8rem;
+  color: var(--board-needs-human-border);
+}
+
+/* md_subscribe_error 受信時の注記（#70）。エラーではなく「ライブ更新だけ
+ * 無効」という軽い注意喚起のため、エラー色より控えめな枠線で下の
+ * Markdown 本文と区切るだけに留める（KISS）。 */
+.preview-panel-live-update-disabled {
+  font-size: 0.8rem;
+  color: var(--board-needs-human-border);
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--board-border);
+}
+
+/* GFM テーブル・コードブロック・引用の最低限の可読性のみ整える
+ * （見た目の作り込みは本チケットのスコープ外。KISS）。
+ */
+.preview-panel-markdown table {
+  border-collapse: collapse;
+  margin: 0.5rem 0;
+}
+
+.preview-panel-markdown th,
+.preview-panel-markdown td {
+  border: 1px solid var(--board-border);
+  padding: 0.25rem 0.5rem;
+}
+
+.preview-panel-markdown pre {
+  background: var(--board-column-bg);
+  border: 1px solid var(--board-border);
+  border-radius: 4px;
+  padding: 0.5rem;
+  overflow-x: auto;
+}
+
+.preview-panel-markdown code {
+  font-family: monospace;
+}
+
+.preview-panel-markdown blockquote {
+  margin: 0.5rem 0;
+  padding-left: 0.75rem;
+  border-left: 3px solid var(--board-border);
+  color: var(--board-muted-fg);
+}
+
+.preview-panel-mermaid-wrapper {
+  margin: 0.5rem 0;
+}
+
+.preview-panel-mermaid svg {
+  max-width: 100%;
+  /* mermaid の SVG は width/height 属性を持つため、max-width で横に縮んだ
+   * ときに高さを追従させないと図が縦に引き伸ばされる。 */
+  height: auto;
+}
+
+/* ファイルツリー（#68）。repo ごとにファイルパスの一覧を表示するだけの
+ * 平坦なリスト（KISS。過度な階層UIコンポーネントは導入しない）。
+ */
+.file-tree-loading,
+.file-tree-error,
+.file-tree-empty {
+  font-size: 0.8rem;
+  color: var(--board-muted-fg);
+}
+
+.file-tree-error {
+  color: var(--board-needs-human-border);
+}
+
+.file-tree-status {
+  font-size: 0.75rem;
+  color: var(--board-muted-fg);
+  margin-bottom: 0.5rem;
+}
+
+.file-tree-status-error {
+  color: var(--board-needs-human-border);
+}
+
+.file-tree-repo {
+  margin-bottom: 0.75rem;
+}
+
+.file-tree-repo-name {
+  font-weight: 600;
+  font-size: 0.8rem;
+  margin-bottom: 0.25rem;
+  color: var(--board-fg);
+}
+
+.file-tree-file-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.file-tree-file-button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: var(--board-muted-fg);
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 0.15rem 0.3rem;
+  border-radius: 3px;
+  /* repo 相対パスは空白を含まないことが多く、パネル幅を超えると通常の
+   * 折り返しが効かないため、任意の文字位置での折り返しを許可する
+   * （セルフレビュー指摘: 狭いパネル幅ではみ出す）。 */
+  overflow-wrap: anywhere;
+}
+
+.file-tree-file-button[aria-current="true"] {
+  background: var(--board-chip-active-bg);
+  color: var(--board-chip-active-fg);
 }

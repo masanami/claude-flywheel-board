@@ -11,6 +11,7 @@ import {
   createApp,
   getServeOptions,
 } from "./index.ts";
+import type { FleetEntry } from "./manifest.ts";
 import { createTerminalWebSocketServer } from "./pty/bridge.ts";
 
 describe("getServeOptions", () => {
@@ -67,6 +68,72 @@ describe("createApp", () => {
   });
 });
 
+// Issue #62: md 系エンドポイント（別チケット）はすべて manifest から repo ルートを
+// 解決するため、createApp / getServeOptions が getFleetEntries コールバックを
+// registerApiRoutes まで供給できることを確認する（既存呼び出し元は省略可能な
+// ままであることが後方互換の条件）。registerApiRoutes の本体はまだ getFleetEntries
+// を参照しないため、ここで検証できるのは「後方互換」と「構築時に eager 評価しない
+// こと」までであり、「渡した値が実際に消費される」ことの検証は最初の md エンドポイント
+// を追加するチケット側の責務とする。
+describe("createApp / getServeOptions の getFleetEntries 供給経路（Issue #62）", () => {
+  it("getFleetEntries を渡しても既存の fetch 挙動（404）は変わらない（後方互換）", async () => {
+    const cache = createMemoryBoardCache();
+    const getFleetEntries = (): readonly FleetEntry[] => [
+      { name: "medical", path: "/repos/medical-agent" },
+    ];
+
+    const app = createApp(cache, getFleetEntries);
+    const res = await app.request("/does-not-exist");
+
+    expect(res.status).toBe(404);
+  });
+
+  it("createApp 構築処理自体は getFleetEntries を呼び出さない（eager 評価の回帰ガード）", () => {
+    const cache = createMemoryBoardCache();
+    const getFleetEntries = vi.fn((): readonly FleetEntry[] => [
+      { name: "medical", path: "/repos/x" },
+    ]);
+
+    createApp(cache, getFleetEntries);
+
+    expect(getFleetEntries).not.toHaveBeenCalled();
+  });
+
+  it("getServeOptions に getFleetEntries を渡しても hostname/port は変わらない", () => {
+    const cache = createMemoryBoardCache();
+    const getFleetEntries = (): readonly FleetEntry[] => [];
+
+    const options = getServeOptions(0, cache, getFleetEntries);
+
+    expect(options.hostname).toBe("127.0.0.1");
+    expect(options.port).toBe(0);
+  });
+
+  it("getServeOptions 経由でも GET /api/board が動作する（登録経路の疎通確認）", async () => {
+    const cache = createMemoryBoardCache();
+    cache.replaceAgent({
+      name: "medical",
+      path: "/agents/medical-agent",
+      challenges: [],
+      parseErrors: [],
+    });
+    const getFleetEntries = (): readonly FleetEntry[] => [
+      { name: "medical", path: "/repos/medical-agent" },
+    ];
+
+    const options = getServeOptions(0, cache, getFleetEntries);
+    const res = await options.fetch(
+      new Request("http://127.0.0.1/api/board", {
+        headers: { host: "localhost" },
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.agents[0].name).toBe("medical");
+  });
+});
+
 describe("attachTerminalUpgradeRouting（/ws と /ws/terminal の共存）", () => {
   let server: ReturnType<typeof serve> | undefined;
 
@@ -90,7 +157,7 @@ describe("attachTerminalUpgradeRouting（/ws と /ws/terminal の共存）", () 
     });
     if (!server) throw new Error("server が起動していない");
 
-    attachWebSocketServer(server, cache);
+    attachWebSocketServer(server, cache, () => []);
     const terminalWebSocketServer = createTerminalWebSocketServer({
       getFleetEntries: () => [
         { name: "medical", path: "/repos/medical-agent" },

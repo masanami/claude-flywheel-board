@@ -1,8 +1,11 @@
+import * as fs from "node:fs";
 import type { AddressInfo } from "node:net";
 import * as net from "node:net";
+import * as os from "node:os";
+import * as path from "node:path";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import {
   attachWebSocketServer,
@@ -11,6 +14,7 @@ import {
   registerApiRoutes,
 } from "./api.ts";
 import { createMemoryBoardCache } from "./cache.ts";
+import type { FleetEntry } from "./manifest.ts";
 
 describe("isAllowedHost", () => {
   it("localhost を許可する", () => {
@@ -97,7 +101,7 @@ describe("registerApiRoutes", () => {
       },
     ]);
     const app = new Hono();
-    registerApiRoutes(app, cache);
+    registerApiRoutes(app, cache, () => []);
     return app;
   }
 
@@ -164,6 +168,362 @@ describe("registerApiRoutes", () => {
   });
 });
 
+describe("GET /api/md/tree（Issue #65）", () => {
+  let tempRoot: string;
+  let repoRoot: string;
+
+  beforeEach(() => {
+    tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "api-md-tree-test-"));
+    repoRoot = path.join(tempRoot, "repo");
+    fs.mkdirSync(repoRoot);
+  });
+
+  afterEach(() => {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  });
+
+  it("getFleetEntries から取得した repo 配下の .md 一覧を { repos } で返す", async () => {
+    fs.writeFileSync(path.join(repoRoot, "doc.md"), "# doc");
+    fs.writeFileSync(path.join(repoRoot, "notes.txt"), "not markdown");
+
+    const cache = createMemoryBoardCache();
+    const app = new Hono();
+    const getFleetEntries = (): readonly FleetEntry[] => [
+      { name: "myrepo", path: repoRoot },
+    ];
+    registerApiRoutes(app, cache, getFleetEntries);
+
+    const res = await app.request("/api/md/tree", {
+      headers: { host: "localhost" },
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toEqual({ repos: [{ name: "myrepo", files: ["doc.md"] }] });
+  });
+
+  it("不正な Host ヘッダの /api/md/tree リクエストは 403 を返す（既存の Host/Origin 検証を継承）", async () => {
+    const cache = createMemoryBoardCache();
+    const app = new Hono();
+    registerApiRoutes(app, cache, () => []);
+
+    const res = await app.request("/api/md/tree", {
+      headers: { host: "evil.example.com" },
+    });
+
+    expect(res.status).toBe(403);
+  });
+});
+
+describe("GET /api/md/file（Issue #66）", () => {
+  let tempRoot: string;
+  let repoRoot: string;
+
+  beforeEach(() => {
+    tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "api-md-file-test-"));
+    repoRoot = path.join(tempRoot, "repo");
+    fs.mkdirSync(repoRoot);
+  });
+
+  afterEach(() => {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  });
+
+  function buildAppWithRepo() {
+    const cache = createMemoryBoardCache();
+    const app = new Hono();
+    const getFleetEntries = (): readonly FleetEntry[] => [
+      { name: "myrepo", path: repoRoot },
+    ];
+    registerApiRoutes(app, cache, getFleetEntries);
+    return app;
+  }
+
+  it("検証通過した .md ファイルの内容を { content } で返す", async () => {
+    fs.writeFileSync(path.join(repoRoot, "doc.md"), "# doc content");
+    const app = buildAppWithRepo();
+
+    const res = await app.request("/api/md/file?repo=myrepo&path=doc.md", {
+      headers: { host: "localhost" },
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toEqual({ content: "# doc content" });
+  });
+
+  it("存在しないファイルは 404 を返す", async () => {
+    const app = buildAppWithRepo();
+
+    const res = await app.request("/api/md/file?repo=myrepo&path=missing.md", {
+      headers: { host: "localhost" },
+    });
+
+    expect(res.status).toBe(404);
+  });
+
+  // chmod 0o000 は root 実行（コンテナ CI 等）だと権限ビットが無視されて
+  // 読み取れてしまい、404 も console.warn も発生しない。Windows も同様に
+  // POSIX 権限ビットが効かないため、両環境ではスキップする。
+  const canTestUnreadable =
+    process.platform !== "win32" && process.getuid?.() !== 0;
+
+  it.skipIf(!canTestUnreadable)(
+    "検証・stat 通過後に読み取りが失敗する場合（権限無し等）も 404 を返す（500 で存在有無を漏らさない）",
+    async () => {
+      const unreadablePath = path.join(repoRoot, "unreadable.md");
+      fs.writeFileSync(unreadablePath, "# secret");
+      fs.chmodSync(unreadablePath, 0o000);
+      const app = buildAppWithRepo();
+
+      try {
+        const res = await app.request(
+          "/api/md/file?repo=myrepo&path=unreadable.md",
+          { headers: { host: "localhost" } },
+        );
+
+        expect(res.status).toBe(404);
+      } finally {
+        // afterEach の rmSync がディレクトリごと削除できるよう権限を戻す。
+        fs.chmodSync(unreadablePath, 0o644);
+      }
+    },
+  );
+
+  it.skipIf(!canTestUnreadable)(
+    "検証通過後の読み取り失敗はクライアントへ 404 を返しつつ console.warn で記録する（運用時の切り分けのため。設定ミス等を「.md が読めない」と見分けられなくしないという動機は tree.ts の repo ルート走査失敗記録と同じだが、tree.ts の非ルート走査失敗の黙殺方針をそのまま踏襲したものではない）",
+    async () => {
+      const unreadablePath = path.join(repoRoot, "unreadable-logged.md");
+      fs.writeFileSync(unreadablePath, "# secret");
+      fs.chmodSync(unreadablePath, 0o000);
+      const app = buildAppWithRepo();
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      try {
+        await app.request(
+          "/api/md/file?repo=myrepo&path=unreadable-logged.md",
+          {
+            headers: { host: "localhost" },
+          },
+        );
+
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        fs.chmodSync(unreadablePath, 0o644);
+        warnSpy.mockRestore();
+      }
+    },
+  );
+
+  it("存在しない repo 名は 404 を返す", async () => {
+    const app = buildAppWithRepo();
+
+    const res = await app.request("/api/md/file?repo=unknown&path=doc.md", {
+      headers: { host: "localhost" },
+    });
+
+    expect(res.status).toBe(404);
+  });
+
+  it(".md 以外の拡張子は 404 を返す", async () => {
+    fs.writeFileSync(path.join(repoRoot, "notes.txt"), "not markdown");
+    const app = buildAppWithRepo();
+
+    const res = await app.request("/api/md/file?repo=myrepo&path=notes.txt", {
+      headers: { host: "localhost" },
+    });
+
+    expect(res.status).toBe(404);
+  });
+
+  it("../ を含む相対パスで repo 外への脱出を試みると 404 を返す", async () => {
+    fs.writeFileSync(path.join(tempRoot, "outside.md"), "# outside");
+    const app = buildAppWithRepo();
+
+    const res = await app.request(
+      "/api/md/file?repo=myrepo&path=../outside.md",
+      { headers: { host: "localhost" } },
+    );
+
+    expect(res.status).toBe(404);
+  });
+
+  it("絶対パスを path クエリに渡すと 404 を返す", async () => {
+    const outsideAbsolutePath = path.join(tempRoot, "abs-outside.md");
+    fs.writeFileSync(outsideAbsolutePath, "# outside abs");
+    const app = buildAppWithRepo();
+
+    const res = await app.request(
+      `/api/md/file?repo=myrepo&path=${encodeURIComponent(outsideAbsolutePath)}`,
+      { headers: { host: "localhost" } },
+    );
+
+    expect(res.status).toBe(404);
+  });
+
+  it("シンボリックリンク経由で repo 外の実体を指す場合は 404 を返す", async () => {
+    const outsideDir = path.join(tempRoot, "outside-dir");
+    fs.mkdirSync(outsideDir);
+    fs.writeFileSync(path.join(outsideDir, "secret.md"), "# secret");
+    fs.symlinkSync(
+      path.join(outsideDir, "secret.md"),
+      path.join(repoRoot, "link.md"),
+    );
+    const app = buildAppWithRepo();
+
+    const res = await app.request("/api/md/file?repo=myrepo&path=link.md", {
+      headers: { host: "localhost" },
+    });
+
+    expect(res.status).toBe(404);
+  });
+
+  it("repo / path クエリパラメータが欠落している場合は 404 を返す", async () => {
+    fs.writeFileSync(path.join(repoRoot, "doc.md"), "# doc content");
+    const app = buildAppWithRepo();
+
+    const resNoRepo = await app.request("/api/md/file?path=doc.md", {
+      headers: { host: "localhost" },
+    });
+    const resNoPath = await app.request("/api/md/file?repo=myrepo", {
+      headers: { host: "localhost" },
+    });
+    const resNeither = await app.request("/api/md/file", {
+      headers: { host: "localhost" },
+    });
+
+    expect(resNoRepo.status).toBe(404);
+    expect(resNoPath.status).toBe(404);
+    expect(resNeither.status).toBe(404);
+  });
+
+  it("検証通過済みファイルが 1MB 超の場合は本文を読み込まずに 413 を返す", async () => {
+    const oversizedPath = path.join(repoRoot, "oversized.md");
+    fs.writeFileSync(oversizedPath, "a".repeat(1024 * 1024 + 1));
+    const app = buildAppWithRepo();
+    const readFileSpy = vi.spyOn(fs.promises, "readFile");
+
+    try {
+      const res = await app.request(
+        "/api/md/file?repo=myrepo&path=oversized.md",
+        { headers: { host: "localhost" } },
+      );
+
+      expect(res.status).toBe(413);
+      expect(readFileSpy).not.toHaveBeenCalled();
+    } finally {
+      // 先行アサーション（413判定）が失敗した場合でも spy を確実に解除し、
+      // 後続テストへ漏れないようにする。
+      readFileSpy.mockRestore();
+    }
+  });
+
+  it("マルチバイト文字のみで構成され UTF-16 コードユニット数は 1MB 未満だがバイト数は 1MB 超のファイルは 413 を返す（バイト基準の判定であることの回帰ガード）", async () => {
+    // "あ" は UTF-8 で3バイト・UTF-16では1コードユニット。350,000文字なら
+    // バイト数は 1,050,000（1MB超）だが文字数（コードユニット数）は 1MB 未満となり、
+    // サイズ判定が stat.size（バイト）ではなく content.length（文字数）等に
+    // リファクタされた場合の回帰を検出できる。
+    const multibytePath = path.join(repoRoot, "multibyte.md");
+    const multibyteContent = "あ".repeat(350000);
+    fs.writeFileSync(multibytePath, multibyteContent);
+    expect(Buffer.byteLength(multibyteContent, "utf-8")).toBeGreaterThan(
+      1024 * 1024,
+    );
+    expect(multibyteContent.length).toBeLessThan(1024 * 1024);
+    const app = buildAppWithRepo();
+
+    const res = await app.request(
+      "/api/md/file?repo=myrepo&path=multibyte.md",
+      { headers: { host: "localhost" } },
+    );
+
+    expect(res.status).toBe(413);
+  });
+
+  it("ファイルサイズが 1MB ちょうどの場合は 200 を返す", async () => {
+    const exactPath = path.join(repoRoot, "exact.md");
+    fs.writeFileSync(exactPath, "a".repeat(1024 * 1024));
+    const app = buildAppWithRepo();
+
+    const res = await app.request("/api/md/file?repo=myrepo&path=exact.md", {
+      headers: { host: "localhost" },
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.content).toHaveLength(1024 * 1024);
+  });
+
+  it("ファイルサイズが 1MB 未満の場合は 200 を返す", async () => {
+    const underPath = path.join(repoRoot, "under.md");
+    fs.writeFileSync(underPath, "a".repeat(1024 * 1024 - 1));
+    const app = buildAppWithRepo();
+
+    const res = await app.request("/api/md/file?repo=myrepo&path=under.md", {
+      headers: { host: "localhost" },
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.content).toHaveLength(1024 * 1024 - 1);
+  });
+
+  it("不正な Host ヘッダの /api/md/file リクエストは 403 を返す（既存の Host/Origin 検証を継承）", async () => {
+    const app = buildAppWithRepo();
+
+    const res = await app.request("/api/md/file?repo=myrepo&path=doc.md", {
+      headers: { host: "evil.example.com" },
+    });
+
+    expect(res.status).toBe(403);
+  });
+});
+
+// Issue #62: fleet entries を遅延参照できる getFleetEntries コールバックを
+// registerApiRoutes に供給できることを確認する。GET /api/md/tree（Issue #65）は
+// 上の describe で別途検証済みのため、ここで検証するのは以下の2点に限る。
+// (1) 第3引数を渡しても既存エンドポイントの挙動に回帰が無いこと（後方互換）
+// (2) /api/board へのリクエストのみでは getFleetEntries を呼び出さない
+//     （md 系ハンドラ内でのみリクエストのたびに呼び出す設計の回帰ガード。
+//     ルート登録時点での eager 評価を持ち込まないことも同時に確認する）
+describe("registerApiRoutes の getFleetEntries 供給経路（Issue #62）", () => {
+  it("getFleetEntries を渡しても GET /api/board の応答は変わらない（後方互換）", async () => {
+    const cache = createMemoryBoardCache();
+    cache.replaceAgent({
+      name: "medical",
+      path: "/agents/medical-agent",
+      challenges: [],
+      parseErrors: [],
+    });
+    const app = new Hono();
+    const getFleetEntries = (): readonly FleetEntry[] => [
+      { name: "medical", path: "/repos/medical-agent" },
+    ];
+
+    registerApiRoutes(app, cache, getFleetEntries);
+    const res = await app.request("/api/board", {
+      headers: { host: "localhost" },
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.agents[0].name).toBe("medical");
+  });
+
+  it("ルート登録処理自体は getFleetEntries を呼び出さない（eager 評価の回帰ガード）", async () => {
+    const cache = createMemoryBoardCache();
+    const app = new Hono();
+    const getFleetEntries = vi.fn((): readonly FleetEntry[] => [
+      { name: "medical", path: "/repos/x" },
+    ]);
+
+    registerApiRoutes(app, cache, getFleetEntries);
+    await app.request("/api/board", { headers: { host: "localhost" } });
+
+    expect(getFleetEntries).not.toHaveBeenCalled();
+  });
+});
+
 describe("attachWebSocketServer 統合テスト", () => {
   let server: ReturnType<typeof serve> | undefined;
 
@@ -181,7 +541,7 @@ describe("attachWebSocketServer 統合テスト", () => {
       parseErrors: [],
     });
     const app = new Hono();
-    registerApiRoutes(app, cache);
+    registerApiRoutes(app, cache, () => []);
 
     await new Promise<void>((resolve, reject) => {
       server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: 0 }, () =>
@@ -192,7 +552,7 @@ describe("attachWebSocketServer 統合テスト", () => {
     if (!server) {
       throw new Error("server が起動していない");
     }
-    attachWebSocketServer(server, cache);
+    attachWebSocketServer(server, cache, () => []);
 
     const address = server.address() as AddressInfo;
     const ws = new WebSocket(`ws://127.0.0.1:${address.port}/ws`, {
@@ -215,7 +575,7 @@ describe("attachWebSocketServer 統合テスト", () => {
   it("不正な Origin ヘッダのハンドシェイクは拒否される", async () => {
     const cache = createMemoryBoardCache();
     const app = new Hono();
-    registerApiRoutes(app, cache);
+    registerApiRoutes(app, cache, () => []);
 
     await new Promise<void>((resolve, reject) => {
       server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: 0 }, () =>
@@ -226,7 +586,7 @@ describe("attachWebSocketServer 統合テスト", () => {
     if (!server) {
       throw new Error("server が起動していない");
     }
-    attachWebSocketServer(server, cache);
+    attachWebSocketServer(server, cache, () => []);
 
     const address = server.address() as AddressInfo;
     const ws = new WebSocket(`ws://127.0.0.1:${address.port}/ws`, {
@@ -245,7 +605,7 @@ describe("attachWebSocketServer 統合テスト", () => {
   it("クエリ付きの /ws?x への upgrade も pathname 一致で処理される（半開き接続で残さない）", async () => {
     const cache = createMemoryBoardCache();
     const app = new Hono();
-    registerApiRoutes(app, cache);
+    registerApiRoutes(app, cache, () => []);
 
     await new Promise<void>((resolve, reject) => {
       server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: 0 }, () =>
@@ -256,7 +616,7 @@ describe("attachWebSocketServer 統合テスト", () => {
     if (!server) {
       throw new Error("server が起動していない");
     }
-    attachWebSocketServer(server, cache);
+    attachWebSocketServer(server, cache, () => []);
 
     const address = server.address() as AddressInfo;
     const ws = new WebSocket(`ws://127.0.0.1:${address.port}/ws?x`, {
@@ -282,7 +642,7 @@ describe("attachWebSocketServer 統合テスト", () => {
   it("/ws 以外の URL の upgrade リクエストはソケットに触れない（/ws/terminal 等、別ハンドラとの共存のため）", async () => {
     const cache = createMemoryBoardCache();
     const app = new Hono();
-    registerApiRoutes(app, cache);
+    registerApiRoutes(app, cache, () => []);
 
     await new Promise<void>((resolve, reject) => {
       server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: 0 }, () =>
@@ -293,7 +653,7 @@ describe("attachWebSocketServer 統合テスト", () => {
     if (!server) {
       throw new Error("server が起動していない");
     }
-    attachWebSocketServer(server, cache);
+    attachWebSocketServer(server, cache, () => []);
 
     const address = server.address() as AddressInfo;
     const socket = net.connect(address.port, "127.0.0.1");
@@ -321,5 +681,381 @@ describe("attachWebSocketServer 統合テスト", () => {
 
     expect(closedWithinTimeout).toBe(false);
     socket.destroy();
+  });
+});
+
+describe("attachWebSocketServer の md_subscribe / md_unsubscribe（Issue #67）", () => {
+  let server: ReturnType<typeof serve> | undefined;
+  let tempRoot: string;
+  let repoRoot: string;
+
+  beforeEach(() => {
+    tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "api-md-watch-test-"));
+    repoRoot = path.join(tempRoot, "repo");
+    fs.mkdirSync(repoRoot);
+  });
+
+  afterEach(() => {
+    server?.close();
+    server = undefined;
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  });
+
+  async function waitUntil(
+    condition: () => boolean,
+    { timeoutMs = 3000, intervalMs = 20 } = {},
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (condition()) {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+    throw new Error(`waitUntil: タイムアウトしました（${timeoutMs}ms）`);
+  }
+
+  async function connectClient(
+    getFleetEntries: () => readonly FleetEntry[],
+  ): Promise<WebSocket> {
+    const cache = createMemoryBoardCache();
+    const app = new Hono();
+    registerApiRoutes(app, cache, getFleetEntries);
+
+    await new Promise<void>((resolve, reject) => {
+      server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: 0 }, () =>
+        resolve(),
+      );
+      server.on("error", reject);
+    });
+    if (!server) {
+      throw new Error("server が起動していない");
+    }
+    attachWebSocketServer(server, cache, getFleetEntries);
+
+    const address = server.address() as AddressInfo;
+    const ws = new WebSocket(`ws://127.0.0.1:${address.port}/ws`, {
+      headers: { origin: "http://localhost:5173" },
+    });
+    // snapshot（接続直後の1通目）を待ち、以降のテストは md_* メッセージだけを
+    // 見れば済むようにする。
+    await new Promise<void>((resolve, reject) => {
+      ws.once("message", () => resolve());
+      ws.once("error", reject);
+    });
+    return ws;
+  }
+
+  function collectMessages(ws: WebSocket): unknown[] {
+    const messages: unknown[] = [];
+    ws.on("message", (data) => {
+      messages.push(JSON.parse(data.toString()));
+    });
+    return messages;
+  }
+
+  it("存在しない repo への md_subscribe は md_subscribe_error を該当クライアントへ返す", async () => {
+    const ws = await connectClient(() => []);
+    const messages = collectMessages(ws);
+
+    ws.send(
+      JSON.stringify({ type: "md_subscribe", repo: "unknown", path: "doc.md" }),
+    );
+
+    await waitUntil(() => messages.length > 0);
+    expect(messages[0]).toEqual({
+      type: "md_subscribe_error",
+      repo: "unknown",
+      path: "doc.md",
+    });
+
+    ws.close();
+  });
+
+  // Issue #67 完了条件（AC-7 の WS 経路）: `../` を含むパス・絶対パス・
+  // シンボリックリンク経由の repo 外パス・`.md` 以外の拡張子はすべて
+  // md_subscribe_error を返し、watch を開始しない。HTTP 側（GET /api/md/file、
+  // 上の describe("GET /api/md/file（Issue #66）")）と同じ拒否ケースを、
+  // WS md_subscribe 経路でも単体テストとして担保する。「watch が開始されない」
+  // ことは、拒否対象のファイルを直接書き換えても md_file_changed が届かない
+  // ことで確認する（chokidar 自体はモックせず、実 fs で確証する）。
+  describe("md_subscribe のパス検証（#63 共有ロジックの WS 経路適用）", () => {
+    async function assertSubscribeRejectedAndNoWatch(
+      getFleetEntries: () => readonly FleetEntry[],
+      subscribeMessage: { repo: string; path: string },
+      targetFilePath: string,
+    ): Promise<void> {
+      const ws = await connectClient(getFleetEntries);
+      const messages = collectMessages(ws);
+
+      ws.send(JSON.stringify({ type: "md_subscribe", ...subscribeMessage }));
+      await waitUntil(() => messages.length > 0);
+      expect(messages[0]).toEqual({
+        type: "md_subscribe_error",
+        ...subscribeMessage,
+      });
+
+      // セルフレビュー指摘対応: もし実装に不具合があり検証失敗時にも誤って
+      // watch を開始してしまっていた場合、その chokidar watch の確立には
+      // 一定の時間がかかる（正常系テストが「watch 確立を待ってから書き込む」
+      // としているのと同じ理由）。エラー受信直後に即書き込むと、たとえ
+      // バグで watch が開始されていても確立前の書き込みとして見逃され、
+      // このアサーションが「たまたま」パスしてしまいうる。正常系と同じ猶予を
+      // 置いてから書き込むことで、このテストが watch 未開始を実際に検証できる
+      // ようにする。
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      // 検証失敗時は watch を開始しないため、対象ファイルを書き換えても
+      // md_file_changed は届かないはず（書き換え後も一定時間待って確認する）。
+      fs.writeFileSync(
+        targetFilePath,
+        `${fs.readFileSync(targetFilePath, "utf-8")}\n# changed`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(
+        messages.some(
+          (m) => (m as { type?: string }).type === "md_file_changed",
+        ),
+      ).toBe(false);
+
+      ws.close();
+    }
+
+    it("../ を含む相対パスで repo 外への脱出を試みると md_subscribe_error を返し watch を開始しない", async () => {
+      const outsidePath = path.join(tempRoot, "outside.md");
+      fs.writeFileSync(outsidePath, "# outside");
+      const getFleetEntries = (): readonly FleetEntry[] => [
+        { name: "myrepo", path: repoRoot },
+      ];
+
+      await assertSubscribeRejectedAndNoWatch(
+        getFleetEntries,
+        { repo: "myrepo", path: "../outside.md" },
+        outsidePath,
+      );
+    });
+
+    it("絶対パスを path に渡すと md_subscribe_error を返し watch を開始しない", async () => {
+      const outsideAbsolutePath = path.join(tempRoot, "abs-outside.md");
+      fs.writeFileSync(outsideAbsolutePath, "# outside abs");
+      const getFleetEntries = (): readonly FleetEntry[] => [
+        { name: "myrepo", path: repoRoot },
+      ];
+
+      await assertSubscribeRejectedAndNoWatch(
+        getFleetEntries,
+        { repo: "myrepo", path: outsideAbsolutePath },
+        outsideAbsolutePath,
+      );
+    });
+
+    it("シンボリックリンク経由で repo 外の実体を指す場合は md_subscribe_error を返し watch を開始しない", async () => {
+      const outsideDir = path.join(tempRoot, "outside-dir");
+      fs.mkdirSync(outsideDir);
+      const secretPath = path.join(outsideDir, "secret.md");
+      fs.writeFileSync(secretPath, "# secret");
+      fs.symlinkSync(secretPath, path.join(repoRoot, "link.md"));
+      const getFleetEntries = (): readonly FleetEntry[] => [
+        { name: "myrepo", path: repoRoot },
+      ];
+
+      await assertSubscribeRejectedAndNoWatch(
+        getFleetEntries,
+        { repo: "myrepo", path: "link.md" },
+        secretPath,
+      );
+    });
+
+    it(".md 以外の拡張子は md_subscribe_error を返し watch を開始しない", async () => {
+      const notesPath = path.join(repoRoot, "notes.txt");
+      fs.writeFileSync(notesPath, "not markdown");
+      const getFleetEntries = (): readonly FleetEntry[] => [
+        { name: "myrepo", path: repoRoot },
+      ];
+
+      await assertSubscribeRejectedAndNoWatch(
+        getFleetEntries,
+        { repo: "myrepo", path: "notes.txt" },
+        notesPath,
+      );
+    });
+  });
+
+  it("有効な .md ファイルを md_subscribe すると、ファイル変更時に md_file_changed を受信する", async () => {
+    const docPath = path.join(repoRoot, "doc.md");
+    fs.writeFileSync(docPath, "# doc");
+    const getFleetEntries = (): readonly FleetEntry[] => [
+      { name: "myrepo", path: repoRoot },
+    ];
+    const ws = await connectClient(getFleetEntries);
+    const messages = collectMessages(ws);
+
+    ws.send(
+      JSON.stringify({ type: "md_subscribe", repo: "myrepo", path: "doc.md" }),
+    );
+    // chokidar の watch 確立を待ってから書き込む（確立前の書き込みは
+    // 見逃されうるため、実 chokidar を使う結合テストの定石として少し待つ）。
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    fs.writeFileSync(docPath, "# doc changed");
+
+    await waitUntil(() =>
+      messages.some((m) => (m as { type?: string }).type === "md_file_changed"),
+    );
+    const changed = messages.find(
+      (m) => (m as { type?: string }).type === "md_file_changed",
+    );
+    expect(changed).toEqual({
+      type: "md_file_changed",
+      repo: "myrepo",
+      path: "doc.md",
+    });
+
+    ws.close();
+  });
+
+  it("md_unsubscribe 後はファイル変更を通知されない", async () => {
+    const docPath = path.join(repoRoot, "doc.md");
+    fs.writeFileSync(docPath, "# doc");
+    const getFleetEntries = (): readonly FleetEntry[] => [
+      { name: "myrepo", path: repoRoot },
+    ];
+    const ws = await connectClient(getFleetEntries);
+    const messages = collectMessages(ws);
+
+    ws.send(
+      JSON.stringify({ type: "md_subscribe", repo: "myrepo", path: "doc.md" }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    ws.send(
+      JSON.stringify({
+        type: "md_unsubscribe",
+        repo: "myrepo",
+        path: "doc.md",
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    fs.writeFileSync(docPath, "# doc changed after unsubscribe");
+    // unsubscribe 後も一定時間待つが、md_file_changed は来ないはず。
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    expect(
+      messages.some((m) => (m as { type?: string }).type === "md_file_changed"),
+    ).toBe(false);
+
+    ws.close();
+  });
+
+  it("WS 切断後もファイル変更検知でサーバがクラッシュしない（クリーンアップの回帰確認）", async () => {
+    const docPath = path.join(repoRoot, "doc.md");
+    fs.writeFileSync(docPath, "# doc");
+    const getFleetEntries = (): readonly FleetEntry[] => [
+      { name: "myrepo", path: repoRoot },
+    ];
+    const ws = await connectClient(getFleetEntries);
+
+    ws.send(
+      JSON.stringify({ type: "md_subscribe", repo: "myrepo", path: "doc.md" }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    await new Promise<void>((resolve) => {
+      ws.once("close", () => resolve());
+      ws.close();
+    });
+
+    // 切断後の変更検知が例外を投げないことを確認する（クラッシュしなければ成功）。
+    fs.writeFileSync(docPath, "# doc changed after close");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  });
+});
+
+// Issue #62: attachWebSocketServer 版の getFleetEntries 供給経路。registerApiRoutes と
+// 同じ観点（後方互換・アタッチ/接続時に eager 評価しないこと）を検証する。ただし
+// registerApiRoutes 側と同様、この関数の本体はまだ getFleetEntries を一切参照しない
+// ため、ここで検証できるのは「後方互換」と「eager 評価しない」の2点までであり、
+// 「値が実際に消費される」ところまではこのチケットの範囲では検証できない。
+describe("attachWebSocketServer の getFleetEntries 供給経路（Issue #62）", () => {
+  let server: ReturnType<typeof serve> | undefined;
+
+  afterEach(() => {
+    server?.close();
+    server = undefined;
+  });
+
+  it("getFleetEntries を渡しても snapshot 受信は変わらない（後方互換）", async () => {
+    const cache = createMemoryBoardCache();
+    cache.replaceAgent({
+      name: "medical",
+      path: "/agents/medical-agent",
+      challenges: [],
+      parseErrors: [],
+    });
+    const app = new Hono();
+    registerApiRoutes(app, cache, () => []);
+
+    await new Promise<void>((resolve, reject) => {
+      server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: 0 }, () =>
+        resolve(),
+      );
+      server.on("error", reject);
+    });
+    if (!server) {
+      throw new Error("server が起動していない");
+    }
+    const getFleetEntries = (): readonly FleetEntry[] => [
+      { name: "medical", path: "/repos/medical-agent" },
+    ];
+    attachWebSocketServer(server, cache, getFleetEntries);
+
+    const address = server.address() as AddressInfo;
+    const ws = new WebSocket(`ws://127.0.0.1:${address.port}/ws`, {
+      headers: { origin: "http://localhost:5173" },
+    });
+
+    const message = await new Promise<string>((resolve, reject) => {
+      ws.on("message", (data) => resolve(data.toString()));
+      ws.on("error", reject);
+    });
+
+    const parsed = JSON.parse(message);
+    expect(parsed.type).toBe("snapshot");
+    expect(parsed.board.agents[0].name).toBe("medical");
+
+    ws.close();
+  });
+
+  it("WS アタッチ時・接続確立時のいずれでも getFleetEntries は呼び出されない（eager 評価の回帰ガード）", async () => {
+    const cache = createMemoryBoardCache();
+    const app = new Hono();
+    registerApiRoutes(app, cache, () => []);
+
+    await new Promise<void>((resolve, reject) => {
+      server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: 0 }, () =>
+        resolve(),
+      );
+      server.on("error", reject);
+    });
+    if (!server) {
+      throw new Error("server が起動していない");
+    }
+    const getFleetEntries = vi.fn((): readonly FleetEntry[] => [
+      { name: "medical", path: "/repos/x" },
+    ]);
+    attachWebSocketServer(server, cache, getFleetEntries);
+
+    expect(getFleetEntries).not.toHaveBeenCalled();
+
+    // アタッチ時点だけでなく、実際に WS 接続を確立した後も呼び出されないことを
+    // 確認する（接続確立ハンドラ内で eager に評価するケースの回帰ガード）。
+    const address = server.address() as AddressInfo;
+    const ws = new WebSocket(`ws://127.0.0.1:${address.port}/ws`, {
+      headers: { origin: "http://localhost:5173" },
+    });
+    await new Promise<void>((resolve, reject) => {
+      ws.once("message", () => resolve());
+      ws.once("error", reject);
+    });
+
+    expect(getFleetEntries).not.toHaveBeenCalled();
+    ws.close();
   });
 });

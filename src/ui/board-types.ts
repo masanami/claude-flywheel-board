@@ -12,3 +12,8 @@ export type {
 export type { Challenge, LedgerStatus } from "../server/parsers/ledger.ts";
 export type { ParseError, LogEntry } from "../server/parsers/types.ts";
 export type { Run } from "../server/parsers/runs.ts";
+export type { MdTreeRepo, MdTreeResponse } from "../server/md/tree.ts";
+export type {
+  MdFileChangedMessage,
+  MdSubscribeErrorMessage,
+} from "../server/md/watch.ts";
