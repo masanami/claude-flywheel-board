@@ -9,9 +9,10 @@ import WebSocket from "ws";
 // 集合から除去する」という完了条件は、attachWebSocketServer 側の
 // `ws.on("close", () => mdWatchRegistry.unsubscribeClient(ws))` という配線
 // そのものが正しく効いていることを検証しなければ担保できない。api.test.ts の
-// 実 chokidar 統合テストは「クラッシュしないこと」しか確認できず（broadcast は
-// readyState === OPEN のクライアントのみへ送るため、配線が無くても常に
-// 例外は起きない）、close ハンドラを削除しても green のままになりうる。
+// 統合テスト（Issue #88 で chokidar をモック化済み）は「クラッシュしないこと」
+// しか確認できず（broadcast は readyState === OPEN のクライアントのみへ送る
+// ため、配線が無くても常に例外は起きない）、close ハンドラを削除しても green の
+// ままになりうる。
 //
 // ここでは "./md/watch.ts" をこのファイル単位でモックし（watcher.chokidar.test.ts
 // が chokidar をファイル単位でモックするのと同じ手法）、attachWebSocketServer が
