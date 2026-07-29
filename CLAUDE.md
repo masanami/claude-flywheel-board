@@ -105,3 +105,5 @@ npm run typecheck  # tsc --noEmit
 ```
 
 > プロジェクト土台チケット（P1-1）でセットアップ時にこのスクリプト名で定義すること。
+>
+> `postinstall` は `node-pty@1.1.0` の tarball 同梱バグ（`prebuilds/darwin-*/spawn-helper` が実行権限なしで配布される。上流 [microsoft/node-pty#850](https://github.com/microsoft/node-pty/issues/850)）を fresh install のたびに補うワークアラウンド。修正済みの `node-pty`（1.1.0 より新しい安定版。2026-07-29 時点では `1.2.0-beta.14` にのみ修正が含まれる）へ更新したら、この `postinstall` エントリと本注記を削除できる。
