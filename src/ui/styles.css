@@ -186,24 +186,48 @@ body {
   /* PreviewPanel は最大 800px の固定幅（flex-shrink:0）を持つため、狭い
    * ウィンドウ幅かつパネルを広げた組み合わせでは board-columns 側が 0px
    * まで潰れ得る（セルフレビュー指摘: #57 の terminal-pane-panel-shell
-   * min-width と同型の問題）。agent-column の最小 flex-basis（280px）を
-   * 下回らない範囲は確保し、それ以上は overflow-x: auto の横スクロールに
-   * 委ねる。
+   * min-width と同型の問題）。この min-width は「board-columns 自身が
+   * board-main-row の flex レイアウトで潰れない」ための下限であり、
+   * エージェントカラム1個分のサイズとは独立の防御（Grid 化後も必要）。
+   * padding: 1rem（左右計2rem）を差し引いても最低1カラム分（280px）の
+   * コンテンツ幅を確保できるよう、その分を上乗せする（セルフレビュー
+   * 指摘: 単純な 280px だと極端に狭い環境でコンテンツ幅が248pxしか
+   * 残らず、1カラムすら全幅表示できず二重の横スクロールが生じていた）。
    */
-  min-width: 280px;
-  display: flex;
+  min-width: calc(280px + 2rem);
+  /* #89: 以前は display:flex + agent-column 側の flex:1 1 280px で幅を
+   * 配分していたが、.agent-column 自身が overflow: hidden によりスクロール
+   * コンテナとなっていたため、flexbox の automatic minimum size 仕様
+   * （scroll container なアイテムは既定で 0 になる）により、flex-shrink
+   * の比率に応じて 280px を下回るまで比例縮小してしまっていた
+   * （PreviewPanel を広げるとカラム内カードの折り返しが変わる不具合）。
+   * CSS Grid + grid-auto-columns: minmax(280px, 420px) は明示的な px 値の
+   * トラック最小サイズを厳密に守り、比例縮小が起きない。割り当て幅が
+   * 足りない場合はこのコンテナ内でオーバーフローし、下の overflow-x: auto
+   * による横スクロールに委ねる（この行の外・document へは漏れない）。
+   * トラック自体は 280px〜420px の範囲でコンテナ幅に応じて伸縮するため
+   * （#41由来の意図: 少数時は420pxまで広がり分け合い、多数時は280pxで
+   * 頭打ちして横スクロールに委ねる）、パネル幅の変化に応じてカラム幅は
+   * 280〜420px の間で変動し続ける。「280px を下回らない」ことが本修正の
+   * 保証範囲であり、パネル操作でカラム幅が一切変化しないことまでは
+   * 保証しない（#41 の意図と両立しないトレードオフ）。
+   */
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(280px, 420px);
   gap: 1rem;
   padding: 1rem;
   overflow-x: auto;
   overflow-y: hidden;
-  align-items: flex-start;
+  align-items: start;
 }
 
 .agent-column {
-  /* エージェントが少ないときは横幅の余りを分け合って広がり、多いときは
-   * 280px まで詰まってから .board-columns が横スクロールする（#41）。 */
-  flex: 1 1 280px;
-  max-width: 420px;
+  /* 幅は親 .board-columns の grid-auto-columns（280px〜420px。#41 由来の
+   * 上下限）に一本化する（#89）。以前ここにあった flex: 1 1 280px は
+   * Grid item には効果を持たないため削除。max-width: 420px は Grid item
+   * にも適用されるが、親の grid-auto-columns の上限（420px）と冗長な
+   * ため削除しても挙動は変わらない。 */
   background: var(--board-column-bg);
   border: 1px solid var(--board-border);
   border-radius: 8px;
