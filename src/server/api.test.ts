@@ -262,43 +262,58 @@ describe("GET /api/md/file（Issue #66）", () => {
     expect(res.status).toBe(404);
   });
 
-  it("検証・stat 通過後に読み取りが失敗する場合（権限無し等）も 404 を返す（500 で存在有無を漏らさない）", async () => {
-    const unreadablePath = path.join(repoRoot, "unreadable.md");
-    fs.writeFileSync(unreadablePath, "# secret");
-    fs.chmodSync(unreadablePath, 0o000);
-    const app = buildAppWithRepo();
+  // chmod 0o000 は root 実行（コンテナ CI 等）だと権限ビットが無視されて
+  // 読み取れてしまい、404 も console.warn も発生しない。Windows も同様に
+  // POSIX 権限ビットが効かないため、両環境ではスキップする。
+  const canTestUnreadable =
+    process.platform !== "win32" && process.getuid?.() !== 0;
 
-    try {
-      const res = await app.request(
-        "/api/md/file?repo=myrepo&path=unreadable.md",
-        { headers: { host: "localhost" } },
-      );
+  it.skipIf(!canTestUnreadable)(
+    "検証・stat 通過後に読み取りが失敗する場合（権限無し等）も 404 を返す（500 で存在有無を漏らさない）",
+    async () => {
+      const unreadablePath = path.join(repoRoot, "unreadable.md");
+      fs.writeFileSync(unreadablePath, "# secret");
+      fs.chmodSync(unreadablePath, 0o000);
+      const app = buildAppWithRepo();
 
-      expect(res.status).toBe(404);
-    } finally {
-      // afterEach の rmSync がディレクトリごと削除できるよう権限を戻す。
-      fs.chmodSync(unreadablePath, 0o644);
-    }
-  });
+      try {
+        const res = await app.request(
+          "/api/md/file?repo=myrepo&path=unreadable.md",
+          { headers: { host: "localhost" } },
+        );
 
-  it("検証通過後の読み取り失敗はクライアントへ 404 を返しつつ console.warn で記録する（運用時の切り分けのため。設定ミス等を「.md が読めない」と見分けられなくしないという動機は tree.ts の repo ルート走査失敗記録と同じだが、tree.ts の非ルート走査失敗の黙殺方針をそのまま踏襲したものではない）", async () => {
-    const unreadablePath = path.join(repoRoot, "unreadable-logged.md");
-    fs.writeFileSync(unreadablePath, "# secret");
-    fs.chmodSync(unreadablePath, 0o000);
-    const app = buildAppWithRepo();
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+        expect(res.status).toBe(404);
+      } finally {
+        // afterEach の rmSync がディレクトリごと削除できるよう権限を戻す。
+        fs.chmodSync(unreadablePath, 0o644);
+      }
+    },
+  );
 
-    try {
-      await app.request("/api/md/file?repo=myrepo&path=unreadable-logged.md", {
-        headers: { host: "localhost" },
-      });
+  it.skipIf(!canTestUnreadable)(
+    "検証通過後の読み取り失敗はクライアントへ 404 を返しつつ console.warn で記録する（運用時の切り分けのため。設定ミス等を「.md が読めない」と見分けられなくしないという動機は tree.ts の repo ルート走査失敗記録と同じだが、tree.ts の非ルート走査失敗の黙殺方針をそのまま踏襲したものではない）",
+    async () => {
+      const unreadablePath = path.join(repoRoot, "unreadable-logged.md");
+      fs.writeFileSync(unreadablePath, "# secret");
+      fs.chmodSync(unreadablePath, 0o000);
+      const app = buildAppWithRepo();
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-      expect(warnSpy).toHaveBeenCalledTimes(1);
-    } finally {
-      fs.chmodSync(unreadablePath, 0o644);
-      warnSpy.mockRestore();
-    }
-  });
+      try {
+        await app.request(
+          "/api/md/file?repo=myrepo&path=unreadable-logged.md",
+          {
+            headers: { host: "localhost" },
+          },
+        );
+
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        fs.chmodSync(unreadablePath, 0o644);
+        warnSpy.mockRestore();
+      }
+    },
+  );
 
   it("存在しない repo 名は 404 を返す", async () => {
     const app = buildAppWithRepo();

@@ -248,7 +248,15 @@ export function createMdWatchRegistry(
       repo,
       path,
     };
-    ws.send(JSON.stringify(message));
+    // subscribe() は ws.on("message") リスナから同期的に呼ばれるため、ここで
+    // 例外が漏れると uncaughtException でプロセスごと落ちる。ws.send は相手が
+    // CONNECTING（到着直後に切断したケース等）だと同期 throw するため防御する。
+    // 送信失敗はエラー通知が届かないだけで、購読状態には影響しない。
+    try {
+      ws.send(JSON.stringify(message));
+    } catch (error) {
+      console.warn(`md_subscribe_error の送信に失敗しました: ${String(error)}`);
+    }
   }
 
   function subscribe(ws: WebSocket, repo: string, path: string): void {
@@ -291,7 +299,18 @@ export function createMdWatchRegistry(
     // 早期 return するため、当該クライアントは以後 watch が張られないまま
     // ライブ更新が恒久的に無効化されてしまう（unsubscribeClient も entry
     // 不在で no-op になり自己回復しない）。
-    const entry = ensureWatchEntry(resolvedPath);
+    // ensureWatchEntry（chokidar watch()）の同期例外も message リスナ経由で
+    // uncaughtException になりうるため捕捉する。確立に失敗した場合は購読を
+    // 登録せず、クライアントへ md_subscribe_error を返して無購読状態に倒す
+    // （幻の購読を残さないという上記コメントの不変条件はそのまま保たれる）。
+    let entry: WatchEntry;
+    try {
+      entry = ensureWatchEntry(resolvedPath);
+    } catch (error) {
+      console.warn(`md watch の確立に失敗しました: ${String(error)}`);
+      sendSubscribeError(ws, repo, path);
+      return;
+    }
     entry.clients.add(ws);
     subscriptionByClient.set(ws, { repo, path, resolvedPath });
   }

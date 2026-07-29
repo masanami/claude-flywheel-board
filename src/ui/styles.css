@@ -932,6 +932,9 @@ body {
 
 .preview-panel-mermaid svg {
   max-width: 100%;
+  /* mermaid の SVG は width/height 属性を持つため、max-width で横に縮んだ
+   * ときに高さを追従させないと図が縦に引き伸ばされる。 */
+  height: auto;
 }
 
 /* ファイルツリー（#68）。repo ごとにファイルパスの一覧を表示するだけの

@@ -311,13 +311,17 @@ describe("createMdWatchRegistry の refcount", () => {
     expect(fakeB.close).not.toHaveBeenCalled();
   });
 
-  it("watch() が同期的に例外を投げても、幻の購読状態が残らない（直後の subscribe で正常に watch が成立する）", () => {
+  it("watch() が同期的に例外を投げても throw せず md_subscribe_error を返し、幻の購読状態も残らない（直後の subscribe で正常に watch が成立する）", () => {
     // セルフレビュー指摘対応: subscribe() は ensureWatchEntry（chokidar.watch
     // の確立）を先に行い、成功した後で購読状態を登録する。逆順だと watch() の
     // 同期例外時に「購読状態はあるが対応する WatchEntry が無い」幻の購読が
     // 残り、同一 resolvedPath への再 subscribe が fast path でラベル更新のみ
     // して早期 return するため、以後 watch が張られないままライブ更新が
     // 恒久的に無効化されてしまう不具合を防ぐ。
+    // レビュー指摘対応（PR #87）: subscribe() は ws.on("message") リスナから
+    // 同期的に呼ばれるため、例外を漏らすと uncaughtException でプロセスが
+    // 落ちる。watch() の同期例外は捕捉して md_subscribe_error に変換する。
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.mocked(validateMdPath).mockReturnValue({
       ok: true,
       resolvedPath: "/repos/myrepo/doc.md",
@@ -328,13 +332,26 @@ describe("createMdWatchRegistry の refcount", () => {
     const registry = createMdWatchRegistry(() => [], vi.fn());
     const ws = fakeWs();
 
-    expect(() => registry.subscribe(ws as never, "myrepo", "doc.md")).toThrow();
+    try {
+      expect(() =>
+        registry.subscribe(ws as never, "myrepo", "doc.md"),
+      ).not.toThrow();
+      expect(ws.send).toHaveBeenCalledWith(
+        JSON.stringify({
+          type: "md_subscribe_error",
+          repo: "myrepo",
+          path: "doc.md",
+        }),
+      );
 
-    const fake = mockChokidarWatch();
-    registry.subscribe(ws as never, "myrepo", "doc.md");
+      const fake = mockChokidarWatch();
+      registry.subscribe(ws as never, "myrepo", "doc.md");
 
-    expect(vi.mocked(watch)).toHaveBeenCalledTimes(2);
-    expect(fake.close).not.toHaveBeenCalled();
+      expect(vi.mocked(watch)).toHaveBeenCalledTimes(2);
+      expect(fake.close).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("unsubscribeClient に match（repo/path）を渡した場合、現在の購読ラベルと一致すれば解除する", () => {
