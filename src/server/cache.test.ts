@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createMemoryBoardCache, sortChallenges } from "./cache.ts";
 import type { JournalEntry } from "./parsers/journal.ts";
 import type { Challenge } from "./parsers/ledger.ts";
-import type { MatchedRun, RunEvent } from "./parsers/runs.ts";
+import type { MatchedRun, RunEvent, SourcedRunEvent } from "./parsers/runs.ts";
 import { matchRuns } from "./parsers/runs.ts";
 
 function challenge(
@@ -623,5 +623,104 @@ describe("createMemoryBoardCache", () => {
         expect(snapshot.agents[0]?.cycleStatus).toBe("running");
       },
     );
+  });
+
+  describe("getSnapshot: provenance / 台帳拡張フィールドの伝搬", () => {
+    it("runningRuns[].provenance が matchRuns→replaceRuns→getSnapshot を通じて実値のまま伝搬する（file/event/ts/key/raw/hasEnd）", () => {
+      const raw =
+        '{"ts":"2026-07-16T10:05:12+09:00","event":"delegate_start","challenge":"C-044","repo":"net-config","session_id":"550e8400-e29b-41d4-a716-446655440000"}';
+      const events: SourcedRunEvent[] = [
+        {
+          ts: "2026-07-16T10:05:12+09:00",
+          event: "delegate_start",
+          challenge: "C-044",
+          repo: "net-config",
+          session_id: "550e8400-e29b-41d4-a716-446655440000",
+          file: ".flywheel/runs.jsonl",
+          raw,
+        },
+      ];
+
+      const cache = createMemoryBoardCache({ staleMinutes: 30 });
+      cache.replaceAgent({
+        name: "medical",
+        path: "/agents/medical-agent",
+        challenges: [],
+        parseErrors: [],
+      });
+      cache.replaceRuns("medical", matchRuns(events));
+
+      const snapshot = cache.getSnapshot(new Date("2026-07-16T10:10:00+09:00"));
+
+      const delegateRun = snapshot.agents[0]?.runningRuns.find(
+        (r) => r.kind === "delegate",
+      );
+      expect(delegateRun?.provenance).toEqual({
+        file: ".flywheel/runs.jsonl",
+        event: "delegate_start",
+        ts: "2026-07-16T10:05:12+09:00",
+        key: "550e8400-e29b-41d4-a716-446655440000",
+        raw,
+        hasEnd: false,
+      });
+    });
+
+    it("challenges[].description/completionCriteria/taskPlan が replaceAgent→getSnapshot を通じて実値のまま伝搬する", () => {
+      const cache = createMemoryBoardCache();
+
+      cache.replaceAgent({
+        name: "medical",
+        path: "/agents/medical-agent",
+        challenges: [
+          challenge({
+            id: "C-044",
+            description: "背景: X が起きている。期待する状態: Y。",
+            completionCriteria: "Z が満たされていること",
+            taskPlan: "1. 調査 2. 修正 3. 検証",
+          }),
+        ],
+        parseErrors: [],
+      });
+
+      const snapshot = cache.getSnapshot();
+
+      const found = snapshot.agents[0]?.challenges.find(
+        (c) => c.id === "C-044",
+      );
+      expect(found?.description).toBe(
+        "背景: X が起きている。期待する状態: Y。",
+      );
+      expect(found?.completionCriteria).toBe("Z が満たされていること");
+      expect(found?.taskPlan).toBe("1. 調査 2. 修正 3. 検証");
+    });
+
+    it("archivedChallenges[].description/completionCriteria/taskPlan も replaceAgent→getSnapshot を通じて実値のまま伝搬する", () => {
+      const cache = createMemoryBoardCache();
+
+      cache.replaceAgent({
+        name: "medical",
+        path: "/agents/medical-agent",
+        challenges: [],
+        parseErrors: [],
+        archivedChallenges: [
+          challenge({
+            id: "C-900",
+            status: "完了",
+            description: "アーカイブ済み課題の説明",
+            completionCriteria: "完了条件（アーカイブ）",
+            taskPlan: "タスク案（アーカイブ）",
+          }),
+        ],
+      });
+
+      const snapshot = cache.getSnapshot();
+
+      const found = snapshot.agents[0]?.archivedChallenges.find(
+        (c) => c.id === "C-900",
+      );
+      expect(found?.description).toBe("アーカイブ済み課題の説明");
+      expect(found?.completionCriteria).toBe("完了条件（アーカイブ）");
+      expect(found?.taskPlan).toBe("タスク案（アーカイブ）");
+    });
   });
 });
