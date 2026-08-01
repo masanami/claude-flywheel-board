@@ -17,20 +17,37 @@ import type { LogEntry, ParseError } from "./types.ts";
 // 単一定義は ./types.ts（セルフレビュー指摘対応: ParseError 三重定義の解消）。
 export type { ParseError } from "./types.ts";
 
-export type CycleStartEvent = {
+// parseRuns が実ファイルから読み取った際に付与する由来情報。
+// optional のため、テストコード等で RunEvent を手動構築する場合は省略可
+// （省略時は matchRuns 側で provenance を付与しない＝後方互換）。
+//
+// file の実値（セルフレビュー指摘対応）: parseRuns の provenanceFile 引数が
+// そのまま入る（省略時は読み取りに使った filePath）。呼び出し元（watcher.ts）は
+// 「repo ルートからの相対パス」（例: ".flywheel/runs.jsonl"。RunProvenance.file の
+// 設計意図・FR-A2 の表示例）を明示的に渡すことを想定しており、省略した場合の
+// 既定値（filePath そのまま）は通常フルパスになる点に注意（parseRuns 自身は
+// repo ルートを知らないため、相対化はできない）。
+type EventOrigin = {
+  /** 導出元ファイル（parseRuns の provenanceFile 引数。省略時は filePath がそのまま入る） */
+  file?: string;
+  /** 生 JSON 1行（parseRuns が読み取った元の行文字列がそのまま入る） */
+  raw?: string;
+};
+
+export type CycleStartEvent = EventOrigin & {
   ts: string;
   event: "cycle_start";
   cycle: string;
 };
 
-export type CycleEndEvent = {
+export type CycleEndEvent = EventOrigin & {
   ts: string;
   event: "cycle_end";
   cycle: string;
   result: "completed" | "abandoned";
 };
 
-export type DelegateStartEvent = {
+export type DelegateStartEvent = EventOrigin & {
   ts: string;
   event: "delegate_start";
   challenge: string;
@@ -38,7 +55,7 @@ export type DelegateStartEvent = {
   session_id: string;
 };
 
-export type DelegateEndEvent = {
+export type DelegateEndEvent = EventOrigin & {
   ts: string;
   event: "delegate_end";
   challenge: string;
@@ -47,7 +64,7 @@ export type DelegateEndEvent = {
   result: string;
 };
 
-export type AdhocStartEvent = {
+export type AdhocStartEvent = EventOrigin & {
   ts: string;
   event: "adhoc_start";
   id: string;
@@ -56,7 +73,7 @@ export type AdhocStartEvent = {
   repo?: string;
 };
 
-export type AdhocEndEvent = {
+export type AdhocEndEvent = EventOrigin & {
   ts: string;
   event: "adhoc_end";
   id: string;
@@ -72,6 +89,17 @@ export type RunEvent =
   | DelegateEndEvent
   | AdhocStartEvent
   | AdhocEndEvent;
+
+/**
+ * parseRuns が返す events の要素型（セルフレビュー指摘対応: 「provenance は
+ * パーサ発生源で付与する」という設計意図を型でも保証する）。file/raw が
+ * EventOrigin では optional（テストコード等での手動構築を許容するため）
+ * なのに対し、parseRuns を経由した events は必ず両方を持つことを
+ * required で表現する。RunEvent の各ユニオン member との構造的な互換性は
+ * 保ったまま（file/raw を狭めるだけ）なので、matchRuns(events: RunEvent[])
+ * へそのまま渡せる（SourcedRunEvent は RunEvent のサブタイプ）。
+ */
+export type SourcedRunEvent = RunEvent & { file: string; raw: string };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -199,10 +227,19 @@ function isEnoent(error: unknown): boolean {
 /**
  * .flywheel/runs.jsonl（append-only JSONL）を行ごとにパースする。
  * マッチング（start/end 対応付け）は行わない（matchRuns の責務）。
+ *
+ * @param filePath 実際にファイルを読み取るパス（ParseError.file にもそのまま使う。
+ *   診断用途のため呼び出し元がファイルシステム上で特定できる実パスを渡す）。
+ * @param provenanceFile 返す events の file（≒ RunProvenance.file）に使う表示用パス。
+ *   省略時は filePath がそのまま入る（parseRuns 自身は repo ルートを知らないため
+ *   相対化できない）。呼び出し元（watcher.ts）は repo ルートからの相対パス
+ *   （例: ".flywheel/runs.jsonl"）を渡すことを想定する（セルフレビュー指摘対応:
+ *   RunProvenance.file の設計意図「repo ルートからの相対パス」と実値の乖離を解消）。
  */
 export async function parseRuns(
   filePath: string,
-): Promise<{ events: RunEvent[]; errors: ParseError[] }> {
+  provenanceFile: string = filePath,
+): Promise<{ events: SourcedRunEvent[]; errors: ParseError[] }> {
   let content: string;
   try {
     content = await readFile(filePath, "utf-8");
@@ -220,7 +257,7 @@ export async function parseRuns(
   }
   const lines = content.split("\n");
 
-  const events: RunEvent[] = [];
+  const events: SourcedRunEvent[] = [];
   const errors: ParseError[] = [];
 
   for (const [index, rawLine] of lines.entries()) {
@@ -251,11 +288,66 @@ export async function parseRuns(
       continue;
     }
 
-    events.push(parsed as RunEvent);
+    // provenance の発生源: パース時に読み取った provenanceFile・生の行文字列
+    // （rawLine そのまま）を保持する。後段（matchRuns）で JSON.stringify 等
+    // により復元すると元のフォーマット（キー順・空白）が失われるため、
+    // ここで一度読んだ生行を素材として引き継ぐ（機能仕様の設計決定）。
+    //
+    // メモリ保持についての既知のトレードオフ（セルフレビュー指摘対応・対応は
+    // 見送り＝YAGNI）: rawLine は content.split("\n") のスライスであり、V8 の
+    // 実装次第では元の content 文字列全体への参照を保持し得る。長期間
+    // キャッシュされるのは MatchedRun.provenance.raw（delegate_start/
+    // adhoc_start の Run のみ。cache.replaceRuns が repo 単位で全量置き換え
+    // する度に古い参照は破棄される）であり、runs.jsonl は現状の運用規模
+    // （エージェントあたり数〜数十イベント）では実害が無い想定。ファイルが
+    // 大きく育つ環境で問題化したら対処する。
+    //
+    // スプレッド→上書きの順序は意図的（セルフレビュー指摘対応）: 現行の
+    // runs.jsonl 正本スキーマ（claude-flywheel 側）は file/raw というフィールド
+    // 名を使わないため validateRunEvent を通過した parsed に file/raw が
+    // 含まれることは無い想定だが、万一将来スキーマが同名フィールドを追加した
+    // 場合でも、ここで明示的に上書きすることで provenance の file/raw は
+    // 常に「parseRuns が読み取った実際の値」になる（正本データを黙って
+    // 欠落させるのではなく、provenance という別の関心事のフィールドとして
+    // 決定的に上書きする）契約をコメントで明示しておく。
+    events.push({
+      ...(parsed as RunEvent),
+      file: provenanceFile,
+      raw: rawLine,
+    } as SourcedRunEvent);
   }
 
   return { events, errors };
 }
+
+/**
+ * run 由来のタスク行の取得元（provenance。Issue #85 / #96）。
+ * kind: "delegate" / "adhoc" の MatchedRun にのみ付与し、kind: "cycle" では
+ * 常に undefined のまま（cycle はスコープ外の決定を型レベルでも反映するため
+ * event はリテラルユニオンで cycle_start を除外している）。
+ * 位置情報（行番号）は含めない（追記型 jsonl では行番号がすぐ古びるため、
+ * レコードキーを正とする設計決定。FR-A5）。
+ */
+export type RunProvenance = {
+  /**
+   * 導出元ファイル（repo ルートからの相対パス。例: ".flywheel/runs.jsonl"）。
+   * 実値は parseRuns の provenanceFile 引数がそのまま入る（セルフレビュー
+   * 指摘対応: 呼び出し元が repo ルートからの相対パスを明示的に渡す契約。
+   * 引数省略時は読み取りに使った filePath がそのまま入るため、その場合は
+   * 相対パスにならない点に注意）。
+   */
+  file: string;
+  /** 開始イベント種別（cycle はスコープ外のためリテラルユニオンで型レベルでも除外） */
+  event: "delegate_start" | "adhoc_start";
+  /** 開始イベントの ts（ISO 8601） */
+  ts: string;
+  /** レコードキー（delegate: session_id / adhoc: id） */
+  key: string;
+  /** 開始イベントの生 JSON 1行（そのまま） */
+  raw: string;
+  /** 対応する end イベントが存在するか */
+  hasEnd: boolean;
+};
 
 export type MatchedRun = {
   kind: "cycle" | "delegate" | "adhoc";
@@ -266,6 +358,8 @@ export type MatchedRun = {
   startedAt: string; // ISO 8601（start イベントの ts）
   endedAt?: string; // 対応する end があれば ISO 8601
   result?: string; // end の result
+  /** 取得元（delegate/adhoc のみ付与。cycle は常に undefined） */
+  provenance?: RunProvenance;
   /**
    * 同一 kind+key で新しい start が来た時点で、この Run（旧 start）が
    * supersede されたことを示す。合成の endedAt は作らない（実在しない終了
@@ -292,6 +386,13 @@ function bucketKey(kind: MatchedRun["kind"], key: string): string {
  * （＝最新の未終了 start）を end で閉じる。対応する未終了 start が無ければ
  * 何もしない（ファイルローテーション等で start が欠落したケースは無視する。
  * 正本仕様に明記が無いため最小実装＝YAGNI）。
+ *
+ * 不変条件（セルフレビュー指摘対応）: run.endedAt と run.provenance.hasEnd は
+ * 論理的に同じ事実（対応する end が来たか）を指す。endedAt を設定する経路は
+ * このコード（closeLatestOpenRun）だけに一本化されているため、両者は常に
+ * このブロック内で同時に更新すること。将来 endedAt を設定する別経路を
+ * 追加する場合は、hasEnd の更新漏れが FR-A4「対応する end なし」表示の
+ * 誤りに直結する点に注意。
  */
 function closeLatestOpenRun(
   bucket: MatchedRun[],
@@ -303,9 +404,35 @@ function closeLatestOpenRun(
     if (run && run.endedAt === undefined) {
       run.endedAt = endedAt;
       run.result = result;
+      if (run.provenance) {
+        run.provenance = { ...run.provenance, hasEnd: true };
+      }
       return;
     }
   }
+}
+
+/**
+ * delegate_start / adhoc_start イベントから RunProvenance を組み立てる。
+ * イベントに file/raw が両方揃っている場合のみ組み立て、どちらか欠ける場合
+ * （テストコード等で RunEvent を手動構築し parseRuns を経由していない場合）は
+ * undefined を返す（後方互換: provenance を付与しない）。
+ */
+function buildProvenance(
+  event: DelegateStartEvent | AdhocStartEvent,
+  key: string,
+): RunProvenance | undefined {
+  if (event.file === undefined || event.raw === undefined) {
+    return undefined;
+  }
+  return {
+    file: event.file,
+    event: event.event,
+    ts: event.ts,
+    key,
+    raw: event.raw,
+    hasEnd: false,
+  };
 }
 
 /**
@@ -373,6 +500,7 @@ export function matchRuns(events: RunEvent[]): MatchedRun[] {
           challenge: event.challenge,
           repo: event.repo,
           startedAt: event.ts,
+          provenance: buildProvenance(event, event.session_id),
         };
         bucket.push(run);
         order.push(run);
@@ -396,6 +524,7 @@ export function matchRuns(events: RunEvent[]): MatchedRun[] {
           repo: event.repo,
           title: event.title,
           startedAt: event.ts,
+          provenance: buildProvenance(event, event.id),
         };
         bucket.push(run);
         order.push(run);
