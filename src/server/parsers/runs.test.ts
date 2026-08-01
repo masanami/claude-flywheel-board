@@ -307,6 +307,210 @@ describe("matchRuns", () => {
   });
 });
 
+describe("matchRuns の provenance 付与", () => {
+  it("delegate_start に file/raw を持つイベントから、RunProvenance（file/event/ts/key/raw/hasEnd:false）が組み立てられる", () => {
+    const raw =
+      '{"ts":"2026-07-16T10:05:12+09:00","event":"delegate_start","challenge":"C-044","repo":"net-config","session_id":"550e8400-e29b-41d4-a716-446655440000"}';
+    const matched = matchRuns([
+      {
+        ts: "2026-07-16T10:05:12+09:00",
+        event: "delegate_start",
+        challenge: "C-044",
+        repo: "net-config",
+        session_id: "550e8400-e29b-41d4-a716-446655440000",
+        file: ".flywheel/runs.jsonl",
+        raw,
+      },
+    ]);
+    const delegate = matched.find((r) => r.kind === "delegate");
+
+    expect(delegate?.provenance).toEqual({
+      file: ".flywheel/runs.jsonl",
+      event: "delegate_start",
+      ts: "2026-07-16T10:05:12+09:00",
+      key: "550e8400-e29b-41d4-a716-446655440000",
+      raw,
+      hasEnd: false,
+    });
+  });
+
+  it("resume（同一 session_id の再委譲）: superseded になった旧 start の provenance は raw・hasEnd:false のまま残り、新しい start にのみ hasEnd:true が付く（未終了 start の偽陽性診断という機能の動機に直結するケース）", async () => {
+    const { events } = await parseRuns(fixture("resume.jsonl"));
+
+    const matched = matchRuns(events);
+    const delegates = matched.filter((r) => r.kind === "delegate");
+
+    expect(delegates).toHaveLength(2);
+    // 1回目の start（superseded: true・cycle1 で abandoned になった後、end と対応付かない）
+    expect(delegates[0]?.superseded).toBe(true);
+    expect(delegates[0]?.provenance).toMatchObject({
+      event: "delegate_start",
+      ts: "2026-07-16T10:05:00+09:00",
+      hasEnd: false,
+    });
+    // 2回目の start（resume。delegate_end と対応付き hasEnd:true になる）
+    expect(delegates[1]?.superseded).toBeFalsy();
+    expect(delegates[1]?.provenance).toMatchObject({
+      event: "delegate_start",
+      ts: "2026-07-17T09:01:00+09:00",
+      hasEnd: true,
+    });
+    // 2つの provenance.raw は互いに異なる行（1回目/2回目それぞれの実際の生行）を保持する。
+    expect(delegates[0]?.provenance?.raw).not.toBe(
+      delegates[1]?.provenance?.raw,
+    );
+    expect(delegates[0]?.provenance?.raw).toContain(
+      "2026-07-16T10:05:00+09:00",
+    );
+    expect(delegates[1]?.provenance?.raw).toContain(
+      "2026-07-17T09:01:00+09:00",
+    );
+  });
+
+  it("parseRuns の第2引数 provenanceFile を渡すと、provenance.file に読み取りパスではなくその値が使われる（repo ルートからの相対パスを表示用に渡すユースケース）", async () => {
+    const { events } = await parseRuns(
+      fixture("valid.jsonl"),
+      ".flywheel/runs.jsonl",
+    );
+
+    const matched = matchRuns(events);
+    const delegate = matched.find((r) => r.kind === "delegate");
+
+    expect(delegate?.provenance?.file).toBe(".flywheel/runs.jsonl");
+  });
+
+  it("parseRuns の provenanceFile を省略すると、provenance.file には読み取りに使った filePath がそのまま入る（後方互換の既定動作）", async () => {
+    const filePath = fixture("valid.jsonl");
+    const { events } = await parseRuns(filePath);
+
+    const matched = matchRuns(events);
+    const delegate = matched.find((r) => r.kind === "delegate");
+
+    expect(delegate?.provenance?.file).toBe(filePath);
+  });
+
+  it("対応する delegate_end が来ると provenance.hasEnd が true に更新される", () => {
+    const matched = matchRuns([
+      {
+        ts: "2026-07-16T10:00:00+09:00",
+        event: "delegate_start",
+        challenge: "C-044",
+        repo: "net-config",
+        session_id: "s1",
+        file: ".flywheel/runs.jsonl",
+        raw: '{"ts":"2026-07-16T10:00:00+09:00","event":"delegate_start","challenge":"C-044","repo":"net-config","session_id":"s1"}',
+      },
+      {
+        ts: "2026-07-16T10:30:00+09:00",
+        event: "delegate_end",
+        challenge: "C-044",
+        repo: "net-config",
+        session_id: "s1",
+        result: "完了",
+      },
+    ]);
+
+    expect(matched[0]?.provenance?.hasEnd).toBe(true);
+  });
+
+  it("adhoc_start にも同様に provenance が付き、対応する adhoc_end で hasEnd が true になる", () => {
+    const matched = matchRuns([
+      {
+        ts: "2026-07-16T13:02:00+09:00",
+        event: "adhoc_start",
+        id: "adhoc-1",
+        title: "調査",
+        file: ".flywheel/runs.jsonl",
+        raw: '{"ts":"2026-07-16T13:02:00+09:00","event":"adhoc_start","id":"adhoc-1","title":"調査"}',
+      },
+    ]);
+
+    expect(matched[0]?.provenance).toEqual({
+      file: ".flywheel/runs.jsonl",
+      event: "adhoc_start",
+      ts: "2026-07-16T13:02:00+09:00",
+      key: "adhoc-1",
+      raw: '{"ts":"2026-07-16T13:02:00+09:00","event":"adhoc_start","id":"adhoc-1","title":"調査"}',
+      hasEnd: false,
+    });
+
+    const closed = matchRuns([
+      {
+        ts: "2026-07-16T13:02:00+09:00",
+        event: "adhoc_start",
+        id: "adhoc-1",
+        title: "調査",
+        file: ".flywheel/runs.jsonl",
+        raw: '{"ts":"2026-07-16T13:02:00+09:00","event":"adhoc_start","id":"adhoc-1","title":"調査"}',
+      },
+      {
+        ts: "2026-07-16T13:40:00+09:00",
+        event: "adhoc_end",
+        id: "adhoc-1",
+        result: "解決",
+      },
+    ]);
+
+    expect(closed[0]?.provenance?.hasEnd).toBe(true);
+  });
+
+  it("cycle_start/end からは provenance が付かない（kind: cycle は常に undefined）", () => {
+    const matched = matchRuns([
+      {
+        ts: "2026-07-16T10:00:00+09:00",
+        event: "cycle_start",
+        cycle: "cycle1",
+        file: ".flywheel/runs.jsonl",
+        raw: '{"ts":"2026-07-16T10:00:00+09:00","event":"cycle_start","cycle":"cycle1"}',
+      },
+      {
+        ts: "2026-07-16T10:45:00+09:00",
+        event: "cycle_end",
+        cycle: "cycle1",
+        result: "completed",
+      },
+    ]);
+
+    expect(matched[0]?.kind).toBe("cycle");
+    expect(matched[0]?.provenance).toBeUndefined();
+  });
+
+  it("file/raw を持たない手動構築の RunEvent（既存テスト形式・後方互換）では provenance が undefined のまま", () => {
+    const matched = matchRuns([
+      {
+        ts: "2026-07-16T10:00:00+09:00",
+        event: "delegate_start",
+        challenge: "C-044",
+        repo: "net-config",
+        session_id: "s1",
+      },
+    ]);
+
+    expect(matched[0]?.provenance).toBeUndefined();
+  });
+
+  it("parseRuns が返す events は file・raw が実際のフィクスチャの行と一致する（raw はパース時に読み取った生JSON1行そのまま）", async () => {
+    const filePath = fixture("valid.jsonl");
+    const { events } = await parseRuns(filePath);
+
+    const delegateStart = events[1] as (typeof events)[number];
+    expect(delegateStart.event).toBe("delegate_start");
+    expect(delegateStart.file).toBe(filePath);
+    expect(delegateStart.raw).toBe(
+      '{"ts":"2026-07-16T10:05:12+09:00","event":"delegate_start","challenge":"C-044","repo":"net-config","session_id":"550e8400-e29b-41d4-a716-446655440000"}',
+    );
+    expect(JSON.parse(delegateStart.raw ?? "")).toMatchObject({
+      event: "delegate_start",
+      session_id: "550e8400-e29b-41d4-a716-446655440000",
+    });
+
+    const matched = matchRuns(events);
+    const delegate = matched.find((r) => r.kind === "delegate");
+    expect(delegate?.provenance?.raw).toBe(delegateStart.raw);
+    expect(delegate?.provenance?.file).toBe(filePath);
+  });
+});
+
 describe("deriveRuns", () => {
   it("endedAt がある Run は stale にならない（経過が長くても）", () => {
     const matched = [
