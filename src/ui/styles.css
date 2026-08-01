@@ -702,6 +702,51 @@ body {
   overflow-wrap: break-word;
 }
 
+/* 課題台帳セクション（#94・#96・#102 FR-B2/FR-B3。challenge prop を直接表示。
+ * join は行わない）・取得元表示セクション（#85・#96 FR-A1/FR-A3/FR-A4）。
+ * クラス名は既存の join 前提の命名を維持している（testid 同様、変更は必須で
+ * はないため）。既存の card-detail-fields dl スタイルを
+ * 流用しつつ、見出し・外枠だけ独自クラスで区切る。両セクションで共通する
+ * 宣言はセレクタリストにまとめ、重複定義を避ける（セルフレビュー指摘対応。
+ * 既存の .card-detail-log-heading 等の書き換えは避け、新規セレクタとして
+ * 追記するに留める）。 */
+.card-detail-ledger-join,
+.card-detail-provenance {
+  margin: 0 0 1rem;
+}
+
+.card-detail-ledger-join-heading,
+.card-detail-provenance-heading {
+  font-size: 0.85rem;
+  margin: 0 0 0.5rem;
+}
+
+.card-detail-raw-record {
+  margin-top: 0.4rem;
+}
+
+.card-detail-raw-record-toggle {
+  border: 1px solid var(--board-card-border);
+  border-radius: 4px;
+  padding: 0.25rem 0.6rem;
+  background: transparent;
+  color: var(--board-fg);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.card-detail-raw-record-content {
+  margin: 0.4rem 0 0;
+  padding: 0.5rem;
+  border: 1px solid var(--board-card-border);
+  border-radius: 4px;
+  background: var(--board-card-bg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  overflow-wrap: break-word;
+  white-space: pre-wrap;
+}
+
 /* 常設ターミナル領域（P2）。ボードは残り高さに追従し（.board 参照）、
  * ここは flex-shrink しない固定高さのボックスとして下部を占有する。
  * ダーク固定背景（ライト/ダークテーマの影響を受けない）。
