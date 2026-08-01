@@ -52,6 +52,110 @@ describe("parseLedger", () => {
     expect(c002?.needsHuman).toBe(false);
   });
 
+  it("valid.md の C-001 は 説明・完了条件（前方一致: 完了条件（任意・分かれば））・タスク案 を抽出する", () => {
+    const content = readFixture("valid.md");
+
+    const result = parseLedger(content, "valid.md");
+
+    const c001 = result.challenges.find((c) => c.id === "C-001");
+    expect(c001?.description).toBe("環境変数でパスを上書きしたい");
+    expect(c001?.completionCriteria).toBe("環境変数でパスを指定できる");
+    expect(c001?.taskPlan).toBe("1. resolveFleetManifestPath を実装する");
+  });
+
+  it("valid.md の C-002 は 完了条件 系フィールドが無いため completionCriteria が undefined になる（説明・タスク案は抽出される）", () => {
+    const content = readFixture("valid.md");
+
+    const result = parseLedger(content, "valid.md");
+
+    const c002 = result.challenges.find((c) => c.id === "C-002");
+    expect(c002?.description).toBe(
+      "テンプレのフェンス内記入例を誤検出しないようにしたい",
+    );
+    expect(c002?.completionCriteria).toBeUndefined();
+    expect(c002?.taskPlan).toBe("1. フェンス検出ロジックを追加する");
+  });
+
+  it("完了条件（任意） のように括弧内の注記が異なる前方一致ラベルも completionCriteria として抽出する", () => {
+    const content = [
+      "### [C-200] 前方一致の別表記テスト",
+      "",
+      "**人間記入欄**",
+      "- 説明: 前方一致の別表記を確認する",
+      "- 完了条件（任意）: 別の注記でも一致すること",
+      "",
+      "**分類欄（エージェントが記入）**",
+      "- ステータス: 未分類",
+      "- タスク案: 1. 前方一致を確認する",
+      "",
+    ].join("\n");
+
+    const result = parseLedger(content, "prefix-match.md");
+
+    expect(result.errors).toEqual([]);
+    expect(result.challenges[0]?.completionCriteria).toBe(
+      "別の注記でも一致すること",
+    );
+  });
+
+  it("説明・タスク案は完全一致のみで抽出する（前方一致させない）: 括弧付きラベルは対応するフィールドに一致しない", () => {
+    const content = [
+      "### [C-202] 完全一致の否定テスト",
+      "",
+      "**人間記入欄**",
+      "- 説明（任意）: 完全一致ではないので description に入らないはず",
+      "",
+      "**分類欄（エージェントが記入）**",
+      "- ステータス: 未分類",
+      "- タスク案（案）: 完全一致ではないので taskPlan に入らないはず",
+      "",
+    ].join("\n");
+
+    const result = parseLedger(content, "exact-match-only.md");
+
+    expect(result.errors).toEqual([]);
+    const c202 = result.challenges[0];
+    expect(c202?.description).toBeUndefined();
+    expect(c202?.taskPlan).toBeUndefined();
+  });
+
+  it("完了条件系ラベルが複数あり最初の一致が空値の場合、値を持つ後続の一致を completionCriteria として採用する", () => {
+    const content = [
+      "### [C-203] 前方一致タイブレークのテスト",
+      "",
+      "**人間記入欄**",
+      "- 完了条件（任意）: ",
+      "- 完了条件（任意・分かれば）: 後から追記された値",
+      "",
+      "**分類欄（エージェントが記入）**",
+      "- ステータス: 未分類",
+      "",
+    ].join("\n");
+
+    const result = parseLedger(content, "prefix-tiebreak.md");
+
+    expect(result.errors).toEqual([]);
+    expect(result.challenges[0]?.completionCriteria).toBe("後から追記された値");
+  });
+
+  it("説明・完了条件・タスク案がすべて無いエントリはエラーにならず、3フィールドとも undefined になる", () => {
+    const content = [
+      "### [C-201] フィールド無しのテスト",
+      "",
+      "**分類欄（エージェントが記入）**",
+      "- ステータス: 未分類",
+      "",
+    ].join("\n");
+
+    const result = parseLedger(content, "no-content-fields.md");
+
+    expect(result.errors).toEqual([]);
+    const c201 = result.challenges[0];
+    expect(c201?.description).toBeUndefined();
+    expect(c201?.completionCriteria).toBeUndefined();
+    expect(c201?.taskPlan).toBeUndefined();
+  });
+
   it("broken-mixed.md では正常な2件が challenges に残り、壊れた3件は errors に入る", () => {
     const content = readFixture("broken-mixed.md");
 

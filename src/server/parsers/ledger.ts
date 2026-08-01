@@ -32,6 +32,15 @@ export type Challenge = {
   position?: string;
   needsHuman: boolean;
   summary?: string;
+  /** 説明（背景・困りごと・期待する状態）。ラベル "説明" に完全一致するフィールドから抽出 */
+  description?: string;
+  /**
+   * 完了条件。ラベルが "完了条件" で始まるフィールドから前方一致で抽出する
+   * （テンプレート表記揺れ: "完了条件（任意）" / "完了条件（任意・分かれば）" 等）。
+   */
+  completionCriteria?: string;
+  /** タスク案。ラベル "タスク案" に完全一致するフィールドから抽出 */
+  taskPlan?: string;
 };
 
 const HEADER_PATTERN = /^###\s*\[([^\]]*)\]\s*(.*)$/;
@@ -47,6 +56,11 @@ const FIELD_LINE_PATTERN = /^- ([^:]+): ?(.*)$/;
 // 許可する（claude-flywheel 側 journal サンプルに階層課題IDの実例が存在するため）。
 const CHALLENGE_ID_PATTERN = /^C-\d+(?:-\d+)*$/;
 
+// 完了条件フィールドのラベル前方一致に使う接頭辞。
+// FR-B4: テンプレート/実運用台帳で括弧内の注記が揺れる（"完了条件（任意）" /
+// "完了条件（任意・分かれば）" 等）ため、注記を無視して "完了条件" で始まるラベルを一致とみなす。
+const COMPLETION_CRITERIA_LABEL_PREFIX = "完了条件";
+
 type PendingEntry = {
   line: number;
   raw: string;
@@ -54,6 +68,26 @@ type PendingEntry = {
   title: string;
   fields: Map<string, string>;
 };
+
+/**
+ * fields から、ラベルが指定した接頭辞で始まるフィールドのうち、値が空でない最初の
+ * 一致を返す（前方一致検索）。テンプレート由来の空欄ラベルが先に残り、後から人間が
+ * 別の注記付きラベルで値を追記するケースで、空値に埋もれて後続の値が無視されるのを
+ * 防ぐ。一致が無い、または一致がすべて空値の場合は undefined を返す
+ * （フィールドが無いエントリはエラーにせず省略扱い。呼び出し側の `|| undefined` と
+ * 合わせて空文字と未設定を同一に扱うため、空値の一致自体を区別して保持する必要はない）。
+ */
+function findFieldByPrefix(
+  fields: Map<string, string>,
+  labelPrefix: string,
+): string | undefined {
+  for (const [key, value] of fields) {
+    if (key.startsWith(labelPrefix) && value !== "") {
+      return value;
+    }
+  }
+  return undefined;
+}
 
 /**
  * 行内の `<!--` / `-->` マーカーを順に走査し、行末時点で HTML コメント中かどうかを返す。
@@ -149,6 +183,11 @@ export function parseLedger(
     const status = statusRaw as LedgerStatus;
     const priority = entry.fields.get("優先度") || undefined;
     const position = entry.fields.get("担当ポジション") || undefined;
+    const description = entry.fields.get("説明") || undefined;
+    const completionCriteria =
+      findFieldByPrefix(entry.fields, COMPLETION_CRITERIA_LABEL_PREFIX) ||
+      undefined;
+    const taskPlan = entry.fields.get("タスク案") || undefined;
 
     challenges.push({
       id: entry.idRaw.trim(),
@@ -158,6 +197,9 @@ export function parseLedger(
       position,
       needsHuman: status === "計画承認待ち" || status === "完了確認待ち",
       summary: undefined,
+      description,
+      completionCriteria,
+      taskPlan,
     });
   };
 
