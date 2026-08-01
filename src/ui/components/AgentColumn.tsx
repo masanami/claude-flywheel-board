@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import type { AgentBoard, AgentCycleStatus, Run } from "../board-types.ts";
+import type {
+  AgentBoard,
+  AgentCycleStatus,
+  Run,
+  RunProvenance,
+} from "../board-types.ts";
+import { findChallengeById } from "../lib/challenge-lookup.ts";
 import { formatElapsed } from "../lib/format-elapsed.ts";
 import {
   type AdjacentChallenge,
@@ -42,19 +48,40 @@ function CycleStatusIndicator({
   );
 }
 
+// 取得元（provenance）表示のキーラベル・対応 end イベント名を、開始イベント
+// 種別から導出する（Issue #101 / FR-A2・FR-A4）。RunProvenance.key は
+// delegate: session_id / adhoc: id のいずれかの値を持つが、ラベル自体は
+// 型に含まれないため表示側で対応付ける。
+function describeProvenance(provenance: RunProvenance): string {
+  const isDelegate = provenance.event === "delegate_start";
+  const keyLabel = isDelegate ? "session_id" : "id";
+  const endEvent = isDelegate ? "delegate_end" : "adhoc_end";
+  const endNote = provenance.hasEnd ? "" : `（対応する ${endEvent} なし）`;
+  return `${provenance.file} — ${provenance.event} ts=${provenance.ts} ${keyLabel}=${provenance.key}${endNote}`;
+}
+
 // 実行中セクション（P3-2）: runningRuns（kind: delegate | adhoc の実行中 Run
 // のみ。cycle は cycleStatus 側で表現するためサーバ側で除外済み）を表示する。
 // 実行中カードに操作ボタンは基本置かないが、応答なし（stale）の delegate
 // 実行中セッションに限り「再開コマンドを挿入」ボタンを表示する（#31・FR-12）。
 // クリティカル設計決定（親 #28 / #2）: prefill するのみで Enter 送信・自動実行
 // はしない。
-function RunningRunRow({ run, agentName }: { run: Run; agentName: string }) {
+function RunningRunRow({ run, agent }: { run: Run; agent: AgentBoard }) {
   const elapsed = formatElapsed(run.startedAt, new Date());
   // 再開ボタンの対象判定は isResumableDelegateRun に一元化する
   // （CardDetailModal 側の findStaleDelegateRun と判定基準を共有）。
   // resumeRepo に代入することで、以降の JSX では repo の truthy チェックが
   // そのまま TypeScript の型絞り込みとしても機能する（as string キャスト不要）。
   const resumeRepo = isResumableDelegateRun(run) ? run.repo : undefined;
+  // 台帳タイトルの join（Issue #101 / FR-B1・FR-B3）: join ロジックは自作せず
+  // challenge-lookup.ts の findChallengeById に一元化する（challenges →
+  // archivedChallenges の順に探索。クリティカル設計決定）。adhoc には適用
+  // しない（機能仕様の表示例・完了条件が課題IDベースの delegate run を
+  // 想定しているため）。
+  const ledgerChallenge =
+    run.kind === "delegate" && run.challenge !== undefined
+      ? findChallengeById(agent, run.challenge)
+      : undefined;
   return (
     <div
       className="agent-column-running-run"
@@ -66,6 +93,12 @@ function RunningRunRow({ run, agentName }: { run: Run; agentName: string }) {
           <>
             <span className="agent-column-running-run-challenge">
               {run.challenge}
+            </span>
+            <span
+              className="agent-column-running-run-ledger-title"
+              data-ledger-missing={ledgerChallenge ? undefined : true}
+            >
+              {ledgerChallenge ? ledgerChallenge.title : "台帳に見つかりません"}
             </span>
             <span className="agent-column-running-run-arrow">→ {run.repo}</span>
           </>
@@ -79,12 +112,20 @@ function RunningRunRow({ run, agentName }: { run: Run; agentName: string }) {
           ⚠ 応答なし（要確認）
         </div>
       )}
+      {run.stale && run.provenance && (
+        <div
+          className="agent-column-running-run-provenance"
+          data-testid={`running-run-provenance-${run.key}`}
+        >
+          └ 取得元: {describeProvenance(run.provenance)}
+        </div>
+      )}
       {resumeRepo && (
         <button
           type="button"
           className="agent-column-running-run-resume-button"
           onClick={() =>
-            prefill(agentName, buildResumeCommand(resumeRepo, run.key))
+            prefill(agent.name, buildResumeCommand(resumeRepo, run.key))
           }
         >
           再開コマンドを挿入
@@ -497,7 +538,7 @@ export function AgentColumn({ agent, archiveMode }: AgentColumnProps) {
               <RunningRunRow
                 key={`${run.kind}:${run.key}`}
                 run={run}
-                agentName={agent.name}
+                agent={agent}
               />
             ))}
           </section>

@@ -1,6 +1,18 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentBoard, Challenge, ParseError, Run } from "../board-types.ts";
+import type {
+  AgentBoard,
+  Challenge,
+  ParseError,
+  Run,
+  RunProvenance,
+} from "../board-types.ts";
 import { prefill } from "../terminal-control.ts";
 import { AgentColumn } from "./AgentColumn.tsx";
 
@@ -53,6 +65,18 @@ function run(overrides: Partial<Run> & Pick<Run, "kind" | "key">): Run {
   return {
     startedAt: "2026-07-16T09:00:00.000Z",
     stale: false,
+    ...overrides,
+  };
+}
+
+function provenance(overrides: Partial<RunProvenance> = {}): RunProvenance {
+  return {
+    file: ".flywheel/runs.jsonl",
+    event: "delegate_start",
+    ts: "2026-07-28T17:31:00+09:00",
+    key: "cc3535f2-1234",
+    raw: '{"event":"delegate_start"}',
+    hasEnd: false,
     ...overrides,
   };
 }
@@ -719,6 +743,343 @@ describe("AgentColumn", () => {
       );
 
       expect(screen.queryByText(/応答なし/)).not.toBeInTheDocument();
+    });
+  });
+
+  describe("台帳タイトルの join 表示（Issue #101 / FR-B1・FR-B3）", () => {
+    it("台帳（challenges）に存在する課題IDの delegate Run に台帳タイトルを表示する", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            // 同じ課題IDが challenges 側の TaskCard としても描画されうるため、
+            // Run 行（running-run-session-1）に絞って検証する。
+            challenges: [challenge({ id: "C-030", title: "医療データ移行" })],
+            runningRuns: [
+              run({
+                kind: "delegate",
+                key: "session-1",
+                challenge: "C-030",
+                repo: "org/service-a",
+              }),
+            ],
+          })}
+        />,
+      );
+
+      const runRow = within(screen.getByTestId("running-run-session-1"));
+      expect(runRow.getByText("C-030")).toBeInTheDocument();
+      expect(runRow.getByText("医療データ移行")).toBeInTheDocument();
+    });
+
+    it("archivedChallenges にのみ存在する課題IDでも台帳タイトルを表示する（FR-B3）", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            archivedChallenges: [
+              challenge({ id: "C-030", title: "アーカイブ済みタイトル" }),
+            ],
+            runningRuns: [
+              run({
+                kind: "delegate",
+                key: "session-1",
+                challenge: "C-030",
+                repo: "org/service-a",
+              }),
+            ],
+          })}
+        />,
+      );
+
+      expect(screen.getByText("アーカイブ済みタイトル")).toBeInTheDocument();
+    });
+
+    describe("台帳（アーカイブ含む）に存在しない課題ID", () => {
+      beforeEach(() => {
+        vi.setSystemTime(new Date("2026-07-16T09:40:00.000Z"));
+      });
+
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      it("「台帳に見つかりません」と表示され、経過時間・再開ボタン等の既存表示は壊れない（AC-5）", () => {
+        render(
+          <AgentColumn
+            agent={agentBoard({
+              name: "medical",
+              runningRuns: [
+                run({
+                  kind: "delegate",
+                  key: "session-1",
+                  challenge: "C-999",
+                  repo: "org/service-a",
+                  startedAt: "2026-07-16T09:00:00.000Z",
+                  stale: true,
+                }),
+              ],
+            })}
+          />,
+        );
+
+        expect(screen.getByText("C-999")).toBeInTheDocument();
+        expect(screen.getByText("台帳に見つかりません")).toBeInTheDocument();
+        expect(screen.getByText("40分")).toBeInTheDocument();
+        expect(
+          screen.getByRole("button", { name: "再開コマンドを挿入" }),
+        ).toBeInTheDocument();
+      });
+    });
+
+    it("台帳タイトルにHTML/スクリプト断片が含まれていてもプレーンテキストとして表示される（AC-8）", () => {
+      const { container } = render(
+        <AgentColumn
+          agent={agentBoard({
+            challenges: [
+              challenge({
+                id: "C-030",
+                title: "<script>alert('x')</script>危険なタイトル",
+              }),
+            ],
+            runningRuns: [
+              run({
+                kind: "delegate",
+                key: "session-1",
+                challenge: "C-030",
+                repo: "org/service-a",
+              }),
+            ],
+          })}
+        />,
+      );
+
+      const runRow = within(screen.getByTestId("running-run-session-1"));
+      // テキストとしてそのまま表示される（JSX の子要素としてエスケープ
+      // されるため、<script> が実際の DOM 要素として解釈されない）。
+      expect(
+        runRow.getByText("<script>alert('x')</script>危険なタイトル"),
+      ).toBeInTheDocument();
+      // dangerouslySetInnerHTML 等でHTML解釈されていれば <script> 要素が
+      // DOM 上に実在してしまう。実在しないことを直接確認する。
+      expect(container.querySelector("script")).toBeNull();
+    });
+
+    it("台帳に見つからない場合、実在タイトルと区別できるようフォールバック表示に専用の data 属性が付く", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            runningRuns: [
+              run({
+                kind: "delegate",
+                key: "session-1",
+                challenge: "C-999",
+                repo: "org/service-a",
+              }),
+            ],
+          })}
+        />,
+      );
+
+      const ledgerTitle = screen
+        .getByText("台帳に見つかりません")
+        .closest(".agent-column-running-run-ledger-title");
+      expect(ledgerTitle).toHaveAttribute("data-ledger-missing", "true");
+    });
+
+    it("台帳に見つかった場合、フォールバック用の data 属性は付かない", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            challenges: [challenge({ id: "C-030", title: "医療データ移行" })],
+            runningRuns: [
+              run({
+                kind: "delegate",
+                key: "session-1",
+                challenge: "C-030",
+                repo: "org/service-a",
+              }),
+            ],
+          })}
+        />,
+      );
+
+      // 同じタイトル文字列が challenges 側の TaskCard にも描画されうるため、
+      // Run 行に絞ってから検索する。
+      const runRow = within(screen.getByTestId("running-run-session-1"));
+      const ledgerTitle = runRow
+        .getByText("医療データ移行")
+        .closest(".agent-column-running-run-ledger-title");
+      expect(ledgerTitle).not.toHaveAttribute("data-ledger-missing");
+    });
+
+    it("adhoc の実行中 Run には台帳タイトル join を適用しない", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            challenges: [challenge({ id: "C-030", title: "医療データ移行" })],
+            runningRuns: [
+              run({
+                kind: "adhoc",
+                key: "adhoc-1",
+                title: "緊急バグ調査",
+              }),
+            ],
+          })}
+        />,
+      );
+
+      expect(screen.getByText("緊急バグ調査")).toBeInTheDocument();
+      expect(
+        screen.queryByText("台帳に見つかりません"),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  describe("stale 行の取得元インライン表示（Issue #101 / FR-A2）", () => {
+    beforeEach(() => {
+      vi.setSystemTime(new Date("2026-07-16T09:40:00.000Z"));
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("stale な delegate Run に provenance がある場合、ファイル名・イベント種別・ts・キー・end有無の注記を含む取得元1行がインライン表示される", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            runningRuns: [
+              run({
+                kind: "delegate",
+                key: "session-1",
+                challenge: "C-042",
+                repo: "org/service-a",
+                stale: true,
+                provenance: provenance({
+                  file: ".flywheel/runs.jsonl",
+                  event: "delegate_start",
+                  ts: "2026-07-28T17:31:00+09:00",
+                  key: "cc3535f2-1234",
+                  hasEnd: false,
+                }),
+              }),
+            ],
+          })}
+        />,
+      );
+
+      const provenanceEl = screen.getByTestId(
+        "running-run-provenance-session-1",
+      );
+      expect(provenanceEl).toHaveTextContent(".flywheel/runs.jsonl");
+      expect(provenanceEl).toHaveTextContent("delegate_start");
+      expect(provenanceEl).toHaveTextContent("2026-07-28T17:31:00+09:00");
+      // レコードキーの値だけでなく、delegate のキーラベル（session_id）も
+      // 構成要素として含まれることを検証する（ラベル取り違えを検知できる
+      // ようにする）。
+      expect(provenanceEl).toHaveTextContent("session_id=cc3535f2-1234");
+      expect(provenanceEl).toHaveTextContent("（対応する delegate_end なし）");
+    });
+
+    it("stale な adhoc Run に provenance がある場合、id ラベルと対応する adhoc_end なしの注記がインライン表示される（delegate とのキーラベル出し分け）", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            runningRuns: [
+              run({
+                kind: "adhoc",
+                key: "adhoc-1",
+                title: "放置タスク",
+                stale: true,
+                provenance: provenance({
+                  file: ".flywheel/runs.jsonl",
+                  event: "adhoc_start",
+                  ts: "2026-07-28T17:31:00+09:00",
+                  key: "adhoc-1",
+                  hasEnd: false,
+                }),
+              }),
+            ],
+          })}
+        />,
+      );
+
+      const provenanceEl = screen.getByTestId("running-run-provenance-adhoc-1");
+      expect(provenanceEl).toHaveTextContent("id=adhoc-1");
+      // "id=adhoc-1" は "session_id=adhoc-1" の部分文字列としても成立して
+      // しまう（toHaveTextContent は部分一致）ため、delegate 用のラベルに
+      // すり替わっていないことも明示的に確認する（ラベル出し分けの退行を
+      // 検知できるようにする）。
+      expect(provenanceEl).not.toHaveTextContent("session_id=adhoc-1");
+      expect(provenanceEl).toHaveTextContent("（対応する adhoc_end なし）");
+    });
+
+    it("stale ではない Run には provenance があってもインライン表示しない", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            runningRuns: [
+              run({
+                kind: "delegate",
+                key: "session-1",
+                challenge: "C-042",
+                repo: "org/service-a",
+                stale: false,
+                provenance: provenance(),
+              }),
+            ],
+          })}
+        />,
+      );
+
+      expect(
+        screen.queryByTestId("running-run-provenance-session-1"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("stale な Run でも provenance が undefined の場合はインライン表示しない（防御的）", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            runningRuns: [
+              run({
+                kind: "adhoc",
+                key: "adhoc-1",
+                title: "放置タスク",
+                stale: true,
+              }),
+            ],
+          })}
+        />,
+      );
+
+      expect(
+        screen.queryByTestId("running-run-provenance-adhoc-1"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("対応する end イベントがある場合（hasEnd: true）は「対応する ... なし」の注記を含まない", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            runningRuns: [
+              run({
+                kind: "adhoc",
+                key: "adhoc-1",
+                title: "放置タスク",
+                stale: true,
+                provenance: provenance({
+                  event: "adhoc_start",
+                  key: "adhoc-1",
+                  hasEnd: true,
+                }),
+              }),
+            ],
+          })}
+        />,
+      );
+
+      const provenanceEl = screen.getByTestId("running-run-provenance-adhoc-1");
+      expect(provenanceEl).not.toHaveTextContent("なし");
     });
   });
 
