@@ -77,18 +77,7 @@ describe("parseLedger", () => {
   });
 
   it("完了条件（任意） のように括弧内の注記が異なる前方一致ラベルも completionCriteria として抽出する", () => {
-    const content = [
-      "### [C-200] 前方一致の別表記テスト",
-      "",
-      "**人間記入欄**",
-      "- 説明: 前方一致の別表記を確認する",
-      "- 完了条件（任意）: 別の注記でも一致すること",
-      "",
-      "**分類欄（エージェントが記入）**",
-      "- ステータス: 未分類",
-      "- タスク案: 1. 前方一致を確認する",
-      "",
-    ].join("\n");
+    const content = readFixture("prefix-match.md");
 
     const result = parseLedger(content, "prefix-match.md");
 
@@ -99,17 +88,7 @@ describe("parseLedger", () => {
   });
 
   it("説明・タスク案は完全一致のみで抽出する（前方一致させない）: 括弧付きラベルは対応するフィールドに一致しない", () => {
-    const content = [
-      "### [C-202] 完全一致の否定テスト",
-      "",
-      "**人間記入欄**",
-      "- 説明（任意）: 完全一致ではないので description に入らないはず",
-      "",
-      "**分類欄（エージェントが記入）**",
-      "- ステータス: 未分類",
-      "- タスク案（案）: 完全一致ではないので taskPlan に入らないはず",
-      "",
-    ].join("\n");
+    const content = readFixture("exact-match-only.md");
 
     const result = parseLedger(content, "exact-match-only.md");
 
@@ -120,17 +99,7 @@ describe("parseLedger", () => {
   });
 
   it("完了条件系ラベルが複数あり最初の一致が空値の場合、値を持つ後続の一致を completionCriteria として採用する", () => {
-    const content = [
-      "### [C-203] 前方一致タイブレークのテスト",
-      "",
-      "**人間記入欄**",
-      "- 完了条件（任意）: ",
-      "- 完了条件（任意・分かれば）: 後から追記された値",
-      "",
-      "**分類欄（エージェントが記入）**",
-      "- ステータス: 未分類",
-      "",
-    ].join("\n");
+    const content = readFixture("prefix-tiebreak.md");
 
     const result = parseLedger(content, "prefix-tiebreak.md");
 
@@ -139,13 +108,7 @@ describe("parseLedger", () => {
   });
 
   it("説明・完了条件・タスク案がすべて無いエントリはエラーにならず、3フィールドとも undefined になる", () => {
-    const content = [
-      "### [C-201] フィールド無しのテスト",
-      "",
-      "**分類欄（エージェントが記入）**",
-      "- ステータス: 未分類",
-      "",
-    ].join("\n");
+    const content = readFixture("no-content-fields.md");
 
     const result = parseLedger(content, "no-content-fields.md");
 
