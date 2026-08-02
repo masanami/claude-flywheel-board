@@ -10,7 +10,7 @@ import {
 } from "../md-live-channel.ts";
 import { FileTree } from "./FileTree.tsx";
 
-// board 右サイドの開閉式パネル（マークダウンプレビュー機能全体の設計 —
+// board 左サイドの開閉式パネル（マークダウンプレビュー機能全体の設計 —
 // docs/features/markdown-preview.md「機能全体の設計」節）。開閉・幅ドラッグは
 // #64 のシェル実装、ファイルツリー（FileTree）とリフレッシュボタンの結線は
 // #68 で追加した。選択ファイルの内容取得（GET /api/md/file）と
@@ -24,7 +24,8 @@ import { FileTree } from "./FileTree.tsx";
 // サーバの自動解除（1クライアント1購読）に委ねるため明示的な
 // md_unsubscribe は送らず、パネルを閉じる操作時にのみ送信する。
 //
-// 右サイドパネルは flex でボードカラム領域を圧縮して確保する
+// 左サイドパネルは flex でボードカラム領域を圧縮して確保する（#112 で
+// 右サイドから移動。ファイルツリーは IDE の慣例どおり画面左端に置く）。
 // （下部ターミナル領域の高さ・幅には一切影響しない）。組み込み側は
 // Board.tsx を参照。本コンポーネント自体は自分の幅のみを inline style で
 // 制御し、周囲のレイアウトには関与しない（KISS）。
@@ -515,10 +516,10 @@ export function PreviewPanel({
     const startWidth = width;
 
     const handleMouseMove = (moveEvent: MouseEvent) => {
-      // パネルは画面右端に位置し、ハンドルは左端にある。ハンドルを左へ
-      // ドラッグする（delta が負）ほどパネル幅が増える。
+      // パネルは画面左端に位置し、ハンドルは右端にある（#112）。ハンドルを
+      // 右へドラッグする（delta が正）ほどパネル幅が増える。
       const delta = moveEvent.clientX - startX;
-      setWidth(clamp(startWidth - delta, MIN_WIDTH_PX, MAX_WIDTH_PX));
+      setWidth(clamp(startWidth + delta, MIN_WIDTH_PX, MAX_WIDTH_PX));
     };
 
     const handleMouseUp = () => {
@@ -532,19 +533,19 @@ export function PreviewPanel({
 
   const handleResizeKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     // マウスドラッグの代替経路（TerminalPane の既存パターンに合わせる）。
-    // セルフレビュー指摘: 当初 ArrowRight で増加としていたが、マウスドラッグ
-    // （右へドラッグ＝ハンドルが右へ移動＝パネル幅は減る）と方向が逆だった。
     // ハンドルの物理的な移動方向とキー方向を一致させ、マウス・キーボード両
-    // 経路で同じ向きになるよう ArrowRight で減少・ArrowLeft で増加にする。
+    // 経路で同じ向きにする（右サイド時代のセルフレビュー指摘で確立した
+    // 原則）。#112 でパネルが左サイドへ移りハンドルは右端にあるため、
+    // ArrowRight（ハンドルが右へ移動）で増加・ArrowLeft で減少にする。
     if (event.key === "ArrowRight") {
       event.preventDefault();
       setWidth((prev) =>
-        clamp(prev - RESIZE_STEP_PX, MIN_WIDTH_PX, MAX_WIDTH_PX),
+        clamp(prev + RESIZE_STEP_PX, MIN_WIDTH_PX, MAX_WIDTH_PX),
       );
     } else if (event.key === "ArrowLeft") {
       event.preventDefault();
       setWidth((prev) =>
-        clamp(prev + RESIZE_STEP_PX, MIN_WIDTH_PX, MAX_WIDTH_PX),
+        clamp(prev - RESIZE_STEP_PX, MIN_WIDTH_PX, MAX_WIDTH_PX),
       );
     }
   };
@@ -555,21 +556,6 @@ export function PreviewPanel({
       data-testid="preview-panel"
       style={{ width: open ? `${width}px` : undefined }}
     >
-      {open && (
-        <div
-          className="preview-panel-resize-handle"
-          data-testid="preview-panel-resize-handle"
-          role="separator"
-          aria-orientation="vertical"
-          aria-valuenow={width}
-          aria-valuemin={MIN_WIDTH_PX}
-          aria-valuemax={MAX_WIDTH_PX}
-          aria-label="プレビューパネルの幅"
-          tabIndex={0}
-          onMouseDown={handleResizeMouseDown}
-          onKeyDown={handleResizeKeyDown}
-        />
-      )}
       <div className="preview-panel-content">
         <div className="preview-panel-header">
           {open && <span className="preview-panel-title">プレビュー</span>}
@@ -601,8 +587,9 @@ export function PreviewPanel({
                 間も ~170px 前後の横幅を常時占有し、「閉じたらボードへ幅を
                 返す」という狙いに反する。TerminalPane の折りたたみボタン
                 （アイコン + aria-label）と同じパターンにし、閉状態の
-                footprint を最小化する。 */}
-            {open ? "▸" : "◂"}
+                footprint を最小化する。#112 で左サイドへ移ったため、
+                矢印は「閉じる＝左へ畳む ◂」「開く＝右へ広がる ▸」の向き。 */}
+            {open ? "◂" : "▸"}
           </button>
         </div>
         {open && (
@@ -660,6 +647,23 @@ export function PreviewPanel({
           </div>
         )}
       </div>
+      {/* #112: パネルが左サイドにあるため、幅ドラッグのハンドルは右端に
+          置く（コンテンツの後に描画する。.preview-panel は flex row）。 */}
+      {open && (
+        <div
+          className="preview-panel-resize-handle"
+          data-testid="preview-panel-resize-handle"
+          role="separator"
+          aria-orientation="vertical"
+          aria-valuenow={width}
+          aria-valuemin={MIN_WIDTH_PX}
+          aria-valuemax={MAX_WIDTH_PX}
+          aria-label="プレビューパネルの幅"
+          tabIndex={0}
+          onMouseDown={handleResizeMouseDown}
+          onKeyDown={handleResizeKeyDown}
+        />
+      )}
     </div>
   );
 }
