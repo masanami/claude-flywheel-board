@@ -427,4 +427,162 @@ describe("FileTree", () => {
     expect(screen.queryByText("a.md")).not.toBeInTheDocument();
     expect(buttonB).not.toHaveAttribute("aria-current");
   });
+
+  // キーボード操作（#114）: 矢印キーで表示中ノードのフォーカス移動・開閉を
+  // 行う。フォーカス移動だけではファイル選択（onSelectFile）を発火させない
+  // （Enter/Space はブラウザ標準の button 動作で click になり、そこで確定）。
+  describe("キーボード操作（#114）", () => {
+    // 描画順（ディレクトリ→ファイル）: repo-a / docs / top.md / repo-b / b.md
+    function stubTreeFetch() {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              repos: [
+                {
+                  name: "repo-a",
+                  files: ["top.md", "docs/nested.md", "docs/sub/deep.md"],
+                },
+                { name: "repo-b", files: ["b.md"] },
+              ],
+            }),
+        }),
+      );
+    }
+
+    it("ArrowDown / ArrowUp で表示中のノード間をフォーカス移動する", async () => {
+      stubTreeFetch();
+      render(<FileTree refreshToken={0} onSelectFile={vi.fn()} />);
+
+      const repoA = await screen.findByRole("button", { name: "repo-a" });
+      const docs = screen.getByRole("button", { name: "docs" });
+      const topFile = screen.getByRole("button", { name: "top.md" });
+
+      repoA.focus();
+      fireEvent.keyDown(repoA, { key: "ArrowDown" });
+      expect(docs).toHaveFocus();
+
+      fireEvent.keyDown(docs, { key: "ArrowDown" });
+      expect(topFile).toHaveFocus();
+
+      fireEvent.keyDown(topFile, { key: "ArrowUp" });
+      expect(docs).toHaveFocus();
+    });
+
+    it("先頭で ArrowUp・末尾で ArrowDown を押してもフォーカスは動かない", async () => {
+      stubTreeFetch();
+      render(<FileTree refreshToken={0} onSelectFile={vi.fn()} />);
+
+      const repoA = await screen.findByRole("button", { name: "repo-a" });
+      const fileB = screen.getByRole("button", { name: "b.md" });
+
+      repoA.focus();
+      fireEvent.keyDown(repoA, { key: "ArrowUp" });
+      expect(repoA).toHaveFocus();
+
+      fileB.focus();
+      fireEvent.keyDown(fileB, { key: "ArrowDown" });
+      expect(fileB).toHaveFocus();
+    });
+
+    it("ArrowRight で折りたたみ中のディレクトリを展開する（フォーカスは維持）", async () => {
+      stubTreeFetch();
+      render(<FileTree refreshToken={0} onSelectFile={vi.fn()} />);
+
+      const docs = await screen.findByRole("button", { name: "docs" });
+      docs.focus();
+
+      fireEvent.keyDown(docs, { key: "ArrowRight" });
+
+      expect(screen.getByText("nested.md")).toBeInTheDocument();
+      expect(docs).toHaveFocus();
+    });
+
+    it("ArrowRight で展開済みノードの最初の子へフォーカス移動する（ディレクトリが先）", async () => {
+      stubTreeFetch();
+      render(<FileTree refreshToken={0} onSelectFile={vi.fn()} />);
+
+      const docs = await screen.findByRole("button", { name: "docs" });
+      docs.focus();
+      fireEvent.keyDown(docs, { key: "ArrowRight" });
+
+      fireEvent.keyDown(docs, { key: "ArrowRight" });
+
+      // docs の子はディレクトリ sub → ファイル nested.md の順で描画される。
+      expect(screen.getByRole("button", { name: "sub" })).toHaveFocus();
+    });
+
+    it("ArrowLeft で展開中のノードを折りたたむ（フォーカスは維持）", async () => {
+      stubTreeFetch();
+      render(<FileTree refreshToken={0} onSelectFile={vi.fn()} />);
+
+      const docs = await screen.findByRole("button", { name: "docs" });
+      docs.focus();
+      fireEvent.keyDown(docs, { key: "ArrowRight" });
+      expect(screen.getByText("nested.md")).toBeInTheDocument();
+
+      fireEvent.keyDown(docs, { key: "ArrowLeft" });
+
+      expect(screen.queryByText("nested.md")).not.toBeInTheDocument();
+      expect(docs).toHaveFocus();
+    });
+
+    it("ArrowLeft で非展開ノードから親ノードへフォーカス移動する", async () => {
+      stubTreeFetch();
+      render(<FileTree refreshToken={0} onSelectFile={vi.fn()} />);
+
+      const repoA = await screen.findByRole("button", { name: "repo-a" });
+      const docs = screen.getByRole("button", { name: "docs" });
+      const topFile = screen.getByRole("button", { name: "top.md" });
+
+      // ファイル → 親（repo 見出し）
+      topFile.focus();
+      fireEvent.keyDown(topFile, { key: "ArrowLeft" });
+      expect(repoA).toHaveFocus();
+
+      // 折りたたみ中のディレクトリ → 親（repo 見出し）
+      docs.focus();
+      fireEvent.keyDown(docs, { key: "ArrowLeft" });
+      expect(repoA).toHaveFocus();
+
+      // ネストしたファイル → 親ディレクトリ
+      fireEvent.keyDown(docs, { key: "ArrowRight" });
+      const nested = screen.getByRole("button", { name: "nested.md" });
+      nested.focus();
+      fireEvent.keyDown(nested, { key: "ArrowLeft" });
+      expect(docs).toHaveFocus();
+    });
+
+    it("矢印キーのフォーカス移動・開閉では onSelectFile が発火しない", async () => {
+      stubTreeFetch();
+      const onSelectFile = vi.fn();
+      render(<FileTree refreshToken={0} onSelectFile={onSelectFile} />);
+
+      const repoA = await screen.findByRole("button", { name: "repo-a" });
+      repoA.focus();
+      fireEvent.keyDown(repoA, { key: "ArrowDown" }); // → docs
+      fireEvent.keyDown(
+        screen.getByRole("button", { name: "docs" }),
+        { key: "ArrowRight" }, // docs 展開
+      );
+      fireEvent.keyDown(
+        screen.getByRole("button", { name: "docs" }),
+        { key: "ArrowDown" }, // → sub
+      );
+      fireEvent.keyDown(
+        screen.getByRole("button", { name: "sub" }),
+        { key: "ArrowDown" }, // → nested.md（ファイル上のフォーカス移動）
+      );
+      fireEvent.keyDown(
+        screen.getByRole("button", { name: "nested.md" }),
+        { key: "ArrowRight" }, // ファイルでは何もしない
+      );
+
+      expect(onSelectFile).not.toHaveBeenCalled();
+      // ファイル上の ArrowRight はフォーカスも動かさない。
+      expect(screen.getByRole("button", { name: "nested.md" })).toHaveFocus();
+    });
+  });
 });

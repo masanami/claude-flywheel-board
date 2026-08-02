@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { MdTreeRepo, MdTreeResponse } from "../board-types.ts";
 
 type FileTreeProps = {
@@ -67,6 +67,79 @@ function toggleInSet(set: ReadonlySet<string>, key: string): Set<string> {
     next.add(key);
   }
   return next;
+}
+
+// キーボード操作（#114。WAI-ARIA ツリーパターンの矢印キー移動・開閉）。
+//
+// - 追加 state は持たず、DOM から「いま見えているノード（button）」を
+//   描画順に列挙して辿る。閉じたディレクトリの子はそもそも DOM に無い
+//   （条件レンダリング）ため、「表示中のノードだけを移動する」が自然に
+//   成立する。ノード種別は aria-expanded 属性の有無で判定する
+//   （ディレクトリ/repo は "true"/"false"・ファイルは属性なし）。
+// - 開閉は対象 button の click() に委譲し、既存の onClick ハンドラ
+//   （expandedDirs / collapsedRepos の toggle）を再利用する。ファイル
+//   button は click() しない（フォーカス移動だけでは選択＝fetch + WS 購読を
+//   発火させない。Enter/Space はブラウザ標準の button 動作で click になり、
+//   そこで初めて選択が確定する）。
+// - 親ノードへの移動（←）は DOM 構造に依存する: 子リスト（ul）は常に
+//   親ノード button の直後の兄弟としてレンダリングされる（repo 直下・
+//   ネスト内の li とも同じ並び）ため、closest("ul") の previousElementSibling
+//   が親 button になる。repo 見出し自体は ul の外にあり、親を持たない。
+// - role="tree"/"treeitem" は付与しない（button のアクセシブルロールを
+//   変えると既存テスト・支援技術の挙動が広く変わるため。Issue #114 の決定）。
+function handleTreeKeyDown(event: React.KeyboardEvent<HTMLDivElement>): void {
+  const target = event.target;
+  if (!(target instanceof HTMLButtonElement)) {
+    return;
+  }
+  const buttons = Array.from(
+    event.currentTarget.querySelectorAll<HTMLButtonElement>("button"),
+  );
+  const index = buttons.indexOf(target);
+  if (index === -1) {
+    return;
+  }
+  // ディレクトリ/repo は "true"/"false"、ファイルは null。
+  const expandedAttr = target.getAttribute("aria-expanded");
+
+  switch (event.key) {
+    case "ArrowDown":
+      event.preventDefault();
+      buttons[index + 1]?.focus();
+      break;
+    case "ArrowUp":
+      event.preventDefault();
+      buttons[index - 1]?.focus();
+      break;
+    case "ArrowRight": {
+      event.preventDefault();
+      if (expandedAttr === "false") {
+        target.click();
+      } else if (expandedAttr === "true") {
+        // 展開済みなら最初の子へ移動する。DOM 上の次の button が本当に
+        // このノードの子リスト（button 直後の ul）内にある場合のみ移動する
+        // （子が空のノードで次の repo へ飛んでしまわないようにガード）。
+        const subtree = target.nextElementSibling;
+        const next = buttons[index + 1];
+        if (subtree instanceof HTMLElement && next && subtree.contains(next)) {
+          next.focus();
+        }
+      }
+      break;
+    }
+    case "ArrowLeft": {
+      event.preventDefault();
+      if (expandedAttr === "true") {
+        target.click();
+        break;
+      }
+      const parentButton = target.closest("ul")?.previousElementSibling;
+      if (parentButton instanceof HTMLButtonElement) {
+        parentButton.focus();
+      }
+      break;
+    }
+  }
 }
 
 export function FileTree({ refreshToken, onSelectFile }: FileTreeProps) {
@@ -207,7 +280,11 @@ export function FileTree({ refreshToken, onSelectFile }: FileTreeProps) {
   );
 
   return (
-    <div className="file-tree" data-testid="file-tree">
+    <div
+      className="file-tree"
+      data-testid="file-tree"
+      onKeyDown={handleTreeKeyDown}
+    >
       {treeState.refreshing && (
         <div className="file-tree-status">更新中...</div>
       )}
