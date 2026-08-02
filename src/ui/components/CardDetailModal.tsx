@@ -1,10 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import type {
-  Challenge,
-  LogEntry,
-  Run,
-  RunProvenance,
-} from "../board-types.ts";
+import type { Challenge, LogEntry, Run } from "../board-types.ts";
+import { END_EVENT_LABEL } from "../lib/provenance-labels.ts";
 import {
   buildResumeCommand,
   findStaleDelegateRun,
@@ -36,16 +32,9 @@ function findProvenanceRun(
   );
 }
 
-// 開始イベント種別 → 対応する終了イベント名の表示ラベル（セルフレビュー指摘
-// 対応: 三項演算子で else 側を "adhoc_end" 決め打ちにすると、
-// RunProvenance["event"] のユニオンが将来拡張（例: cycle_start 追加。機能仕様
-// のスコープ外節に将来拡張の言及あり）された際にコンパイルエラーにならず
-// サイレントに誤った診断文言を出しうる。Record<K, V> は全キー必須のため、
-// ユニオン拡張時に「このキーが無い」という型エラーで気付ける）。
-const END_EVENT_LABEL: Record<RunProvenance["event"], string> = {
-  delegate_start: "delegate_end",
-  adhoc_start: "adhoc_end",
-};
+// 開始イベント種別 → 対応する終了イベント名の表示ラベル。AgentColumn の
+// describeProvenance と同じ導出ロジックのため lib/provenance-labels.ts に
+// 集約している（PRレビュー指摘対応。Record 採用理由は同ファイル参照）。
 
 type LogState =
   | { status: "loading" }

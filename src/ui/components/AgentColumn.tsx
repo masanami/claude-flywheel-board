@@ -13,6 +13,7 @@ import {
   buildInsertInstruction,
   buildReorderInstruction,
 } from "../lib/instruction.ts";
+import { END_EVENT_LABEL, KEY_LABEL } from "../lib/provenance-labels.ts";
 import {
   buildResumeCommand,
   isResumableDelegateRun,
@@ -51,11 +52,11 @@ function CycleStatusIndicator({
 // 取得元（provenance）表示のキーラベル・対応 end イベント名を、開始イベント
 // 種別から導出する（Issue #101 / FR-A2・FR-A4）。RunProvenance.key は
 // delegate: session_id / adhoc: id のいずれかの値を持つが、ラベル自体は
-// 型に含まれないため表示側で対応付ける。
+// 型に含まれないため表示側で対応付ける。導出ロジック自体は CardDetailModal
+// と共有するため lib/provenance-labels.ts に集約している（PRレビュー指摘対応）。
 function describeProvenance(provenance: RunProvenance): string {
-  const isDelegate = provenance.event === "delegate_start";
-  const keyLabel = isDelegate ? "session_id" : "id";
-  const endEvent = isDelegate ? "delegate_end" : "adhoc_end";
+  const keyLabel = KEY_LABEL[provenance.event];
+  const endEvent = END_EVENT_LABEL[provenance.event];
   const endNote = provenance.hasEnd ? "" : `（対応する ${endEvent} なし）`;
   return `${provenance.file} — ${provenance.event} ts=${provenance.ts} ${keyLabel}=${provenance.key}${endNote}`;
 }
