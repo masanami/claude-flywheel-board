@@ -21,6 +21,54 @@ type TreeState =
     }
   | { status: "error" };
 
+// API（GET /api/md/tree）は repo ごとのフラットな相対パス一覧を返す
+// （サーバはツリー構造を持たない。#61 の決定を変えない）。IDE 風の
+// ネスト表示（#110）はクライアント側の表示専用の導出であり、ここで
+// 相対パスをディレクトリ階層へ組み立てる。
+type TreeFile = { name: string; path: string };
+type TreeDir = {
+  name: string;
+  path: string;
+  dirs: TreeDir[];
+  files: TreeFile[];
+};
+
+function buildDirTree(paths: readonly string[]): TreeDir {
+  const root: TreeDir = { name: "", path: "", dirs: [], files: [] };
+  for (const filePath of paths) {
+    const segments = filePath.split("/");
+    let node = root;
+    for (const segment of segments.slice(0, -1)) {
+      let child = node.dirs.find((dir) => dir.name === segment);
+      if (!child) {
+        child = {
+          name: segment,
+          path: node.path === "" ? segment : `${node.path}/${segment}`,
+          dirs: [],
+          files: [],
+        };
+        node.dirs.push(child);
+      }
+      node = child;
+    }
+    node.files.push({
+      name: segments[segments.length - 1] ?? "",
+      path: filePath,
+    });
+  }
+  return root;
+}
+
+function toggleInSet(set: ReadonlySet<string>, key: string): Set<string> {
+  const next = new Set(set);
+  if (next.has(key)) {
+    next.delete(key);
+  } else {
+    next.add(key);
+  }
+  return next;
+}
+
 export function FileTree({ refreshToken, onSelectFile }: FileTreeProps) {
   const [treeState, setTreeState] = useState<TreeState>({ status: "loading" });
   // 選択状態はクリック時の視覚的フィードバックのためだけにローカル
@@ -38,6 +86,19 @@ export function FileTree({ refreshToken, onSelectFile }: FileTreeProps) {
   //   これにより両者は常に「未選択」状態で揃った状態からパネルの再オープンを
   //   迎える。
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  // 開閉状態（#110）。既定は「repo は展開・ディレクトリは折りたたみ」の
+  // ため、既定からの反転だけを持つ2つの Set で表現する（collapsedRepos は
+  // 「閉じた repo」・expandedDirs は「開いたディレクトリ」。空集合＝既定）。
+  // キーは selectedKey と同じ `repo` / `repo/dirPath` 形式。リフレッシュ後も
+  // state が残るため開閉状態は保持され、一覧から消えたノードのキーは参照
+  // されなくなるだけで無害。パネルを閉じるとアンマウントで破棄される
+  // （selectedKey と同じライフサイクル）。
+  const [collapsedRepos, setCollapsedRepos] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
+  const [expandedDirs, setExpandedDirs] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
 
   // マウント時（＝パネルオープン時）と refreshToken 変化時（＝リフレッシュ
   // ボタン押下時）にのみ取得する。CardDetailModal の fetch パターン
@@ -97,6 +158,54 @@ export function FileTree({ refreshToken, onSelectFile }: FileTreeProps) {
 
   const hasFiles = treeState.repos.some((repo) => repo.files.length > 0);
 
+  // ディレクトリ→ファイルの順で描画する（IDE の慣例に合わせる）。並び順は
+  // サーバがソート済みのフラット一覧の出現順をそのまま使う。
+  const renderDirChildren = (repoName: string, node: TreeDir) => (
+    <ul className="file-tree-node-list">
+      {node.dirs.map((dir) => {
+        const dirKey = `${repoName}/${dir.path}`;
+        const expanded = expandedDirs.has(dirKey);
+        return (
+          <li key={dirKey}>
+            <button
+              type="button"
+              className="file-tree-dir-button"
+              aria-expanded={expanded}
+              onClick={() =>
+                setExpandedDirs((prev) => toggleInSet(prev, dirKey))
+              }
+            >
+              <span className="file-tree-toggle-icon" aria-hidden="true">
+                {expanded ? "▾" : "▸"}
+              </span>
+              <span className="file-tree-node-name">{dir.name}</span>
+            </button>
+            {expanded && renderDirChildren(repoName, dir)}
+          </li>
+        );
+      })}
+      {node.files.map((file) => {
+        const fileKey = `${repoName}/${file.path}`;
+        return (
+          <li key={fileKey}>
+            <button
+              type="button"
+              className="file-tree-file-button"
+              aria-current={fileKey === selectedKey ? "true" : undefined}
+              title={file.path}
+              onClick={() => {
+                setSelectedKey(fileKey);
+                onSelectFile(repoName, file.path);
+              }}
+            >
+              <span className="file-tree-node-name">{file.name}</span>
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+
   return (
     <div className="file-tree" data-testid="file-tree">
       {treeState.refreshing && (
@@ -108,31 +217,28 @@ export function FileTree({ refreshToken, onSelectFile }: FileTreeProps) {
         </div>
       )}
       {hasFiles ? (
-        treeState.repos.map((repo) => (
-          <div className="file-tree-repo" key={repo.name}>
-            <div className="file-tree-repo-name">{repo.name}</div>
-            <ul className="file-tree-file-list">
-              {repo.files.map((file) => {
-                const key = `${repo.name}/${file}`;
-                return (
-                  <li key={key}>
-                    <button
-                      type="button"
-                      className="file-tree-file-button"
-                      aria-current={key === selectedKey ? "true" : undefined}
-                      onClick={() => {
-                        setSelectedKey(key);
-                        onSelectFile(repo.name, file);
-                      }}
-                    >
-                      {file}
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        ))
+        treeState.repos.map((repo) => {
+          const collapsed = collapsedRepos.has(repo.name);
+          return (
+            <div className="file-tree-repo" key={repo.name}>
+              <button
+                type="button"
+                className="file-tree-dir-button file-tree-repo-name"
+                aria-expanded={!collapsed}
+                onClick={() =>
+                  setCollapsedRepos((prev) => toggleInSet(prev, repo.name))
+                }
+              >
+                <span className="file-tree-toggle-icon" aria-hidden="true">
+                  {collapsed ? "▸" : "▾"}
+                </span>
+                <span className="file-tree-node-name">{repo.name}</span>
+              </button>
+              {!collapsed &&
+                renderDirChildren(repo.name, buildDirTree(repo.files))}
+            </div>
+          );
+        })
       ) : (
         <div className="file-tree-empty">.md ファイルが見つかりません</div>
       )}

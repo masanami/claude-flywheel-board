@@ -7,6 +7,10 @@ import { FileTree } from "./FileTree.tsx";
 // （＝リフレッシュボタン押下）のみで、ポーリングは一切しない（親要件 #61）。
 // ファイル選択の内容取得・レンダリングは #69 のスコープのため、ここでは
 // クリック時に onSelectFile が呼ばれることのみを検証する。
+// #110: フラットなパス一覧を IDE 風のネストツリーとして表示する。repo
+// （エージェント）が最上段の開閉ノード（初期: 展開）、ディレクトリも開閉
+// ノード（初期: 折りたたみ）で、ファイルはベース名のみ表示する。API の
+// 応答形（repo ごとのフラットな相対パス一覧）は変えない。
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -24,7 +28,7 @@ describe("FileTree", () => {
     expect(screen.getByText(/読み込み中/)).toBeInTheDocument();
   });
 
-  it("取得成功後、repo ごとに .md ファイルパスの一覧を表示する", async () => {
+  it("取得成功後、repo ごとに直下の .md ファイルとディレクトリを表示する（ディレクトリは初期折りたたみ）", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -43,12 +47,75 @@ describe("FileTree", () => {
 
     expect(await screen.findByText("repo-a")).toBeInTheDocument();
     expect(screen.getByText("README.md")).toBeInTheDocument();
-    expect(screen.getByText("docs/nested.md")).toBeInTheDocument();
     expect(screen.getByText("repo-b")).toBeInTheDocument();
     expect(screen.getByText("notes.md")).toBeInTheDocument();
+    // ディレクトリはノード名のみ表示し、初期状態では中身を表示しない。
+    expect(screen.getByText("docs")).toBeInTheDocument();
+    expect(screen.queryByText("nested.md")).not.toBeInTheDocument();
   });
 
-  it("ファイルをクリックすると onSelectFile が repo 名とファイルパスで呼ばれる", async () => {
+  it("ディレクトリをクリックすると展開され、再クリックで折りたたまれる", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            repos: [
+              { name: "repo-a", files: ["docs/sub/deep.md", "docs/nested.md"] },
+            ],
+          }),
+      }),
+    );
+
+    render(<FileTree refreshToken={0} onSelectFile={vi.fn()} />);
+
+    const dirButton = await screen.findByText("docs");
+    fireEvent.click(dirButton);
+
+    expect(screen.getByText("nested.md")).toBeInTheDocument();
+    // 孫ディレクトリはノードとして現れるが、中身はまだ折りたたまれている。
+    expect(screen.getByText("sub")).toBeInTheDocument();
+    expect(screen.queryByText("deep.md")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("sub"));
+    expect(screen.getByText("deep.md")).toBeInTheDocument();
+
+    fireEvent.click(dirButton);
+    expect(screen.queryByText("nested.md")).not.toBeInTheDocument();
+    expect(screen.queryByText("deep.md")).not.toBeInTheDocument();
+  });
+
+  it("repo 見出しをクリックすると repo 全体が折りたたまれ、再クリックで展開される", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            repos: [
+              { name: "repo-a", files: ["a.md"] },
+              { name: "repo-b", files: ["b.md"] },
+            ],
+          }),
+      }),
+    );
+
+    render(<FileTree refreshToken={0} onSelectFile={vi.fn()} />);
+
+    const repoButton = await screen.findByText("repo-a");
+    expect(screen.getByText("a.md")).toBeInTheDocument();
+
+    fireEvent.click(repoButton);
+    expect(screen.queryByText("a.md")).not.toBeInTheDocument();
+    // 他 repo は影響を受けない。
+    expect(screen.getByText("b.md")).toBeInTheDocument();
+
+    fireEvent.click(repoButton);
+    expect(screen.getByText("a.md")).toBeInTheDocument();
+  });
+
+  it("ファイルをクリックすると onSelectFile が repo 名と repo 相対パスで呼ばれる", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -63,10 +130,82 @@ describe("FileTree", () => {
 
     render(<FileTree refreshToken={0} onSelectFile={onSelectFile} />);
 
-    const fileButton = await screen.findByText("docs/nested.md");
-    fireEvent.click(fileButton);
+    fireEvent.click(await screen.findByText("docs"));
+    fireEvent.click(screen.getByText("nested.md"));
 
+    // 表示はベース名のみだが、onSelectFile には repo 相対パスを渡す
+    // （PreviewPanel の GET /api/md/file の契約は変えない）。
     expect(onSelectFile).toHaveBeenCalledWith("repo-a", "docs/nested.md");
+  });
+
+  it("リフレッシュ後もディレクトリの展開状態を保持する", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            repos: [{ name: "repo-a", files: ["docs/nested.md"] }],
+          }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            // new.md の出現を「2回目の取得が完了した」ことの目印として使う。
+            repos: [{ name: "repo-a", files: ["docs/nested.md", "new.md"] }],
+          }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { rerender } = render(
+      <FileTree refreshToken={0} onSelectFile={vi.fn()} />,
+    );
+    fireEvent.click(await screen.findByText("docs"));
+    expect(screen.getByText("nested.md")).toBeInTheDocument();
+
+    rerender(<FileTree refreshToken={1} onSelectFile={vi.fn()} />);
+    await screen.findByText("new.md");
+
+    expect(screen.getByText("nested.md")).toBeInTheDocument();
+  });
+
+  it("リフレッシュ後も repo の折りたたみ状態を保持する", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            repos: [{ name: "repo-a", files: ["a.md"] }],
+          }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            // repo-b の出現を「2回目の取得が完了した」ことの目印として使う
+            // （repo-a は折りたたみ済みのため、子ファイルの出現では目印に
+            // できない）。
+            repos: [
+              { name: "repo-a", files: ["a.md"] },
+              { name: "repo-b", files: ["marker.md"] },
+            ],
+          }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { rerender } = render(
+      <FileTree refreshToken={0} onSelectFile={vi.fn()} />,
+    );
+    const repoButton = await screen.findByText("repo-a");
+    fireEvent.click(repoButton);
+    expect(screen.queryByText("a.md")).not.toBeInTheDocument();
+
+    rerender(<FileTree refreshToken={1} onSelectFile={vi.fn()} />);
+    await screen.findByText("marker.md");
+
+    expect(screen.queryByText("a.md")).not.toBeInTheDocument();
   });
 
   it("マウント時に一度だけ /api/md/tree を取得する", () => {
@@ -146,8 +285,8 @@ describe("FileTree", () => {
 
     render(<FileTree refreshToken={0} onSelectFile={vi.fn()} />);
 
-    const buttonA = await screen.findByText("a.md");
-    const buttonB = screen.getByText("b.md");
+    const buttonA = await screen.findByRole("button", { name: "a.md" });
+    const buttonB = screen.getByRole("button", { name: "b.md" });
     expect(buttonA).not.toHaveAttribute("aria-current");
 
     fireEvent.click(buttonA);
@@ -247,14 +386,17 @@ describe("FileTree", () => {
     const { rerender } = render(
       <FileTree refreshToken={0} onSelectFile={vi.fn()} />,
     );
-    const buttonA = await screen.findByText("a.md");
+    const buttonA = await screen.findByRole("button", { name: "a.md" });
     fireEvent.click(buttonA);
     expect(buttonA).toHaveAttribute("aria-current", "true");
 
     rerender(<FileTree refreshToken={1} onSelectFile={vi.fn()} />);
     await screen.findByText("c.md");
 
-    expect(screen.getByText("a.md")).toHaveAttribute("aria-current", "true");
+    expect(screen.getByRole("button", { name: "a.md" })).toHaveAttribute(
+      "aria-current",
+      "true",
+    );
   });
 
   it("再取得後の一覧から選択中のファイルが無くなった場合、ハイライトは自然に外れる", async () => {
@@ -275,13 +417,13 @@ describe("FileTree", () => {
     const { rerender } = render(
       <FileTree refreshToken={0} onSelectFile={vi.fn()} />,
     );
-    const buttonA = await screen.findByText("a.md");
+    const buttonA = await screen.findByRole("button", { name: "a.md" });
     fireEvent.click(buttonA);
     expect(buttonA).toHaveAttribute("aria-current", "true");
 
     rerender(<FileTree refreshToken={1} onSelectFile={vi.fn()} />);
 
-    const buttonB = await screen.findByText("b.md");
+    const buttonB = await screen.findByRole("button", { name: "b.md" });
     expect(screen.queryByText("a.md")).not.toBeInTheDocument();
     expect(buttonB).not.toHaveAttribute("aria-current");
   });
