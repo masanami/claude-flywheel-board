@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { Challenge, LogEntry, Run } from "../board-types.ts";
+import { END_EVENT_LABEL } from "../lib/provenance-labels.ts";
 import {
   buildResumeCommand,
   findStaleDelegateRun,
@@ -13,8 +14,27 @@ type CardDetailModalProps = {
   // 対象エージェントの実行中 Run（AgentColumn → TaskCard → CardDetailModal と
   // 中継される。#31・FR-12）。応答なし（stale）の delegate run が対象課題に
   // 見つかった場合のみ、resumebox（再開コマンドの表示＋プリフィル導線）を出す。
+  // FR-A1（取得元）の対象 run 特定にも同じ配列を参照する。
   runningRuns?: Run[];
 };
+
+/**
+ * run 由来のタスク行の取得元（FR-A1）を特定する。runningRuns のうち、対象課題
+ * に一致し、かつ provenance を持つ最初の run を返す（kind: cycle は provenance
+ * が常に undefined のため自然に除外される。仕様のスコープ外決定に一致）。
+ */
+function findProvenanceRun(
+  runs: Run[] | undefined,
+  challengeId: string,
+): Run | undefined {
+  return runs?.find(
+    (run) => run.provenance !== undefined && run.challenge === challengeId,
+  );
+}
+
+// 開始イベント種別 → 対応する終了イベント名の表示ラベル。AgentColumn の
+// describeProvenance と同じ導出ロジックのため lib/provenance-labels.ts に
+// 集約している（PRレビュー指摘対応。Record 採用理由は同ファイル参照）。
 
 type LogState =
   | { status: "loading" }
@@ -36,12 +56,34 @@ export function CardDetailModal({
   runningRuns,
 }: CardDetailModalProps) {
   const [logState, setLogState] = useState<LogState>({ status: "loading" });
+  const [rawRecordExpanded, setRawRecordExpanded] = useState(false);
   const staleDelegateRun = findStaleDelegateRun(runningRuns, challenge.id);
   // repo の truthy チェックを一度だけ行い、コマンド文字列も一度だけ組み立てる
   // （表示用の <input value> とボタンの onClick の双方から参照する）。
   const resumeCommand =
     staleDelegateRun?.repo &&
     buildResumeCommand(staleDelegateRun.repo, staleDelegateRun.key);
+
+  // 取得元（provenance。FR-A1/FR-A3/FR-A4）: resumebox が表示対象にする run
+  // （findStaleDelegateRun で選ばれた、再開コマンドを提示できる stale delegate
+  // run）に provenance があれば、その run を最優先で採用する（セルフレビュー
+  // 指摘対応: findProvenanceRun 単独だと選択規則が resumebox と独立してしまい、
+  // resumebox が示す run と異なる run の取得元を提示しうる。#85 の動機＝
+  // 「どの記録を閉じれば表示が消えるか」を自明にするため、少なくとも resumebox
+  // 表示中はその根拠と一致させる）。
+  // 注意: AgentColumn の「⚠ 応答なし」表示自体は run.stale のみで出るため、
+  // repo/session_id が安全な文字集合から外れる等で resumebox が出ない stale
+  // run（isResumableDelegateRun 不成立）の場合は、この優先規則の対象外となり
+  // 従来どおり findProvenanceRun の先頭一致にフォールバックする。
+  // 該当が無ければ、対象課題に一致する provenance 付き run（delegate/adhoc
+  // のみ。cycle は provenance が undefined のため自然に除外される）の先頭を
+  // 採用する。
+  const provenanceRun =
+    staleDelegateRun?.provenance !== undefined
+      ? staleDelegateRun
+      : findProvenanceRun(runningRuns, challenge.id);
+  const provenance = provenanceRun?.provenance;
+
   const dialogRef = useRef<HTMLDialogElement>(null);
   const mouseDownOnDialog = useRef(false);
   // onClose は呼び出し元（TaskCard）の再レンダーのたびに新しい関数参照になりうる。
@@ -159,6 +201,70 @@ export function CardDetailModal({
           <dt>要約</dt>
           <dd>{challenge.summary ?? "-"}</dd>
         </dl>
+
+        {/* 課題台帳（FR-B2・#102）: このモーダルは台帳カード（TaskCard）から
+         * のみ開かれるため、表示すべき台帳エントリは challenge prop として
+         * 既に手元にある。join（agent prop 経由の findChallengeById 呼び出し）
+         * は行わない（設計変更: 当初案は本番の唯一の呼び出し元 TaskCard が
+         * agent を渡さず到達不能なデッドコードになると判明したため、
+         * 2026-08-01 にユーザー承認のうえ直接表示方式へ変更。詳細は
+         * docs/features/task-provenance-ledger-join.md 参照）。クラス名・
+         * testid は当初の join 前提の命名を維持している（変更必須ではない
+         * ため）。 */}
+        <section className="card-detail-ledger-join" data-testid="ledger-join">
+          <h3 className="card-detail-ledger-join-heading">課題台帳</h3>
+          <dl className="card-detail-fields">
+            <dt>説明</dt>
+            <dd>{challenge.description ?? "-"}</dd>
+            <dt>完了条件</dt>
+            <dd>{challenge.completionCriteria ?? "-"}</dd>
+            <dt>タスク案</dt>
+            <dd>{challenge.taskPlan ?? "-"}</dd>
+          </dl>
+        </section>
+
+        {provenance && (
+          <section className="card-detail-provenance">
+            <h3 className="card-detail-provenance-heading">取得元</h3>
+            <dl className="card-detail-fields">
+              <dt>ファイル</dt>
+              <dd>{provenance.file}</dd>
+              <dt>イベント</dt>
+              <dd>{provenance.event}</dd>
+              <dt>ts</dt>
+              <dd>{provenance.ts}</dd>
+              <dt>キー</dt>
+              <dd>{provenance.key}</dd>
+              <dt>終了イベント</dt>
+              <dd>
+                {/* runningRuns（endedAt 未設定の run のみ。cache.ts の
+                 * deriveRunningRuns 参照）から選ばれた run の provenance は、
+                 * 現行の実装契約上 hasEnd が常に false（closeLatestOpenRun が
+                 * endedAt と provenance.hasEnd を必ず同時に更新するため）。
+                 * hasEnd: true 分岐は将来 runningRuns 以外の run 集合が渡され
+                 * ても正しく表示できるよう防御的に残す。 */}
+                {provenance.hasEnd
+                  ? "対応する終了イベントあり"
+                  : `対応する ${END_EVENT_LABEL[provenance.event]} なし`}
+              </dd>
+            </dl>
+            <div className="card-detail-raw-record" data-testid="raw-record">
+              <button
+                type="button"
+                className="card-detail-raw-record-toggle"
+                aria-expanded={rawRecordExpanded}
+                onClick={() => setRawRecordExpanded((expanded) => !expanded)}
+              >
+                元レコード{rawRecordExpanded ? "を折りたたむ" : "を表示"}
+              </button>
+              {rawRecordExpanded && (
+                <pre className="card-detail-raw-record-content">
+                  {provenance.raw}
+                </pre>
+              )}
+            </div>
+          </section>
+        )}
 
         {resumeCommand && (
           <div className="resumebox" data-testid="resumebox">

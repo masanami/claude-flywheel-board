@@ -2,7 +2,12 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { createMemoryBoardCache } from "./cache.ts";
-import { fullScan, scanAgent, scanAndUpdateAgent } from "./watcher.ts";
+import {
+  RUNS_FILE_NAME,
+  fullScan,
+  scanAgent,
+  scanAndUpdateAgent,
+} from "./watcher.ts";
 
 const FIXTURES_ROOT = fileURLToPath(
   new URL("../../tests/fixtures/watcher/", import.meta.url),
@@ -36,6 +41,16 @@ describe("scanAgent", () => {
       repo: "net-config",
     });
     expect(delegate?.endedAt).toBeUndefined();
+    // 実際の scanAgent 経由の配線を固定する回帰テスト（セルフレビュー指摘対応）:
+    // watcher.ts が parseRuns の provenanceFile 引数に RUNS_FILE_NAME
+    // （repo ルート相対パス）を渡していることを確認する。この引数は省略可能
+    // （省略時は実読み取りパス＝フルパスにフォールバック）なため、削除しても
+    // 型エラーにはならず無警告で退行しうる箇所（Issue #98 セルフレビュー指摘）。
+    expect(delegate?.provenance).toMatchObject({
+      file: RUNS_FILE_NAME,
+      event: "delegate_start",
+      hasEnd: false,
+    });
   });
 
   it("repo パスが存在しない場合は例外を投げず、ledger/journal 2つ分の ParseError を返す（監視失敗の可視化）。runs.jsonl は遅延生成のため repo 不存在時の欠落もエラー化しない", async () => {

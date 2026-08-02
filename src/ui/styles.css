@@ -702,6 +702,51 @@ body {
   overflow-wrap: break-word;
 }
 
+/* 課題台帳セクション（#94・#96・#102 FR-B2/FR-B3。challenge prop を直接表示。
+ * join は行わない）・取得元表示セクション（#85・#96 FR-A1/FR-A3/FR-A4）。
+ * クラス名は既存の join 前提の命名を維持している（testid 同様、変更は必須で
+ * はないため）。既存の card-detail-fields dl スタイルを
+ * 流用しつつ、見出し・外枠だけ独自クラスで区切る。両セクションで共通する
+ * 宣言はセレクタリストにまとめ、重複定義を避ける（セルフレビュー指摘対応。
+ * 既存の .card-detail-log-heading 等の書き換えは避け、新規セレクタとして
+ * 追記するに留める）。 */
+.card-detail-ledger-join,
+.card-detail-provenance {
+  margin: 0 0 1rem;
+}
+
+.card-detail-ledger-join-heading,
+.card-detail-provenance-heading {
+  font-size: 0.85rem;
+  margin: 0 0 0.5rem;
+}
+
+.card-detail-raw-record {
+  margin-top: 0.4rem;
+}
+
+.card-detail-raw-record-toggle {
+  border: 1px solid var(--board-card-border);
+  border-radius: 4px;
+  padding: 0.25rem 0.6rem;
+  background: transparent;
+  color: var(--board-fg);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.card-detail-raw-record-content {
+  margin: 0.4rem 0 0;
+  padding: 0.5rem;
+  border: 1px solid var(--board-card-border);
+  border-radius: 4px;
+  background: var(--board-card-bg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  overflow-wrap: break-word;
+  white-space: pre-wrap;
+}
+
 /* 常設ターミナル領域（P2）。ボードは残り高さに追従し（.board 参照）、
  * ここは flex-shrink しない固定高さのボックスとして下部を占有する。
  * ダーク固定背景（ライト/ダークテーマの影響を受けない）。
@@ -1022,4 +1067,38 @@ body {
 .file-tree-file-button[aria-current="true"] {
   background: var(--board-chip-active-bg);
   color: var(--board-chip-active-fg);
+}
+
+/* 台帳タイトルの join 表示（Issue #101 / FR-B1）: RunningRunRow の課題ID
+ * （.agent-column-running-run-challenge）の直後に続けて表示する台帳タイトル。
+ * 見つからない場合は「台帳に見つかりません」がここに入る。
+ * min-width: 0 は必須: 親の .agent-column-running-run-subject は
+ * display:flex + overflow:hidden だが、flex アイテムは既定で
+ * min-width:auto（=コンテンツの最小内容幅）のため、これが無いと長い台帳
+ * タイトルが縮まず、後続の「→ repo」（既存表示）が親の overflow:hidden で
+ * 見切れてしまう。flex-grow は指定しない（既定の flex-grow:0 のまま）:
+ * grow させると余白吸収で「→ repo」が右端へ押し出され、既存の左詰め
+ * レイアウトが変わってしまう。この要素だけを縮小対象にすることで、課題ID・
+ * 「→ repo」・経過時間など既存表示の可視性・配置を壊さない。 */
+.agent-column-running-run-ledger-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* join 失敗時（「台帳に見つかりません」）は、実在する台帳タイトルと視覚的に
+ * 区別できるよう、他の副次情報（.agent-column-running-run-arrow 等）と同じ
+ * muted 色で表示する。 */
+.agent-column-running-run-ledger-title[data-ledger-missing="true"] {
+  color: var(--board-muted-fg);
+  font-style: italic;
+}
+
+/* stale 行の取得元インライン表示（Issue #101 / FR-A2）: 応答なし警告と同様、
+ * グリッド全幅で1行表示する。 */
+.agent-column-running-run-provenance {
+  grid-column: 1 / -1;
+  color: var(--board-muted-fg);
+  font-size: 0.7rem;
+  overflow-wrap: anywhere;
 }

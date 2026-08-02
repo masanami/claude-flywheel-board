@@ -153,7 +153,13 @@ export async function scanAgent(entry: FleetEntry): Promise<ScanResult> {
   // 責務が非対称になっている点は意図した設計判断。詳細は parseRuns 側コメント）。
   const runsPath = runsPathFor(entry);
   try {
-    const result = await parseRuns(runsPath);
+    // provenanceFile に RUNS_FILE_NAME（".flywheel/runs.jsonl" 固定の repo
+    // ルート相対パス）を渡す（Issue #98 セルフレビュー指摘対応）。runsPath
+    // 自体は entry.path 基準の実読み取りパス（fleet.tsv 由来で通常フルパス）
+    // のため、RunProvenance.file の設計意図（repo ルートからの相対パス）
+    // どおりの値を取得元表示（FR-A1〜A2）に渡すには、読み取りパスとは別に
+    // 明示する必要がある。
+    const result = await parseRuns(runsPath, RUNS_FILE_NAME);
     matchedRuns = matchRuns(result.events);
     parseErrors.push(...result.errors);
   } catch (error) {

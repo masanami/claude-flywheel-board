@@ -52,6 +52,73 @@ describe("parseLedger", () => {
     expect(c002?.needsHuman).toBe(false);
   });
 
+  it("valid.md の C-001 は 説明・完了条件（前方一致: 完了条件（任意・分かれば））・タスク案 を抽出する", () => {
+    const content = readFixture("valid.md");
+
+    const result = parseLedger(content, "valid.md");
+
+    const c001 = result.challenges.find((c) => c.id === "C-001");
+    expect(c001?.description).toBe("環境変数でパスを上書きしたい");
+    expect(c001?.completionCriteria).toBe("環境変数でパスを指定できる");
+    expect(c001?.taskPlan).toBe("1. resolveFleetManifestPath を実装する");
+  });
+
+  it("valid.md の C-002 は 完了条件 系フィールドが無いため completionCriteria が undefined になる（説明・タスク案は抽出される）", () => {
+    const content = readFixture("valid.md");
+
+    const result = parseLedger(content, "valid.md");
+
+    const c002 = result.challenges.find((c) => c.id === "C-002");
+    expect(c002?.description).toBe(
+      "テンプレのフェンス内記入例を誤検出しないようにしたい",
+    );
+    expect(c002?.completionCriteria).toBeUndefined();
+    expect(c002?.taskPlan).toBe("1. フェンス検出ロジックを追加する");
+  });
+
+  it("完了条件（任意） のように括弧内の注記が異なる前方一致ラベルも completionCriteria として抽出する", () => {
+    const content = readFixture("prefix-match.md");
+
+    const result = parseLedger(content, "prefix-match.md");
+
+    expect(result.errors).toEqual([]);
+    expect(result.challenges[0]?.completionCriteria).toBe(
+      "別の注記でも一致すること",
+    );
+  });
+
+  it("説明・タスク案は完全一致のみで抽出する（前方一致させない）: 括弧付きラベルは対応するフィールドに一致しない", () => {
+    const content = readFixture("exact-match-only.md");
+
+    const result = parseLedger(content, "exact-match-only.md");
+
+    expect(result.errors).toEqual([]);
+    const c202 = result.challenges[0];
+    expect(c202?.description).toBeUndefined();
+    expect(c202?.taskPlan).toBeUndefined();
+  });
+
+  it("完了条件系ラベルが複数あり最初の一致が空値の場合、値を持つ後続の一致を completionCriteria として採用する", () => {
+    const content = readFixture("prefix-tiebreak.md");
+
+    const result = parseLedger(content, "prefix-tiebreak.md");
+
+    expect(result.errors).toEqual([]);
+    expect(result.challenges[0]?.completionCriteria).toBe("後から追記された値");
+  });
+
+  it("説明・完了条件・タスク案がすべて無いエントリはエラーにならず、3フィールドとも undefined になる", () => {
+    const content = readFixture("no-content-fields.md");
+
+    const result = parseLedger(content, "no-content-fields.md");
+
+    expect(result.errors).toEqual([]);
+    const c201 = result.challenges[0];
+    expect(c201?.description).toBeUndefined();
+    expect(c201?.completionCriteria).toBeUndefined();
+    expect(c201?.taskPlan).toBeUndefined();
+  });
+
   it("broken-mixed.md では正常な2件が challenges に残り、壊れた3件は errors に入る", () => {
     const content = readFixture("broken-mixed.md");
 
