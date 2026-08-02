@@ -170,6 +170,44 @@ describe("FileTree", () => {
     expect(screen.getByText("nested.md")).toBeInTheDocument();
   });
 
+  it("リフレッシュ後も repo の折りたたみ状態を保持する", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            repos: [{ name: "repo-a", files: ["a.md"] }],
+          }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            // repo-b の出現を「2回目の取得が完了した」ことの目印として使う
+            // （repo-a は折りたたみ済みのため、子ファイルの出現では目印に
+            // できない）。
+            repos: [
+              { name: "repo-a", files: ["a.md"] },
+              { name: "repo-b", files: ["marker.md"] },
+            ],
+          }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { rerender } = render(
+      <FileTree refreshToken={0} onSelectFile={vi.fn()} />,
+    );
+    const repoButton = await screen.findByText("repo-a");
+    fireEvent.click(repoButton);
+    expect(screen.queryByText("a.md")).not.toBeInTheDocument();
+
+    rerender(<FileTree refreshToken={1} onSelectFile={vi.fn()} />);
+    await screen.findByText("marker.md");
+
+    expect(screen.queryByText("a.md")).not.toBeInTheDocument();
+  });
+
   it("マウント時に一度だけ /api/md/tree を取得する", () => {
     const fetchMock = vi.fn().mockReturnValue(new Promise(() => {}));
     vi.stubGlobal("fetch", fetchMock);
