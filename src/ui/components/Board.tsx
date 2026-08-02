@@ -115,12 +115,14 @@ export function Board() {
         archiveMode={archiveMode}
         onArchiveModeChange={setArchiveMode}
       />
-      {/* 右サイドパネル（PreviewPanel）は flex でボードカラム領域を圧縮して
+      {/* 左サイドパネル（PreviewPanel）は flex でボードカラム領域を圧縮して
           確保する（下部ターミナル領域の高さ・幅には一切影響しない。
           docs/features/markdown-preview.md「機能全体の設計」節）。この行
           （board-main-row）のみを横並びにし、FilterBar は従来通り縦積みの
-          最上部に残す（#64）。 */}
+          最上部に残す（#64）。#112 でファイルツリーを IDE の慣例に合わせ
+          画面左端へ寄せるため、パネルをボードカラムの前に配置する。 */}
       <div className="board-main-row">
+        <PreviewPanel mdLive={mdLiveRef.current} />
         <div className="board-columns">
           {agents.map((agent) => (
             <AgentColumn
@@ -144,7 +146,6 @@ export function Board() {
             />
           ))}
         </div>
-        <PreviewPanel mdLive={mdLiveRef.current} />
       </div>
     </div>
   );

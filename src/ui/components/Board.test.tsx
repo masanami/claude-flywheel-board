@@ -230,7 +230,7 @@ describe("Board", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("PreviewPanel（右サイドパネル）が組み込まれている（#64）", async () => {
+  it("PreviewPanel（左サイドパネル。#112 で右から移動）が組み込まれている（#64）", async () => {
     const { Board } = await import("./Board.tsx");
     render(<Board />);
 
@@ -241,6 +241,11 @@ describe("Board", () => {
     expect(
       screen.getByRole("button", { name: "プレビューパネルを開く" }),
     ).toBeInTheDocument();
+    // #112: パネルはボードカラムより前（画面左側）に配置される。
+    const mainRow = document.querySelector(".board-main-row");
+    expect(mainRow?.firstElementChild).toBe(
+      screen.getByTestId("preview-panel"),
+    );
   });
 
   it("アンマウント時に close() を呼ぶ", async () => {

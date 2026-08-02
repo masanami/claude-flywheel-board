@@ -852,15 +852,15 @@ body {
   background: var(--terminal-resize-handle-bg);
 }
 
-/* マークダウンプレビュー右サイドパネル（#64）。.board-main-row 内で
- * board-columns と横並びになる。閉じている間は幅を指定せず、ヘッダ
- * （開くボタンのみ）分の幅に自然に収まる。
+/* マークダウンプレビュー左サイドパネル（#64。#112 で右サイドから移動）。
+ * .board-main-row 内で board-columns と横並びになる。閉じている間は幅を
+ * 指定せず、ヘッダ（開くボタンのみ）分の幅に自然に収まる。
  */
 .preview-panel {
   flex-shrink: 0;
   display: flex;
   background: var(--board-column-bg);
-  border-left: 1px solid var(--board-border);
+  border-right: 1px solid var(--board-border);
 }
 
 .preview-panel-resize-handle {

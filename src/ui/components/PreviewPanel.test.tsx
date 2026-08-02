@@ -171,7 +171,7 @@ describe("PreviewPanel", () => {
 
     const handle = screen.getByTestId("preview-panel-resize-handle");
     act(() => {
-      fireEvent.keyDown(handle, { key: "ArrowLeft" });
+      fireEvent.keyDown(handle, { key: "ArrowRight" });
     });
 
     const panel = screen.getByTestId("preview-panel");
@@ -203,7 +203,10 @@ describe("PreviewPanel", () => {
       expect(handle).toHaveAttribute("tabIndex", "0");
     });
 
-    it("ハンドルを左方向へドラッグするとパネル幅が増え、aria-valuenow も追随する", () => {
+    // #112: パネルは左サイドにあり、ハンドルは右端。右へドラッグ（または
+    // ArrowRight）で幅が増え、左で減る（ハンドルの物理的な移動方向とキー
+    // 方向を一致させる原則は右サイド時代から維持）。
+    it("ハンドルを右方向へドラッグするとパネル幅が増え、aria-valuenow も追随する", () => {
       render(<PreviewPanel />);
       act(() => {
         screen.getByRole("button", { name: "プレビューパネルを開く" }).click();
@@ -215,7 +218,7 @@ describe("PreviewPanel", () => {
 
       act(() => {
         fireEvent.mouseDown(handle, { clientX: 500 });
-        fireEvent.mouseMove(window, { clientX: 400 });
+        fireEvent.mouseMove(window, { clientX: 600 });
         fireEvent.mouseUp(window);
       });
 
@@ -224,7 +227,7 @@ describe("PreviewPanel", () => {
       expect(handle).toHaveAttribute("aria-valuenow", "460");
     });
 
-    it("ハンドルを右方向へドラッグするとパネル幅が減る", () => {
+    it("ハンドルを左方向へドラッグするとパネル幅が減る", () => {
       render(<PreviewPanel />);
       act(() => {
         screen.getByRole("button", { name: "プレビューパネルを開く" }).click();
@@ -235,32 +238,14 @@ describe("PreviewPanel", () => {
 
       act(() => {
         fireEvent.mouseDown(handle, { clientX: 500 });
-        fireEvent.mouseMove(window, { clientX: 560 });
+        fireEvent.mouseMove(window, { clientX: 440 });
         fireEvent.mouseUp(window);
       });
 
       expect(panel.style.width).toBe("300px");
     });
 
-    it("マウスドラッグで下限（240px）を超えて右方向に動かしても下限で止まる", () => {
-      render(<PreviewPanel />);
-      act(() => {
-        screen.getByRole("button", { name: "プレビューパネルを開く" }).click();
-      });
-
-      const panel = screen.getByTestId("preview-panel");
-      const handle = screen.getByTestId("preview-panel-resize-handle");
-
-      act(() => {
-        fireEvent.mouseDown(handle, { clientX: 500 });
-        fireEvent.mouseMove(window, { clientX: 2000 });
-        fireEvent.mouseUp(window);
-      });
-
-      expect(panel.style.width).toBe("240px");
-    });
-
-    it("マウスドラッグで上限（800px）を超えて左方向に動かしても上限で止まる", () => {
+    it("マウスドラッグで下限（240px）を超えて左方向に動かしても下限で止まる", () => {
       render(<PreviewPanel />);
       act(() => {
         screen.getByRole("button", { name: "プレビューパネルを開く" }).click();
@@ -275,10 +260,28 @@ describe("PreviewPanel", () => {
         fireEvent.mouseUp(window);
       });
 
+      expect(panel.style.width).toBe("240px");
+    });
+
+    it("マウスドラッグで上限（800px）を超えて右方向に動かしても上限で止まる", () => {
+      render(<PreviewPanel />);
+      act(() => {
+        screen.getByRole("button", { name: "プレビューパネルを開く" }).click();
+      });
+
+      const panel = screen.getByTestId("preview-panel");
+      const handle = screen.getByTestId("preview-panel-resize-handle");
+
+      act(() => {
+        fireEvent.mouseDown(handle, { clientX: 500 });
+        fireEvent.mouseMove(window, { clientX: 2000 });
+        fireEvent.mouseUp(window);
+      });
+
       expect(panel.style.width).toBe("800px");
     });
 
-    it("ArrowRight キーで幅が32px減る（マウスの右ドラッグと同じ向き）", () => {
+    it("ArrowRight キーで幅が32px増える（マウスの右ドラッグと同じ向き）", () => {
       render(<PreviewPanel />);
       act(() => {
         screen.getByRole("button", { name: "プレビューパネルを開く" }).click();
@@ -291,10 +294,10 @@ describe("PreviewPanel", () => {
         fireEvent.keyDown(handle, { key: "ArrowRight" });
       });
 
-      expect(panel.style.width).toBe("328px");
+      expect(panel.style.width).toBe("392px");
     });
 
-    it("ArrowLeft キーで幅が32px増える（マウスの左ドラッグと同じ向き）", () => {
+    it("ArrowLeft キーで幅が32px減る（マウスの左ドラッグと同じ向き）", () => {
       render(<PreviewPanel />);
       act(() => {
         screen.getByRole("button", { name: "プレビューパネルを開く" }).click();
@@ -307,28 +310,10 @@ describe("PreviewPanel", () => {
         fireEvent.keyDown(handle, { key: "ArrowLeft" });
       });
 
-      expect(panel.style.width).toBe("392px");
+      expect(panel.style.width).toBe("328px");
     });
 
-    it("下限（240px）到達後は ArrowRight を押しても下回らない", () => {
-      render(<PreviewPanel />);
-      act(() => {
-        screen.getByRole("button", { name: "プレビューパネルを開く" }).click();
-      });
-
-      const panel = screen.getByTestId("preview-panel");
-      const handle = screen.getByTestId("preview-panel-resize-handle");
-
-      act(() => {
-        for (let i = 0; i < 20; i++) {
-          fireEvent.keyDown(handle, { key: "ArrowRight" });
-        }
-      });
-
-      expect(panel.style.width).toBe("240px");
-    });
-
-    it("上限（800px）到達後は ArrowLeft を押しても超えない", () => {
+    it("下限（240px）到達後は ArrowLeft を押しても下回らない", () => {
       render(<PreviewPanel />);
       act(() => {
         screen.getByRole("button", { name: "プレビューパネルを開く" }).click();
@@ -340,6 +325,24 @@ describe("PreviewPanel", () => {
       act(() => {
         for (let i = 0; i < 20; i++) {
           fireEvent.keyDown(handle, { key: "ArrowLeft" });
+        }
+      });
+
+      expect(panel.style.width).toBe("240px");
+    });
+
+    it("上限（800px）到達後は ArrowRight を押しても超えない", () => {
+      render(<PreviewPanel />);
+      act(() => {
+        screen.getByRole("button", { name: "プレビューパネルを開く" }).click();
+      });
+
+      const panel = screen.getByTestId("preview-panel");
+      const handle = screen.getByTestId("preview-panel-resize-handle");
+
+      act(() => {
+        for (let i = 0; i < 20; i++) {
+          fireEvent.keyDown(handle, { key: "ArrowRight" });
         }
       });
 
