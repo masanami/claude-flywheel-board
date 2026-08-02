@@ -384,8 +384,14 @@ describe("PreviewPanel", () => {
       act(() => {
         screen.getByRole("button", { name: "プレビューパネルを開く" }).click();
       });
+      // #110: ツリーはネスト表示（ディレクトリは初期折りたたみ・ファイルは
+      // ベース名のみ）のため、docs を展開してから note.md を選択する。
+      const dirButton = await screen.findByRole("button", { name: "docs" });
+      act(() => {
+        dirButton.click();
+      });
       const fileButton = await screen.findByRole("button", {
-        name: "docs/note.md",
+        name: "note.md",
       });
       act(() => {
         fileButton.click();
@@ -541,7 +547,7 @@ describe("PreviewPanel", () => {
       await screen.findByText("Hello");
       const callsAfterFirstSelect = fetchMock.mock.calls.length;
 
-      const fileButton = screen.getByRole("button", { name: "docs/note.md" });
+      const fileButton = screen.getByRole("button", { name: "note.md" });
       act(() => {
         fileButton.click();
       });
@@ -819,8 +825,14 @@ describe("PreviewPanel", () => {
       act(() => {
         screen.getByRole("button", { name: "プレビューパネルを開く" }).click();
       });
+      // #110: ツリーはネスト表示（ディレクトリは初期折りたたみ・ファイルは
+      // ベース名のみ）のため、docs を展開してから note.md を選択する。
+      const dirButton = await screen.findByRole("button", { name: "docs" });
+      act(() => {
+        dirButton.click();
+      });
       const fileButton = await screen.findByRole("button", {
-        name: "docs/note.md",
+        name: "note.md",
       });
       act(() => {
         fileButton.click();

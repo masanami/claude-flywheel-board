@@ -1031,24 +1031,44 @@ body {
 }
 
 .file-tree-repo {
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+/* ネストツリー（#110）: repo 見出し・ディレクトリの開閉ボタン共通。 */
+.file-tree-dir-button {
+  display: flex;
+  align-items: baseline;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: var(--board-fg);
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 0.15rem 0.3rem;
+  border-radius: 3px;
 }
 
 .file-tree-repo-name {
   font-weight: 600;
-  font-size: 0.8rem;
-  margin-bottom: 0.25rem;
-  color: var(--board-fg);
 }
 
-.file-tree-file-list {
+.file-tree-toggle-icon {
+  flex: none;
+  width: 1em;
+  color: var(--board-muted-fg);
+}
+
+/* ネスト1段ごとにインデントする（ul の入れ子で表現）。 */
+.file-tree-node-list {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 0 0 0 0.85rem;
 }
 
 .file-tree-file-button {
-  display: block;
+  display: flex;
+  align-items: baseline;
   width: 100%;
   text-align: left;
   border: none;
@@ -1056,12 +1076,18 @@ body {
   color: var(--board-muted-fg);
   font-size: 0.8rem;
   cursor: pointer;
-  padding: 0.15rem 0.3rem;
+  /* 開閉アイコン分（.file-tree-toggle-icon の 1em）の左余白を足し、
+   * 同階層のディレクトリ名とファイル名の頭を揃える。 */
+  padding: 0.15rem 0.3rem 0.15rem calc(0.3rem + 1em);
   border-radius: 3px;
-  /* repo 相対パスは空白を含まないことが多く、パネル幅を超えると通常の
-   * 折り返しが効かないため、任意の文字位置での折り返しを許可する
-   * （セルフレビュー指摘: 狭いパネル幅ではみ出す）。 */
+}
+
+/* ファイル名・ディレクトリ名は空白を含まないことが多く、パネル幅を超えると
+ * 通常の折り返しが効かないため、任意の文字位置での折り返しを許可する
+ * （セルフレビュー指摘: 狭いパネル幅ではみ出す）。 */
+.file-tree-node-name {
   overflow-wrap: anywhere;
+  min-width: 0;
 }
 
 .file-tree-file-button[aria-current="true"] {

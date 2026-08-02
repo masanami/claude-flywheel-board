@@ -607,8 +607,14 @@ describe("Board", () => {
         screen.getByRole("button", { name: "プレビューパネルを開く" }).click();
       });
 
+      // #110: ツリーはネスト表示（ディレクトリは初期折りたたみ・ファイルは
+      // ベース名のみ）のため、docs を展開してから note.md を選択する。
+      const dirButton = await screen.findByRole("button", { name: "docs" });
+      act(() => {
+        dirButton.click();
+      });
       const fileButton = await screen.findByRole("button", {
-        name: "docs/note.md",
+        name: "note.md",
       });
       act(() => {
         fileButton.click();
@@ -630,8 +636,14 @@ describe("Board", () => {
         screen.getByRole("button", { name: "プレビューパネルを開く" }).click();
       });
 
+      // #110: ツリーはネスト表示（ディレクトリは初期折りたたみ・ファイルは
+      // ベース名のみ）のため、docs を展開してから note.md を選択する。
+      const dirButton = await screen.findByRole("button", { name: "docs" });
+      act(() => {
+        dirButton.click();
+      });
       const fileButton = await screen.findByRole("button", {
-        name: "docs/note.md",
+        name: "note.md",
       });
       act(() => {
         fileButton.click();
@@ -659,8 +671,14 @@ describe("Board", () => {
         screen.getByRole("button", { name: "プレビューパネルを開く" }).click();
       });
 
+      // #110: ツリーはネスト表示（ディレクトリは初期折りたたみ・ファイルは
+      // ベース名のみ）のため、docs を展開してから note.md を選択する。
+      const dirButton = await screen.findByRole("button", { name: "docs" });
+      act(() => {
+        dirButton.click();
+      });
       const fileButton = await screen.findByRole("button", {
-        name: "docs/note.md",
+        name: "note.md",
       });
       act(() => {
         fileButton.click();
@@ -694,8 +712,14 @@ describe("Board", () => {
         screen.getByRole("button", { name: "プレビューパネルを開く" }).click();
       });
 
+      // #110: ツリーはネスト表示（ディレクトリは初期折りたたみ・ファイルは
+      // ベース名のみ）のため、docs を展開してから note.md を選択する。
+      const dirButton = await screen.findByRole("button", { name: "docs" });
+      act(() => {
+        dirButton.click();
+      });
       const fileButton = await screen.findByRole("button", {
-        name: "docs/note.md",
+        name: "note.md",
       });
       act(() => {
         fileButton.click();
@@ -728,8 +752,14 @@ describe("Board", () => {
         screen.getByRole("button", { name: "プレビューパネルを開く" }).click();
       });
 
+      // #110: ツリーはネスト表示（ディレクトリは初期折りたたみ・ファイルは
+      // ベース名のみ）のため、docs を展開してから note.md を選択する。
+      const dirButton = await screen.findByRole("button", { name: "docs" });
+      act(() => {
+        dirButton.click();
+      });
       const fileButton = await screen.findByRole("button", {
-        name: "docs/note.md",
+        name: "note.md",
       });
       act(() => {
         fileButton.click();
