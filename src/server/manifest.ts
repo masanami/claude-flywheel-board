@@ -33,8 +33,14 @@ export const NO_FLEET_ENTRIES: GetFleetEntries = () => [];
  *   `#` 始まりの name を許すと append 自体は成功するのにエントリが有効にならない
  *   サイレント no-op になる）
  * - name の末尾が `-shell` でないこと（手動シェルセッション用の予約接尾辞。#57）
+ *
+ * export する理由（Issue #122）: `POST /api/fleet/agents` は mkdir -p / git init
+ * という fs 副作用を伴うため、この検証は副作用より前に行いたい。この関数を
+ * export して再利用することで、api.ts 側に同じ規則を再実装せずに済ませる
+ * （DRY。`appendFleetEntry` 自身も従来どおりこの関数を書き込み直前に呼ぶため、
+ * 事前チェックをすり抜けた場合でも最終防衛線として機能する）。
  */
-function validateFleetEntryFields(
+export function validateFleetEntryFields(
   name: string,
   entryPath: string,
 ): string | null {
@@ -246,4 +252,80 @@ export function appendFleetEntry(
   fs.appendFileSync(manifestPath, lineToAppend, "utf-8");
 
   return [...existingEntries, { name, path: entryPath }];
+}
+
+/**
+ * `content` 内で `line` が「行頭」（文字列先頭、または直前の文字が `\n`）から
+ * 始まる最初の出現位置を返す。`String.indexOf` と異なり、コメントアウトされた
+ * 行の内部など行頭以外での偶然の部分一致を除外する（`removeFleetEntry` 専用）。
+ * 見つからなければ `-1`。
+ */
+function findLineStart(content: string, line: string): number {
+  let searchFrom = 0;
+  while (searchFrom <= content.length) {
+    const idx = content.indexOf(line, searchFrom);
+    if (idx === -1) {
+      return -1;
+    }
+    if (idx === 0 || content[idx - 1] === "\n") {
+      return idx;
+    }
+    searchFrom = idx + 1;
+  }
+  return -1;
+}
+
+/**
+ * fleet.tsv から `<name>\t<entryPath>\n` の1行（appendFleetEntry が書き込む形式と
+ * 完全一致する行）を取り除く（Issue #122: `POST /api/fleet/agents` が
+ * mkdir/git init/動的監視登録のいずれかに失敗した際、直前に自分が追記した行の
+ * ロールバック専用）。
+ *
+ * 設計意図: fleet.tsv の書式（1行1エントリ・タブ区切り・末尾改行の補完規則）は
+ * この manifest.ts の外に漏らさない。呼び出し元（api.ts）がバイトオフセットや
+ * ファイル内容の差分を自前で計算すると、(a) manifest.ts 側の書式変更に追従できず
+ * 壊れる、(b) 末尾改行が無い既存内容に対する行区切り用の補完 `\n`（このモジュール
+ * だけが知っている実装詳細）を誤って巻き添えで消してしまう、という実際に起きた
+ * 不具合があったため、除去処理そのものをこのモジュールへ集約する。
+ *
+ * name の一意性は `appendFleetEntry`／起動時の `loadFleetManifest` が保証する
+ * 前提だが、`content.indexOf(line)` の素朴な部分文字列検索だけでは、同一の
+ * `name\tpath` 文字列が「行頭以外」（例えば `#` コメントアウトされた行の内部）に
+ * 偶然出現した場合にそちらへ誤って一致し、無関係な行を破壊しうる
+ * （セルフレビュー指摘対応: 実際に「コメントアウトされた同名/同パスの行」＋
+ * 「同じ内容を再度追加してロールバックする」という組み合わせで、無関係な既存
+ * 行がコメント化されてしまう不具合を検出したため、行頭アンカー付きの検索に
+ * 修正した）。行頭（文字列先頭、または直前の文字が `\n`）から始まる一致のみを
+ * 対象とすることで、コメント行や他エントリの value 部分への誤マッチを排除する。
+ *
+ * @returns 該当行を実際に取り除けた場合は `true`。ファイルが読めない、または
+ *   該当行が見つからない（既に別の要因で内容が変わっている等）場合は `false`
+ *   を返す（例外は投げない。ロールバックの失敗は致命的ではなく、呼び出し元が
+ *   ログに残す程度の扱いで十分なため）。
+ * @param overridePath テスト用のパス差し替えシーム（`appendFleetEntry` と同じ用途）。
+ *   本番配線では絶対に使わない。
+ */
+export function removeFleetEntry(
+  name: string,
+  entryPath: string,
+  overridePath?: string,
+): boolean {
+  const manifestPath = resolveFleetManifestPath(overridePath);
+
+  let content: string;
+  try {
+    content = fs.readFileSync(manifestPath, "utf-8");
+  } catch {
+    return false;
+  }
+
+  const line = `${name}\t${entryPath}\n`;
+  const idx = findLineStart(content, line);
+  if (idx === -1) {
+    return false;
+  }
+
+  const updated = content.slice(0, idx) + content.slice(idx + line.length);
+  fs.writeFileSync(manifestPath, updated, "utf-8");
+  return true;
 }
