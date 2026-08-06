@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   appendFleetEntry,
   loadFleetManifest,
+  removeFleetEntry,
   resolveFleetManifestPath,
 } from "./manifest.ts";
 
@@ -346,5 +347,129 @@ describe("appendFleetEntry", () => {
       name: "research",
       path: "/repos/research-agent",
     });
+  });
+});
+
+describe("removeFleetEntry（Issue #122: POST /api/fleet/agents のロールバック専用）", () => {
+  let tmpDir: string;
+  let tmpManifestPath: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-remove-test-"));
+    tmpManifestPath = path.join(tmpDir, "fleet.tsv");
+    fs.copyFileSync(`${FIXTURES_ROOT}valid.tsv`, tmpManifestPath);
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("appendFleetEntry で追記した行をそのまま除去できる（追記前の内容に戻る）", () => {
+    const before = fs.readFileSync(tmpManifestPath, "utf-8");
+    appendFleetEntry(
+      { name: "research", path: "/repos/research-agent" },
+      tmpManifestPath,
+    );
+
+    const removed = removeFleetEntry(
+      "research",
+      "/repos/research-agent",
+      tmpManifestPath,
+    );
+
+    expect(removed).toBe(true);
+    expect(fs.readFileSync(tmpManifestPath, "utf-8")).toBe(before);
+  });
+
+  it("末尾に改行が無い既存内容へ追記した行を除去しても、直前の行の区切りは壊れない（回帰テスト）", () => {
+    fs.writeFileSync(tmpManifestPath, "medical\t/repos/medical-agent", "utf-8");
+    appendFleetEntry(
+      { name: "research", path: "/repos/research-agent" },
+      tmpManifestPath,
+    );
+    // 追記直後、割り込みで別の行が追記された状況を模倣する。
+    fs.appendFileSync(tmpManifestPath, "bi\t/repos/bi-agent\n", "utf-8");
+
+    const removed = removeFleetEntry(
+      "research",
+      "/repos/research-agent",
+      tmpManifestPath,
+    );
+
+    expect(removed).toBe(true);
+    // 割り込んだ行は残り、かつ前後の行が連結されて壊れていない。
+    expect(fs.readFileSync(tmpManifestPath, "utf-8")).toBe(
+      "medical\t/repos/medical-agent\nbi\t/repos/bi-agent\n",
+    );
+  });
+
+  it("該当する行が見つからない場合は false を返し、ファイルを変更しない", () => {
+    const before = fs.readFileSync(tmpManifestPath, "utf-8");
+
+    const removed = removeFleetEntry(
+      "does-not-exist",
+      "/repos/does-not-exist",
+      tmpManifestPath,
+    );
+
+    expect(removed).toBe(false);
+    expect(fs.readFileSync(tmpManifestPath, "utf-8")).toBe(before);
+  });
+
+  it("マニフェストファイルが存在しない場合は false を返す（例外を投げない）", () => {
+    const missingPath = path.join(tmpDir, "does-not-exist.tsv");
+
+    const removed = removeFleetEntry(
+      "research",
+      "/repos/research-agent",
+      missingPath,
+    );
+
+    expect(removed).toBe(false);
+  });
+
+  it("他の行の内容は変更せずに保つ", () => {
+    appendFleetEntry(
+      { name: "research", path: "/repos/research-agent" },
+      tmpManifestPath,
+    );
+
+    removeFleetEntry("research", "/repos/research-agent", tmpManifestPath);
+
+    const entries = loadFleetManifest(tmpManifestPath);
+    expect(entries).toEqual([
+      { name: "medical", path: "/repos/medical-agent" },
+      { name: "bi", path: "/repos/bi-agent" },
+    ]);
+  });
+
+  it("同一 name/path のテキストがコメントアウトされた行の内部に存在しても、それを誤って壊さない（回帰テスト）", () => {
+    // "#research\t/repos/research-agent" というコメント行が、これから追記・
+    // 除去する行と同じ "research\t/repos/research-agent" という部分文字列を
+    // 行頭以外の位置に含む。単純な部分文字列検索（indexOf）だと、末尾改行
+    // 込みの完全一致がこのコメント行の内部でも成立してしまい、コメント行の
+    // 先頭 "#" を残したまま中身だけを取り除いてしまう（本来消すべきは末尾に
+    // 実際に追記した行）。
+    fs.writeFileSync(
+      tmpManifestPath,
+      "#research\t/repos/research-agent\nmedical\t/repos/medical-agent\n",
+      "utf-8",
+    );
+    appendFleetEntry(
+      { name: "research", path: "/repos/research-agent" },
+      tmpManifestPath,
+    );
+
+    const removed = removeFleetEntry(
+      "research",
+      "/repos/research-agent",
+      tmpManifestPath,
+    );
+
+    expect(removed).toBe(true);
+    // コメント行はそのまま残り、medical 行も無事、末尾に追記した行だけが消える。
+    expect(fs.readFileSync(tmpManifestPath, "utf-8")).toBe(
+      "#research\t/repos/research-agent\nmedical\t/repos/medical-agent\n",
+    );
   });
 });
