@@ -252,7 +252,22 @@ export function TerminalPane({
     fetchAgents()
       .then((names) => {
         if (!cancelled) {
-          setAgents(names);
+          // セルフレビュー指摘（Issue #124）: この fetch が解決する前に
+          // notifyAgentAdded 経由で addAgent が呼ばれていた場合（mount 直後の
+          // ごく短いウィンドウで、新規エージェント追加の agent_update が
+          // /api/board の応答より先に届くレアケース）、setAgents(names) の
+          // 単純上書きだとその追加分を消してしまう。PLAUSIBLE指摘（5分毎の
+          // フル再スキャンで自然回復するため実害は限定的）だが、追加分を
+          // 残すマージにしても実装コストが小さいため対応する。
+          setAgents((prev) => {
+            const merged = [...names];
+            for (const name of prev) {
+              if (!merged.includes(name)) {
+                merged.push(name);
+              }
+            }
+            return merged;
+          });
         }
       })
       .catch(() => {
@@ -307,6 +322,19 @@ export function TerminalPane({
           pending.push(command);
           pendingPrefillsRef.current.set(agent, pending);
         }
+      },
+      // Issue #124: Board.tsx の WS agent_update（既存経路。新しい WS 接続・
+      // ポーリングは追加しない）を起点に notifyAgentAdded 経由で呼ばれる。
+      // ここで行うのはタブ一覧への追加のみで、コマンドを流し込む（prefill）
+      // ことはしない。ただし、追加された結果それが最初のタブ（agents が
+      // それまで空だった場合）になったときは、既存の「先頭タブ自動アクティブ化」
+      // effect（上記 useEffect 参照。起動時に最初の1体を自動オープンするのと
+      // 同じロジック）が発火し、自動的に開かれる（接続される）。これは新規
+      // agent 追加時に限った特別扱いではなく、起動時の既存挙動をそのまま
+      // 適用しているだけなので、prefill を暗黙に行っているわけではない
+      // （セルフレビュー指摘）。
+      addAgent(name) {
+        setAgents((prev) => (prev.includes(name) ? prev : [...prev, name]));
       },
     };
     registerTerminalController(controller);

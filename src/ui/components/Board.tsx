@@ -4,8 +4,9 @@ import {
   type MdLiveChannel,
   createNoopMdLiveChannel,
 } from "../md-live-channel.ts";
+import { notifyAgentAdded } from "../terminal-control.ts";
 import { connectBoardSocket } from "../ws.ts";
-import type { AddAgentInput } from "./AddAgentForm.tsx";
+import type { AddAgentInput, AddAgentSubmitResult } from "./AddAgentForm.tsx";
 import { AddAgentForm } from "./AddAgentForm.tsx";
 import { AgentColumn } from "./AgentColumn.tsx";
 import type { BoardFilter } from "./FilterBar.tsx";
@@ -39,20 +40,78 @@ function buildWebSocketUrl(): string {
   return `${protocol}//${window.location.host}/ws`;
 }
 
-// 送信ハンドラは仮実装（Issue #123 スコープ）。ディレクトリ作成・fleet.tsv
-// 追記・マニフェスト再読み込み等の API 接続は #124 のスコープであり、ここでは
-// 行わない。本チケット時点では一切の書き込みを行わないため、NFR-01（board は
-// 台帳・journal・memory・runs.jsonl に書き込まない）への抵触は無い。
+// エージェント追加フォームの送信ハンドラ（Issue #124）。POST /api/fleet/agents
+// を叩くのみで、成功応答の body を使って agents state を直接更新することは
+// しない（二重更新の防止）。サーバ側（src/server/api.ts の該当ハンドラ）は
+// 追加成功時に addFleetEntry → fleetWatcher.addAgentWatch の内部で scan・
+// broadcastAgentUpdate まで行い WS agent_update を配信するため、新カラムの
+// 出現は既存の onAgentUpdate → upsertAgent 経路が自然に処理する。
 //
-// 補足（セルフレビュー指摘・#119「設計上の論点」参照。docs 未反映のため
-// "決定済み" とは言い切らない）: #124 で書く fleet.tsv は board 自身の起動
-// 設定であり、NFR-01 が禁じる「エージェントの状態ファイル」（台帳・journal・
-// memory・runs.jsonl）とは別物という整理を親 Issue #119 は提案しているが、
-// 2026-08-06 時点で requirements.md / architecture.md にはまだ反映されて
-// いない（#119 受け入れ基準の該当項目は未チェック）。#124 実装時は、まず
-// この整理を docs に反映してから fleet.tsv への書き込みに着手すること。
-function handleAddAgentSubmit(input: AddAgentInput): void {
-  console.log("TODO(#124): エージェント追加の送信処理は未実装", input);
+// board が実行するのは HTTP 呼び出しのみであり、fs への書き込みは行わない。
+// fleet.tsv への書き込みはサーバ側 API の境界内で完結している（NFR-01 の
+// 対象はエージェントの状態ファイル＝台帳・journal・memory・runs.jsonl であり、
+// board 自身の設定である fleet.tsv・エージェント用ディレクトリ作成はその対象外
+// という整理は親 Issue #119 系列で確定し、docs/requirements.md・
+// docs/architecture.md に反映済み）。
+async function submitAddAgent(
+  input: AddAgentInput,
+): Promise<AddAgentSubmitResult> {
+  let response: Response;
+  try {
+    response = await fetch("/api/fleet/agents", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+  } catch {
+    return {
+      ok: false,
+      error: "エージェントの追加に失敗しました（通信エラー）",
+    };
+  }
+
+  if (response.ok) {
+    return { ok: true };
+  }
+
+  let error = `エージェントの追加に失敗しました（status: ${response.status}）`;
+  try {
+    const body = (await response.json()) as { error?: unknown };
+    if (typeof body.error === "string" && body.error !== "") {
+      error = body.error;
+    }
+  } catch {
+    // レスポンスボディが JSON でない場合はフォールバックメッセージのまま。
+  }
+  return { ok: false, error };
+}
+
+// 新規エージェント追加フォームのパス欄初期値。ブラウザの JS からは OS の
+// ホームディレクトリを取得できないため、既存 fleet エージェントのうち
+// 絶対パスを持つ最初の1件（fleet.tsv の記載順。fleet.tsv 自体は既存エントリの
+// 相対パスも許容するため、先頭が相対パスの場合はスキップして次を見る。
+// src/server/manifest.ts 参照）の実際の絶対パス（AgentBoard.path）から
+// 親ディレクトリを算出して使う（"~" のハードコードはサーバ側の絶対パス限定
+// バリデーションと必ず不整合になる。AddAgentForm.tsx 冒頭コメント参照）。
+// あくまで手動編集可能な補完ヒントであり、fleet 全体の最長共通接頭辞等の
+// 厳密な算出は行わない（YAGNI）。絶対パスを持つ既存エージェントが1件も
+// 無い場合は空文字を返し、パス欄は空のまま始まる（ユーザーが絶対パスを
+// 直接入力する）。
+function computeBasePathHint(agents: AgentBoard[]): string {
+  const withAbsolutePath = agents.find((a) => a.path.startsWith("/"));
+  if (!withAbsolutePath) {
+    return "";
+  }
+  // セルフレビュー指摘: fleet.tsv は人間が手書きする設定ファイルで、読み込み時の
+  // 正規化は trim のみ（src/server/manifest.ts）のため、末尾に "/" が残った
+  // パスがそのまま AgentBoard.path に載りうる。末尾スラッシュを除去せずに
+  // lastIndexOf("/") で親ディレクトリを算出すると、既存エージェント自身の
+  // ディレクトリを親ディレクトリと誤認し、その配下に新規エージェント用の
+  // ディレクトリ・git init が作られてしまう（既存エージェントの観測に影響
+  // しないという AC-3 を損なう）。
+  const trimmedPath = withAbsolutePath.path.replace(/\/+$/, "");
+  const separatorIndex = trimmedPath.lastIndexOf("/");
+  return separatorIndex <= 0 ? "/" : trimmedPath.slice(0, separatorIndex);
 }
 
 function upsertAgent(agents: AgentBoard[], updated: AgentBoard): AgentBoard[] {
@@ -66,8 +125,11 @@ function upsertAgent(agents: AgentBoard[], updated: AgentBoard): AgentBoard[] {
 }
 
 // トップレベルの状態管理（WS接続・snapshot/agent_update反映・フィルタ）。
-// board は状態ファイルへ一切書き込まない（NFR-01）。本コンポーネントは
-// 受信・表示のみを行い、サーバへメッセージを送る処理は持たない。
+// board は状態ファイル（台帳・journal・memory・runs.jsonl）へは一切書き込まない
+// （NFR-01）。サーバへの書き込み要求は、自分自身の設定である fleet.tsv への
+// 追記を行う POST /api/fleet/agents（submitAddAgent。Issue #124）に限る
+// （NFR-01 と fleet.tsv 書き込みの境界整理は submitAddAgent 直上のコメント
+// 参照）。それ以外のデータ（台帳の課題等）は WS 経由の受信・表示のみを行う。
 export function Board() {
   const [agents, setAgents] = useState<AgentBoard[] | undefined>(undefined);
   const [filter, setFilter] = useState<BoardFilter>("all");
@@ -94,6 +156,17 @@ export function Board() {
       },
       onAgentUpdate: (agent) => {
         setAgents((prev) => upsertAgent(prev ?? [], agent));
+        // セルフレビュー指摘（Issue #124）: TerminalPane は mount 時に1回だけ
+        // /api/board を読んでタブ一覧を確定しており、Board が保有する WS
+        // agent_update を購読していない。そのため、agents state の更新だけでは
+        // 新規エージェントのターミナルタブが board 再起動なしで出現しない。
+        // 新しい WS 接続・ポーリングを追加せず（親 Issue #119 クリティカル
+        // 設計決定）に解消するため、prefill と同じ疎結合レジストリ
+        // （terminal-control.ts）経由で TerminalPane 側のタブ一覧へ反映する。
+        // 既に一覧にある名前は TerminalPane 側で無視される（冪等）ため、
+        // 新規追加以外の通常の agent_update（既存エージェントの状態更新）でも
+        // 無条件に呼んでよい。
+        notifyAgentAdded(agent.name);
       },
       onMdFileChanged: (message) => {
         mdLiveRef.current.handlers.onFileChanged?.(message);
@@ -147,7 +220,8 @@ export function Board() {
       {addAgentFormOpen && (
         <AddAgentForm
           onClose={() => setAddAgentFormOpen(false)}
-          onSubmit={handleAddAgentSubmit}
+          onSubmit={submitAddAgent}
+          basePath={computeBasePathHint(agents)}
         />
       )}
       {/* 左サイドパネル（PreviewPanel）は flex でボードカラム領域を圧縮して

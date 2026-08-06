@@ -1,7 +1,17 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { StrictMode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { AddAgentForm } from "./AddAgentForm.tsx";
+
+// 既存エージェントの絶対パスから算出されたベースディレクトリのヒント
+// （Board.tsx の computeBasePathHint 相当。実際の算出ロジックは
+// Board.test.tsx 側で検証する）。本ファイルでは AddAgentForm が
+// basePath prop をそのまま使うことだけを検証する。
+const TEST_BASE_PATH = "/agents";
+
+function resolvedSubmit() {
+  return vi.fn().mockResolvedValue({ ok: true });
+}
 
 describe("AddAgentForm", () => {
   // モーダル開閉機構（ネイティブ dialog + showModal()）は CardDetailModal.tsx
@@ -14,7 +24,11 @@ describe("AddAgentForm", () => {
     expect(() =>
       render(
         <StrictMode>
-          <AddAgentForm onClose={vi.fn()} onSubmit={vi.fn()} />
+          <AddAgentForm
+            onClose={vi.fn()}
+            onSubmit={resolvedSubmit()}
+            basePath={TEST_BASE_PATH}
+          />
         </StrictMode>,
       ),
     ).not.toThrow();
@@ -23,7 +37,13 @@ describe("AddAgentForm", () => {
 
   it("ESC キーで onClose が呼ばれる", () => {
     const onClose = vi.fn();
-    render(<AddAgentForm onClose={onClose} onSubmit={vi.fn()} />);
+    render(
+      <AddAgentForm
+        onClose={onClose}
+        onSubmit={resolvedSubmit()}
+        basePath={TEST_BASE_PATH}
+      />,
+    );
 
     fireEvent.keyDown(document, { key: "Escape" });
 
@@ -32,7 +52,13 @@ describe("AddAgentForm", () => {
 
   it("オーバーレイクリックで onClose が呼ばれる", () => {
     const onClose = vi.fn();
-    render(<AddAgentForm onClose={onClose} onSubmit={vi.fn()} />);
+    render(
+      <AddAgentForm
+        onClose={onClose}
+        onSubmit={resolvedSubmit()}
+        basePath={TEST_BASE_PATH}
+      />,
+    );
 
     // 実ブラウザでのクリックは mousedown → click の順でイベントが発火するため、
     // 実装側の「押下と確定が両方オーバーレイ上」判定に合わせて両方 fire する。
@@ -45,7 +71,13 @@ describe("AddAgentForm", () => {
 
   it("フォーム内クリックでは onClose が呼ばれない", () => {
     const onClose = vi.fn();
-    render(<AddAgentForm onClose={onClose} onSubmit={vi.fn()} />);
+    render(
+      <AddAgentForm
+        onClose={onClose}
+        onSubmit={resolvedSubmit()}
+        basePath={TEST_BASE_PATH}
+      />,
+    );
 
     fireEvent.click(screen.getByTestId("add-agent-form-content"));
 
@@ -54,7 +86,13 @@ describe("AddAgentForm", () => {
 
   it("フォーム内で押下を開始しオーバーレイ上でクリックが確定しても onClose は呼ばれない（テキスト選択ドラッグの誤爆防止）", () => {
     const onClose = vi.fn();
-    render(<AddAgentForm onClose={onClose} onSubmit={vi.fn()} />);
+    render(
+      <AddAgentForm
+        onClose={onClose}
+        onSubmit={resolvedSubmit()}
+        basePath={TEST_BASE_PATH}
+      />,
+    );
 
     fireEvent.mouseDown(screen.getByTestId("add-agent-form-content"));
     fireEvent.click(screen.getByTestId("add-agent-form"));
@@ -63,7 +101,13 @@ describe("AddAgentForm", () => {
   });
 
   it("エージェント名・パスの入力欄を表示する", () => {
-    render(<AddAgentForm onClose={vi.fn()} onSubmit={vi.fn()} />);
+    render(
+      <AddAgentForm
+        onClose={vi.fn()}
+        onSubmit={resolvedSubmit()}
+        basePath={TEST_BASE_PATH}
+      />,
+    );
 
     expect(
       screen.getByRole("textbox", { name: "エージェント名" }),
@@ -71,28 +115,98 @@ describe("AddAgentForm", () => {
     expect(screen.getByRole("textbox", { name: "パス" })).toBeInTheDocument();
   });
 
-  it("パス欄はベースディレクトリを初期値として表示する", () => {
-    render(<AddAgentForm onClose={vi.fn()} onSubmit={vi.fn()} />);
+  it("パス欄は basePath prop を初期値として表示する", () => {
+    render(
+      <AddAgentForm
+        onClose={vi.fn()}
+        onSubmit={resolvedSubmit()}
+        basePath={TEST_BASE_PATH}
+      />,
+    );
 
     expect(screen.getByRole("textbox", { name: "パス" })).toHaveValue(
-      "~/agents",
+      TEST_BASE_PATH,
     );
   });
 
-  it("エージェント名を入力すると、パス欄がベースディレクトリ＋名前に自動更新される", () => {
-    render(<AddAgentForm onClose={vi.fn()} onSubmit={vi.fn()} />);
+  it("basePath が空文字（既存エージェントが無い）の場合、パス欄は空で始まる", () => {
+    render(
+      <AddAgentForm
+        onClose={vi.fn()}
+        onSubmit={resolvedSubmit()}
+        basePath=""
+      />,
+    );
+
+    expect(screen.getByRole("textbox", { name: "パス" })).toHaveValue("");
+  });
+
+  it("basePath が空文字の場合、エージェント名を入力してもパス欄は空のまま（相対パスを既定値にしない）", () => {
+    render(
+      <AddAgentForm
+        onClose={vi.fn()}
+        onSubmit={resolvedSubmit()}
+        basePath=""
+      />,
+    );
+
+    fireEvent.change(screen.getByRole("textbox", { name: "エージェント名" }), {
+      target: { value: "harness-guardian" },
+    });
+
+    expect(screen.getByRole("textbox", { name: "パス" })).toHaveValue("");
+  });
+
+  it('絶対パス（"/" 始まり）でないパスを入力して送信すると、エラーが表示され onSubmit は呼ばれない', () => {
+    const onSubmit = resolvedSubmit();
+    render(
+      <AddAgentForm
+        onClose={vi.fn()}
+        onSubmit={onSubmit}
+        basePath={TEST_BASE_PATH}
+      />,
+    );
+
+    fireEvent.change(screen.getByRole("textbox", { name: "エージェント名" }), {
+      target: { value: "harness-guardian" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "パス" }), {
+      target: { value: "relative/path" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "追加" }));
+
+    expect(screen.getByTestId("add-agent-form-errors")).toHaveTextContent(
+      "絶対パスで入力してください",
+    );
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("エージェント名を入力すると、パス欄が basePath＋名前に自動更新される", () => {
+    render(
+      <AddAgentForm
+        onClose={vi.fn()}
+        onSubmit={resolvedSubmit()}
+        basePath={TEST_BASE_PATH}
+      />,
+    );
 
     fireEvent.change(screen.getByRole("textbox", { name: "エージェント名" }), {
       target: { value: "harness-guardian" },
     });
 
     expect(screen.getByRole("textbox", { name: "パス" })).toHaveValue(
-      "~/agents/harness-guardian",
+      `${TEST_BASE_PATH}/harness-guardian`,
     );
   });
 
   it("パス欄を手動編集した後は、名前変更による自動補完で上書きされない", () => {
-    render(<AddAgentForm onClose={vi.fn()} onSubmit={vi.fn()} />);
+    render(
+      <AddAgentForm
+        onClose={vi.fn()}
+        onSubmit={resolvedSubmit()}
+        basePath={TEST_BASE_PATH}
+      />,
+    );
 
     fireEvent.change(screen.getByRole("textbox", { name: "パス" }), {
       target: { value: "/custom/path" },
@@ -107,8 +221,14 @@ describe("AddAgentForm", () => {
   });
 
   it("名前が空欄のまま送信すると、エラーが表示され onSubmit は呼ばれない", () => {
-    const onSubmit = vi.fn();
-    render(<AddAgentForm onClose={vi.fn()} onSubmit={onSubmit} />);
+    const onSubmit = resolvedSubmit();
+    render(
+      <AddAgentForm
+        onClose={vi.fn()}
+        onSubmit={onSubmit}
+        basePath={TEST_BASE_PATH}
+      />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "追加" }));
 
@@ -119,8 +239,14 @@ describe("AddAgentForm", () => {
   });
 
   it("パスが空欄のまま送信すると、エラーが表示され onSubmit は呼ばれない", () => {
-    const onSubmit = vi.fn();
-    render(<AddAgentForm onClose={vi.fn()} onSubmit={onSubmit} />);
+    const onSubmit = resolvedSubmit();
+    render(
+      <AddAgentForm
+        onClose={vi.fn()}
+        onSubmit={onSubmit}
+        basePath={TEST_BASE_PATH}
+      />,
+    );
 
     fireEvent.change(screen.getByRole("textbox", { name: "エージェント名" }), {
       target: { value: "harness-guardian" },
@@ -137,8 +263,14 @@ describe("AddAgentForm", () => {
   });
 
   it('エージェント名が "-shell" で終わる場合、エラーが表示され onSubmit は呼ばれない', () => {
-    const onSubmit = vi.fn();
-    render(<AddAgentForm onClose={vi.fn()} onSubmit={onSubmit} />);
+    const onSubmit = resolvedSubmit();
+    render(
+      <AddAgentForm
+        onClose={vi.fn()}
+        onSubmit={onSubmit}
+        basePath={TEST_BASE_PATH}
+      />,
+    );
 
     fireEvent.change(screen.getByRole("textbox", { name: "エージェント名" }), {
       target: { value: "foo-shell" },
@@ -151,10 +283,22 @@ describe("AddAgentForm", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it("有効な入力で送信すると、onSubmit がエージェント名・パスで呼ばれ、フォームが閉じる（onClose 発火）", () => {
-    const onSubmit = vi.fn();
+  it("有効な入力で送信すると、onSubmit がエージェント名・パスで呼ばれる（送信完了までフォームは閉じない）", async () => {
+    let resolveSubmit: (result: { ok: true }) => void = () => {};
+    const onSubmit = vi.fn(
+      () =>
+        new Promise<{ ok: true }>((resolve) => {
+          resolveSubmit = resolve;
+        }),
+    );
     const onClose = vi.fn();
-    render(<AddAgentForm onClose={onClose} onSubmit={onSubmit} />);
+    render(
+      <AddAgentForm
+        onClose={onClose}
+        onSubmit={onSubmit}
+        basePath={TEST_BASE_PATH}
+      />,
+    );
 
     fireEvent.change(screen.getByRole("textbox", { name: "エージェント名" }), {
       target: { value: "harness-guardian" },
@@ -163,14 +307,104 @@ describe("AddAgentForm", () => {
 
     expect(onSubmit).toHaveBeenCalledWith({
       name: "harness-guardian",
-      path: "~/agents/harness-guardian",
+      path: `${TEST_BASE_PATH}/harness-guardian`,
     });
+    // onSubmit の Promise が解決するまではフォームを閉じない（サーバー側
+    // バリデーションエラーの可能性があるため）。
+    expect(onClose).not.toHaveBeenCalled();
+
+    resolveSubmit({ ok: true });
+    await screen.findByTestId("add-agent-form"); // 次のマイクロタスクを待つ
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("onSubmit が ok:true で解決すると、フォームが閉じる（onClose 発火）", async () => {
+    const onSubmit = resolvedSubmit();
+    const onClose = vi.fn();
+    render(
+      <AddAgentForm
+        onClose={onClose}
+        onSubmit={onSubmit}
+        basePath={TEST_BASE_PATH}
+      />,
+    );
+
+    fireEvent.change(screen.getByRole("textbox", { name: "エージェント名" }), {
+      target: { value: "harness-guardian" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "追加" }));
+
+    await waitFor(() => {
+      expect(onClose).toHaveBeenCalled();
+    });
+  });
+
+  it("onSubmit が ok:false で解決すると、サーバー側エラーがフォームに表示され、フォームは閉じない", async () => {
+    const onSubmit = vi.fn().mockResolvedValue({
+      ok: false,
+      error: 'name "foo" が既存と重複しています',
+    });
+    const onClose = vi.fn();
+    render(
+      <AddAgentForm
+        onClose={onClose}
+        onSubmit={onSubmit}
+        basePath={TEST_BASE_PATH}
+      />,
+    );
+
+    fireEvent.change(screen.getByRole("textbox", { name: "エージェント名" }), {
+      target: { value: "foo" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "追加" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("add-agent-form-errors")).toHaveTextContent(
+        'name "foo" が既存と重複しています',
+      );
+    });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId("add-agent-form")).toBeInTheDocument();
+  });
+
+  it("送信中（onSubmit の Promise が未解決の間）は送信ボタンが無効化される", async () => {
+    let resolveSubmit: (result: { ok: true }) => void = () => {};
+    const onSubmit = vi.fn(
+      () =>
+        new Promise<{ ok: true }>((resolve) => {
+          resolveSubmit = resolve;
+        }),
+    );
+    render(
+      <AddAgentForm
+        onClose={vi.fn()}
+        onSubmit={onSubmit}
+        basePath={TEST_BASE_PATH}
+      />,
+    );
+
+    fireEvent.change(screen.getByRole("textbox", { name: "エージェント名" }), {
+      target: { value: "harness-guardian" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "追加" }));
+
+    expect(screen.getByRole("button", { name: "追加" })).toBeDisabled();
+
+    resolveSubmit({ ok: true });
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("「閉じる」ボタンをクリックすると onClose が呼ばれる", () => {
     const onClose = vi.fn();
-    render(<AddAgentForm onClose={onClose} onSubmit={vi.fn()} />);
+    render(
+      <AddAgentForm
+        onClose={onClose}
+        onSubmit={resolvedSubmit()}
+        basePath={TEST_BASE_PATH}
+      />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "閉じる" }));
 
@@ -178,7 +412,13 @@ describe("AddAgentForm", () => {
   });
 
   it("開いた直後、エージェント名の入力欄にフォーカスが当たる", () => {
-    render(<AddAgentForm onClose={vi.fn()} onSubmit={vi.fn()} />);
+    render(
+      <AddAgentForm
+        onClose={vi.fn()}
+        onSubmit={resolvedSubmit()}
+        basePath={TEST_BASE_PATH}
+      />,
+    );
 
     expect(
       screen.getByRole("textbox", { name: "エージェント名" }),
@@ -186,7 +426,13 @@ describe("AddAgentForm", () => {
   });
 
   it("エラー表示後に再入力すると、エラー表示が消える", () => {
-    render(<AddAgentForm onClose={vi.fn()} onSubmit={vi.fn()} />);
+    render(
+      <AddAgentForm
+        onClose={vi.fn()}
+        onSubmit={resolvedSubmit()}
+        basePath={TEST_BASE_PATH}
+      />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "追加" }));
     expect(screen.getByTestId("add-agent-form-errors")).toBeInTheDocument();
@@ -201,14 +447,20 @@ describe("AddAgentForm", () => {
   });
 
   it("先頭・末尾に空白を含む名前を入力しても、自動補完されたパスに余分な空白が入らない", () => {
-    render(<AddAgentForm onClose={vi.fn()} onSubmit={vi.fn()} />);
+    render(
+      <AddAgentForm
+        onClose={vi.fn()}
+        onSubmit={resolvedSubmit()}
+        basePath={TEST_BASE_PATH}
+      />,
+    );
 
     fireEvent.change(screen.getByRole("textbox", { name: "エージェント名" }), {
       target: { value: " harness-guardian " },
     });
 
     expect(screen.getByRole("textbox", { name: "パス" })).toHaveValue(
-      "~/agents/harness-guardian",
+      `${TEST_BASE_PATH}/harness-guardian`,
     );
   });
 });

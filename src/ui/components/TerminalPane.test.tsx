@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
-import { prefill } from "../terminal-control.ts";
+import { notifyAgentAdded, prefill } from "../terminal-control.ts";
 import type { TerminalSocketOptions } from "../terminal-ws.ts";
 import { TerminalPane } from "./TerminalPane.tsx";
 import type { CreateXtermInstance } from "./xterm-adapter.ts";
@@ -744,6 +744,88 @@ describe("TerminalPane", () => {
       "echo hi",
     );
     expect(screen.getByText("bi").getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("terminal-control の notifyAgentAdded(name) を呼ぶと、board 再起動なしで新しいタブが出現する（Issue #124）", async () => {
+    const harness = buildHarness(["medical"]);
+
+    render(
+      <TerminalPane
+        connect={harness.connect}
+        createXterm={harness.createXterm}
+        fetchAgents={harness.fetchAgents}
+      />,
+    );
+
+    await screen.findByText("medical");
+    expect(screen.queryByText("harness-guardian")).not.toBeInTheDocument();
+
+    act(() => {
+      notifyAgentAdded("harness-guardian");
+    });
+
+    expect(screen.getByText("harness-guardian")).toBeInTheDocument();
+    // タブに追加されるだけで、自動的に開かれる（接続される）わけではない
+    // （他のタブと同じく、ユーザーがクリックするまで未接続）。
+    expect(() => harness.socketFor("harness-guardian", "agent")).toThrow();
+  });
+
+  it("terminal-control の notifyAgentAdded(name) は同名タブが既にある場合は無視する（冪等）", async () => {
+    const harness = buildHarness(["medical", "bi"]);
+
+    render(
+      <TerminalPane
+        connect={harness.connect}
+        createXterm={harness.createXterm}
+        fetchAgents={harness.fetchAgents}
+      />,
+    );
+
+    await screen.findByText("medical");
+    const tabsBefore = screen.getAllByRole("tab").length;
+
+    act(() => {
+      notifyAgentAdded("medical");
+    });
+
+    expect(screen.getAllByRole("tab")).toHaveLength(tabsBefore);
+  });
+
+  it("mount 直後、初回 fetchAgents の解決前に notifyAgentAdded が呼ばれても、解決後にその追加分が失われない（セルフレビュー指摘: 上書きレースの回避）", async () => {
+    // 先頭タブの自動アクティブ化・自動接続（openAgent → ensureConnection）が
+    // 走るため、connect/createXterm は buildHarness の実体を使う（素の vi.fn()
+    // だと createXterm の戻り値が undefined になり xterm.onData で例外になる）。
+    const harness = buildHarness([]);
+    let resolveFetch: (names: string[]) => void = () => {};
+    const fetchAgents = vi.fn(
+      () =>
+        new Promise<string[]>((resolve) => {
+          resolveFetch = resolve;
+        }),
+    );
+
+    render(
+      <TerminalPane
+        connect={harness.connect}
+        createXterm={harness.createXterm}
+        fetchAgents={fetchAgents}
+      />,
+    );
+
+    // fetchAgents がまだ解決していないうちに、WS agent_update 起点の
+    // notifyAgentAdded が先に届いたケースを再現する。
+    act(() => {
+      notifyAgentAdded("harness-guardian");
+    });
+    expect(screen.getByText("harness-guardian")).toBeInTheDocument();
+
+    // 遅れて fetchAgents が解決しても、先に追加されていた分を消さない。
+    act(() => {
+      resolveFetch(["medical"]);
+    });
+    await screen.findByText("medical");
+
+    expect(screen.getByText("harness-guardian")).toBeInTheDocument();
   });
 
   it("【安全要件・#57】prefill(agent, command) は shell（右）側の接続には一切届かない", async () => {
