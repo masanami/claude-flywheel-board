@@ -2,7 +2,12 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
-import { notifyAgentAdded, prefill } from "../terminal-control.ts";
+import {
+  notifyAgentAddFailed,
+  notifyAgentAddRequested,
+  notifyAgentAdded,
+  prefill,
+} from "../terminal-control.ts";
 import type { TerminalSocketOptions } from "../terminal-ws.ts";
 import { TerminalPane } from "./TerminalPane.tsx";
 import type { CreateXtermInstance } from "./xterm-adapter.ts";
@@ -766,7 +771,10 @@ describe("TerminalPane", () => {
 
     expect(screen.getByText("harness-guardian")).toBeInTheDocument();
     // タブに追加されるだけで、自動的に開かれる（接続される）わけではない
-    // （他のタブと同じく、ユーザーがクリックするまで未接続）。
+    // （他のタブと同じく、ユーザーがクリックするまで未接続）。Issue #125:
+    // claude の prefill は notifyAgentAddRequested で事前にマークされた名前に
+    // 限られ、この呼び出し単体（マーク無し）では接続もタブの自動オープンも
+    // 起きない（下の #125 系テスト群でマークありの場合の挙動を検証する）。
     expect(() => harness.socketFor("harness-guardian", "agent")).toThrow();
   });
 
@@ -826,6 +834,282 @@ describe("TerminalPane", () => {
     await screen.findByText("medical");
 
     expect(screen.getByText("harness-guardian")).toBeInTheDocument();
+  });
+
+  // Issue #125: 「新規追加」の確定は notifyAgentAddRequested（Board.tsx の
+  // submitAddAgent がフォーム送信時に呼ぶ）を起点とする。以下のテスト群は
+  // 「マーク → agent_update（notifyAgentAdded）」の順で呼ぶことで、実際の
+  // フロー（フォーム送信 → POST /api/fleet/agents → サーバの scan →
+  // broadcastAgentUpdate → Board.tsx の onAgentUpdate → notifyAgentAdded）を
+  // 模倣する。
+  it("notifyAgentAddRequested でマーク後、notifyAgentAdded で出現した新タブに claude が prefill される（Issue #125）", async () => {
+    const harness = buildHarness(["medical"]);
+
+    render(
+      <TerminalPane
+        connect={harness.connect}
+        createXterm={harness.createXterm}
+        fetchAgents={harness.fetchAgents}
+      />,
+    );
+
+    await screen.findByText("medical");
+    await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(2));
+
+    act(() => {
+      notifyAgentAddRequested("harness-guardian");
+      notifyAgentAdded("harness-guardian");
+    });
+
+    await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(4));
+    expect(
+      harness.socketFor("harness-guardian", "agent").prefill,
+    ).toHaveBeenCalledWith("claude");
+    expect(
+      harness.socketFor("harness-guardian", "agent").prefill,
+    ).toHaveBeenCalledTimes(1);
+    // Enter 送信・自動実行の経路は追加しない（クリティカル設計決定②）。
+    // sendInput は xterm.onData 経由でのみ呼ばれるべきで、prefill 起点では
+    // 一度も呼ばれない。
+    expect(
+      harness.socketFor("harness-guardian", "agent").sendInput,
+    ).not.toHaveBeenCalled();
+  });
+
+  it("新タブへの claude prefill は shell（右）側の接続には一切届かない（Issue #125）", async () => {
+    const harness = buildHarness(["medical"]);
+
+    render(
+      <TerminalPane
+        connect={harness.connect}
+        createXterm={harness.createXterm}
+        fetchAgents={harness.fetchAgents}
+      />,
+    );
+
+    await screen.findByText("medical");
+    await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(2));
+
+    act(() => {
+      notifyAgentAddRequested("harness-guardian");
+      notifyAgentAdded("harness-guardian");
+    });
+
+    await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(4));
+    expect(
+      harness.socketFor("harness-guardian", "shell").prefill,
+    ).not.toHaveBeenCalled();
+  });
+
+  it("マークは一度きりの消費: 同じ新規追加に対する notifyAgentAdded の重複呼び出し（WS 再接続相当）では claude が再度 prefill されない", async () => {
+    const harness = buildHarness(["medical"]);
+
+    render(
+      <TerminalPane
+        connect={harness.connect}
+        createXterm={harness.createXterm}
+        fetchAgents={harness.fetchAgents}
+      />,
+    );
+
+    await screen.findByText("medical");
+    await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(2));
+
+    act(() => {
+      notifyAgentAddRequested("harness-guardian");
+      notifyAgentAdded("harness-guardian");
+    });
+    await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(4));
+    expect(
+      harness.socketFor("harness-guardian", "agent").prefill,
+    ).toHaveBeenCalledTimes(1);
+
+    // マークは addAgent 内で消費（delete）されるため、事前の
+    // notifyAgentAddRequested を挟まない限り、同じ agent_update が再度届いても
+    // 二重に prefill されない。
+    act(() => {
+      notifyAgentAdded("harness-guardian");
+    });
+
+    expect(
+      harness.socketFor("harness-guardian", "agent").prefill,
+    ).toHaveBeenCalledTimes(1);
+  });
+
+  it("notifyAgentAddRequested でマークされていない agent_update（既存タブの通常更新・サーバ起動直後のキャッチアップ配信）では claude は prefill されない", async () => {
+    const harness = buildHarness(["medical"]);
+
+    render(
+      <TerminalPane
+        connect={harness.connect}
+        createXterm={harness.createXterm}
+        fetchAgents={harness.fetchAgents}
+      />,
+    );
+
+    await screen.findByText("medical");
+    await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(2));
+
+    act(() => {
+      // medical はマークされていない（フォーム経由の追加ではない）。agent_update
+      // は通常運用でも頻繁に届くが、claude を prefill してはならない。
+      notifyAgentAdded("medical");
+    });
+
+    expect(
+      harness.socketFor("medical", "agent").prefill,
+    ).not.toHaveBeenCalled();
+  });
+
+  it("notifyAgentAddFailed でマークを取り消した場合、その後の notifyAgentAdded では claude は prefill されない（追加失敗時の安全対策）", async () => {
+    const harness = buildHarness(["medical"]);
+
+    render(
+      <TerminalPane
+        connect={harness.connect}
+        createXterm={harness.createXterm}
+        fetchAgents={harness.fetchAgents}
+      />,
+    );
+
+    await screen.findByText("medical");
+    await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(2));
+
+    act(() => {
+      // 例: 重複名エラーで POST /api/fleet/agents が失敗し、submitAddAgent が
+      // notifyAgentAddFailed を呼んでマークを取り消した後、既存の "medical" が
+      // 通常の agent_update を受け取ったケースを模倣する。
+      notifyAgentAddRequested("medical");
+      notifyAgentAddFailed("medical");
+      notifyAgentAdded("medical");
+    });
+
+    expect(
+      harness.socketFor("medical", "agent").prefill,
+    ).not.toHaveBeenCalled();
+  });
+
+  it("既にタブ一覧にある名前が誤ってマークされていても claude は prefill されない（セルフレビュー指摘: 重複名送信〜サーバ応答の間に既存タブの agent_update が届く残存レースの防止）", async () => {
+    const harness = buildHarness(["medical"]);
+
+    render(
+      <TerminalPane
+        connect={harness.connect}
+        createXterm={harness.createXterm}
+        fetchAgents={harness.fetchAgents}
+      />,
+    );
+
+    await screen.findByText("medical");
+    await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(2));
+
+    act(() => {
+      // 例: ユーザーが既存の "medical" と同じ名前で追加フォームを送信し
+      // （クライアント側は重複名を検証しない）、サーバから 400 が返る前の
+      // 短い時間差で medical の通常の agent_update が届いたケース。
+      notifyAgentAddRequested("medical");
+      notifyAgentAdded("medical");
+    });
+
+    expect(
+      harness.socketFor("medical", "agent").prefill,
+    ).not.toHaveBeenCalled();
+  });
+
+  it("マークした名前と異なる名前の agent_update ではマークは消費されず、後で正しい名前が届いたときに claude が prefill される（名前をまたいだマークの分離）", async () => {
+    const harness = buildHarness(["medical"]);
+
+    render(
+      <TerminalPane
+        connect={harness.connect}
+        createXterm={harness.createXterm}
+        fetchAgents={harness.fetchAgents}
+      />,
+    );
+
+    await screen.findByText("medical");
+    await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(2));
+
+    act(() => {
+      notifyAgentAddRequested("harness-guardian");
+      // harness-guardian 以外の agent_update（別の既存エージェントの通常更新）
+      // が先に届いても、harness-guardian 用のマークは消費されない。
+      notifyAgentAdded("medical");
+    });
+
+    expect(
+      harness.socketFor("medical", "agent").prefill,
+    ).not.toHaveBeenCalled();
+
+    act(() => {
+      notifyAgentAdded("harness-guardian");
+    });
+
+    await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(4));
+    expect(
+      harness.socketFor("harness-guardian", "agent").prefill,
+    ).toHaveBeenCalledWith("claude");
+  });
+
+  it("初期ロースターの取得（fetchAgents）が失敗しても、事前にマークされた新規追加は claude が prefill される（新方式は roster 取得の成否に依存しない）", async () => {
+    const harness = buildHarness([]);
+    const fetchAgents = vi.fn(() => Promise.reject(new Error("network error")));
+
+    render(
+      <TerminalPane
+        connect={harness.connect}
+        createXterm={harness.createXterm}
+        fetchAgents={fetchAgents}
+      />,
+    );
+
+    await waitFor(() => expect(fetchAgents).toHaveBeenCalled());
+
+    act(() => {
+      notifyAgentAddRequested("harness-guardian");
+      notifyAgentAdded("harness-guardian");
+    });
+
+    expect(screen.getByText("harness-guardian")).toBeInTheDocument();
+    await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(2));
+    expect(
+      harness.socketFor("harness-guardian", "agent").prefill,
+    ).toHaveBeenCalledWith("claude");
+  });
+
+  it("mount 直後、初回 fetchAgents の解決前に notifyAgentAddRequested→notifyAgentAdded が呼ばれても claude は正しく prefill される（新方式は fetchAgents のタイミングに依存しない）", async () => {
+    const harness = buildHarness([]);
+    let resolveFetch: (names: string[]) => void = () => {};
+    const fetchAgents = vi.fn(
+      () =>
+        new Promise<string[]>((resolve) => {
+          resolveFetch = resolve;
+        }),
+    );
+
+    render(
+      <TerminalPane
+        connect={harness.connect}
+        createXterm={harness.createXterm}
+        fetchAgents={fetchAgents}
+      />,
+    );
+
+    act(() => {
+      notifyAgentAddRequested("harness-guardian");
+      notifyAgentAdded("harness-guardian");
+    });
+    expect(screen.getByText("harness-guardian")).toBeInTheDocument();
+
+    act(() => {
+      resolveFetch(["medical"]);
+    });
+    await screen.findByText("medical");
+
+    await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(2));
+    expect(
+      harness.socketFor("harness-guardian", "agent").prefill,
+    ).toHaveBeenCalledWith("claude");
   });
 
   it("【安全要件・#57】prefill(agent, command) は shell（右）側の接続には一切届かない", async () => {

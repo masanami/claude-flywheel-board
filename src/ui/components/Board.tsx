@@ -4,7 +4,11 @@ import {
   type MdLiveChannel,
   createNoopMdLiveChannel,
 } from "../md-live-channel.ts";
-import { notifyAgentAdded } from "../terminal-control.ts";
+import {
+  notifyAgentAddFailed,
+  notifyAgentAddRequested,
+  notifyAgentAdded,
+} from "../terminal-control.ts";
 import { connectBoardSocket } from "../ws.ts";
 import type { AddAgentInput, AddAgentSubmitResult } from "./AddAgentForm.tsx";
 import { AddAgentForm } from "./AddAgentForm.tsx";
@@ -53,9 +57,29 @@ function buildWebSocketUrl(): string {
 // board 自身の設定である fleet.tsv・エージェント用ディレクトリ作成はその対象外
 // という整理は親 Issue #119 系列で確定し、docs/requirements.md・
 // docs/architecture.md に反映済み）。
+//
+// Issue #125（設計の経緯は terminal-control.ts 冒頭コメントが正本）:
+// このフォーム送信こそが
+// 「新規エージェントが追加された」ことを因果的に確定できる唯一の瞬間である
+// ため、notifyAgentAddRequested(input.name) をここで呼び、TerminalPane 側へ
+// 「次にこの名前が agent_update で届いたら claude を一度だけ prefill してよい」
+// と伝える。fetch() を開始する前（ネットワーク I/O 前）に呼ぶのは、サーバが
+// fleet 追記→scan→broadcastAgentUpdate まで完了してから HTTP レスポンスを
+// 返すため（src/server/api.ts の `POST /api/fleet/agents` ハンドラ:
+// `await addFleetEntry(...)` の内部で scan・broadcastAgentUpdate まで行った
+// 後に `return c.json(...)` している）、fetch 成功後にマークすると
+// WS 経由の agent_update がこの関数のレスポンスより先にブラウザへ届くレースで
+// 取り逃しうるため。送信が失敗した場合（この name のエージェントは作られない）
+// は notifyAgentAddFailed で確実にマークを取り消す（取り消さないと、同名の
+// 既存エージェントが後で通常の agent_update を受け取った際に誤って新規追加と
+// 判定され、稼働中セッションへ claude を誤 prefill しうる）。新しい WS 接続・
+// ポーリングは追加していない（既存の POST /api/fleet/agents 呼び出しに乗せて
+// いるだけ。親 Issue #119 クリティカル設計決定④）。
 async function submitAddAgent(
   input: AddAgentInput,
 ): Promise<AddAgentSubmitResult> {
+  notifyAgentAddRequested(input.name);
+
   let response: Response;
   try {
     response = await fetch("/api/fleet/agents", {
@@ -64,6 +88,7 @@ async function submitAddAgent(
       body: JSON.stringify(input),
     });
   } catch {
+    notifyAgentAddFailed(input.name);
     return {
       ok: false,
       error: "エージェントの追加に失敗しました（通信エラー）",
@@ -74,6 +99,7 @@ async function submitAddAgent(
     return { ok: true };
   }
 
+  notifyAgentAddFailed(input.name);
   let error = `エージェントの追加に失敗しました（status: ${response.status}）`;
   try {
     const body = (await response.json()) as { error?: unknown };

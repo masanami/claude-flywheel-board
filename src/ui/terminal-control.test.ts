@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  notifyAgentAddFailed,
+  notifyAgentAddRequested,
   notifyAgentAdded,
   prefill,
   registerTerminalController,
   resetTerminalControllerForTest,
   unregisterTerminalController,
 } from "./terminal-control.ts";
+import type { TerminalController } from "./terminal-control.ts";
 
 afterEach(() => {
   // モジュールスコープのレジストリをテスト間で汚染しないよう明示的にクリアする。
@@ -21,13 +24,26 @@ afterEach(() => {
   resetTerminalControllerForTest();
 });
 
+// Issue #125: TerminalController は markPendingNewAgent/clearPendingNewAgent も
+// 実装が必須のため、テスト用フェイクを都度組み立てるヘルパーを用意する。
+function buildFakeController(
+  overrides: Partial<TerminalController> = {},
+): TerminalController {
+  return {
+    prefill: vi.fn(),
+    addAgent: vi.fn(),
+    markPendingNewAgent: vi.fn(),
+    clearPendingNewAgent: vi.fn(),
+    ...overrides,
+  };
+}
+
 describe("terminal-control", () => {
   it("登録済みコントローラの prefill を呼ぶ", () => {
     const controllerPrefill = vi.fn();
-    registerTerminalController({
-      prefill: controllerPrefill,
-      addAgent: vi.fn(),
-    });
+    registerTerminalController(
+      buildFakeController({ prefill: controllerPrefill }),
+    );
 
     prefill("medical", "echo hi");
 
@@ -41,8 +57,8 @@ describe("terminal-control", () => {
   });
 
   it("unregisterTerminalController は現在登録中のものと一致する場合のみクリアする", () => {
-    const controllerA = { prefill: vi.fn(), addAgent: vi.fn() };
-    const controllerB = { prefill: vi.fn(), addAgent: vi.fn() };
+    const controllerA = buildFakeController();
+    const controllerB = buildFakeController();
 
     registerTerminalController(controllerA);
     // B は現在登録されていないため、unregister しても A は残る。
@@ -55,7 +71,7 @@ describe("terminal-control", () => {
   });
 
   it("登録中のコントローラを unregister すると以後 prefill は何もしない", () => {
-    const controller = { prefill: vi.fn(), addAgent: vi.fn() };
+    const controller = buildFakeController();
     registerTerminalController(controller);
     unregisterTerminalController(controller);
 
@@ -69,7 +85,7 @@ describe("terminal-control", () => {
     // 呼び出し元が登録済みインスタンスの参照を持っていない場合（テストの
     // afterEach 等）はクリアできない。resetTerminalControllerForTest は
     // 現在の登録内容を問わず必ず空にする。
-    const controller = { prefill: vi.fn(), addAgent: vi.fn() };
+    const controller = buildFakeController();
     registerTerminalController(controller);
 
     resetTerminalControllerForTest();
@@ -81,10 +97,9 @@ describe("terminal-control", () => {
 
   it("登録済みコントローラの addAgent を呼ぶ（Issue #124: agent_update 起点のタブ一覧反映）", () => {
     const controllerAddAgent = vi.fn();
-    registerTerminalController({
-      prefill: vi.fn(),
-      addAgent: controllerAddAgent,
-    });
+    registerTerminalController(
+      buildFakeController({ addAgent: controllerAddAgent }),
+    );
 
     notifyAgentAdded("harness-guardian");
 
@@ -94,6 +109,40 @@ describe("terminal-control", () => {
   it("未登録時に notifyAgentAdded を呼んでも何もしない（例外を投げない）", () => {
     expect(() => {
       notifyAgentAdded("harness-guardian");
+    }).not.toThrow();
+  });
+
+  it("登録済みコントローラの markPendingNewAgent を呼ぶ（Issue #125: エージェント追加フォーム送信起点の新規マーク）", () => {
+    const controllerMark = vi.fn();
+    registerTerminalController(
+      buildFakeController({ markPendingNewAgent: controllerMark }),
+    );
+
+    notifyAgentAddRequested("harness-guardian");
+
+    expect(controllerMark).toHaveBeenCalledWith("harness-guardian");
+  });
+
+  it("未登録時に notifyAgentAddRequested を呼んでも何もしない（例外を投げない）", () => {
+    expect(() => {
+      notifyAgentAddRequested("harness-guardian");
+    }).not.toThrow();
+  });
+
+  it("登録済みコントローラの clearPendingNewAgent を呼ぶ（Issue #125: 追加失敗時のマーク取り消し）", () => {
+    const controllerClear = vi.fn();
+    registerTerminalController(
+      buildFakeController({ clearPendingNewAgent: controllerClear }),
+    );
+
+    notifyAgentAddFailed("harness-guardian");
+
+    expect(controllerClear).toHaveBeenCalledWith("harness-guardian");
+  });
+
+  it("未登録時に notifyAgentAddFailed を呼んでも何もしない（例外を投げない）", () => {
+    expect(() => {
+      notifyAgentAddFailed("harness-guardian");
     }).not.toThrow();
   });
 });
