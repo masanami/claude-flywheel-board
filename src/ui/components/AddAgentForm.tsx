@@ -2,36 +2,47 @@ import { type FormEvent, useEffect, useRef, useState } from "react";
 
 export type AddAgentInput = { name: string; path: string };
 
+// POST /api/fleet/agents の成否をフォームへ伝える結果型（Issue #124）。
+// エラー時はサーバー側の構造化エラーメッセージ（src/server/api.ts の
+// `{ error: string }`）をそのまま error に載せ、add-agent-form-errors に
+// 表示する。
+export type AddAgentSubmitResult = { ok: true } | { ok: false; error: string };
+
 type AddAgentFormProps = {
   onClose: () => void;
-  // 送信ハンドラ（Issue #123 スコープでは仮実装。API 接続・ディレクトリ作成・
-  // fleet.tsv 追記は #124 のスコープ）。バリデーション通過後は常に同期的に
-  // フォームを閉じる（下記 handleSubmit 参照）。#124 でサーバ側エラー
-  // （名前衝突・パス重複等）を扱う際は、この「検証通過 = 即クローズ」の
-  // 前提ごと onSubmit の戻り値/クローズ制御を見直す必要がある
-  // （セルフレビュー指摘。本チケットでは先取りしない・YAGNI）。
-  onSubmit: (input: AddAgentInput) => void;
+  // 送信ハンドラ（Issue #124: Board.tsx から POST /api/fleet/agents を叩く
+  // 実処理が渡される）。Promise が解決するまでフォームは閉じない
+  // （下記 handleSubmit 参照）。ok:false の場合はサーバー側バリデーション
+  // エラーを add-agent-form-errors に表示し、フォームは開いたままにする。
+  onSubmit: (input: AddAgentInput) => Promise<AddAgentSubmitResult>;
+  // パス欄の自動補完に使うベースディレクトリ（絶対パス）。Board.tsx が
+  // 既存 fleet エージェントの実際のパスから算出して渡す（ブラウザの JS から
+  // は OS のホームディレクトリを取得できないため、"~" のハードコードでは
+  // サーバー側の絶対パス限定バリデーションと必ず不整合になる。既存エージェント
+  // が1件も無い場合は空文字が渡され、パス欄は空のまま始まる）。
+  basePath: string;
 };
 
-// パス欄の自動補完に使うベースディレクトリ。実際のパス確定・ディレクトリ
-// 作成のロジックは #124 以降のスコープのため、ここでは軽量な UX 補助として
-// ハードコードする（#123 の実装方針: ベースディレクトリの具体的な値は
-// ハードコードで構わない。過度な作り込みは不要）。
-// 注意（セルフレビュー指摘・#124 への申し送り）: "~" はこのプロジェクトの
-// どの層（src/server/manifest.ts の loadFleetManifest・watcher・
-// pty/tmux 起動）でも展開されない。#124 でフォーム確定値を fleet.tsv へ
-// 書き込む際は、サーバ側でチルダ展開するか絶対パスへ変換する対応が必須。
-const BASE_DIR = "~/agents";
-
-function buildDefaultPath(name: string): string {
+function buildDefaultPath(name: string, basePath: string): string {
+  if (basePath === "") {
+    // 既存エージェントが1件も無く親ディレクトリを推測できない場合、名前だけ
+    // から相対パスを組み立てない（セルフレビュー指摘: サーバは絶対パスしか
+    // 受け付けないため、相対パスを既定値にすると初回追加が必ず 400 になる）。
+    // ユーザーが絶対パスを直接入力する。
+    return "";
+  }
   const trimmedName = name.trim();
-  return trimmedName === "" ? BASE_DIR : `${BASE_DIR}/${trimmedName}`;
+  return trimmedName === "" ? basePath : `${basePath}/${trimmedName}`;
 }
 
-// サーバ側正本（src/server/manifest.ts の loadFleetManifest）のバリデーション
-// 規則のうち「名前が空でない」「末尾 -shell 禁止」をクライアント側の簡易
-// バリデーションとして軽量に再現する（親 Issue #119 クリティカル設計決定）。
-// name の重複チェック等の詳細な検証はサーバ側の責務であり、ここでは行わない。
+// サーバ側正本（src/server/manifest.ts の loadFleetManifest・src/server/api.ts
+// の絶対パス判定）のバリデーション規則のうち「名前が空でない」「末尾 -shell
+// 禁止」「パスは絶対パス」をクライアント側の簡易バリデーションとして軽量に
+// 再現する（親 Issue #119 クリティカル設計決定）。node:path はブラウザ
+// バンドルへ持ち込まないため、絶対パス判定は POSIX の "/" 始まり判定に留める
+// （このプロジェクトはローカル macOS/Linux 環境のみを対象とする。
+// CLAUDE.md 技術スタック参照）。name の重複チェック等、より詳細な検証は
+// サーバ側の責務であり、ここでは行わない。
 function validate(name: string, path: string): string[] {
   const errors: string[] = [];
   const trimmedName = name.trim();
@@ -42,31 +53,51 @@ function validate(name: string, path: string): string[] {
       '末尾 "-shell" は手動シェルセッション用に予約されています。別の名前にしてください',
     );
   }
-  if (path.trim() === "") {
+  const trimmedPath = path.trim();
+  if (trimmedPath === "") {
     errors.push("パスを入力してください");
+  } else if (!trimmedPath.startsWith("/")) {
+    errors.push(
+      'パスは絶対パスで入力してください（"/" から始まる必要があります）',
+    );
   }
   return errors;
 }
 
-// 「＋ エージェント追加」フォーム（Issue #123）: フォームの表示・入力状態管理・
-// クライアント側簡易バリデーション・パス補完までが本チケットのスコープ。
-// 送信ハンドラは仮実装で、API 呼び出し（ディレクトリ作成・fleet.tsv 追記）は
-// 行わない（#124 のスコープ）。本チケット時点では一切の書き込みを行わない
-// ため、NFR-01（board は台帳・journal・memory・runs.jsonl に書き込まない）
-// への抵触は無い（NFR-01 と fleet.tsv 書き込みの境界整理の詳細・docs反映
-// 状況は Board.tsx の handleAddAgentSubmit 直前コメント参照。#124 実装時も
-// この区別が前提になる）。
+// 「＋ エージェント追加」フォーム（Issue #123 で表示・入力状態管理・
+// クライアント側簡易バリデーション・パス補完を実装。Issue #124 で
+// POST /api/fleet/agents との結線・サーバー側エラー表示・送信中制御を追加）。
+// 本チケット時点でも board 自身が fs 書き込みを行うことは無く、HTTP 呼び出し
+// のみを行う（fleet.tsv への書き込みはサーバ側 API の境界内で完結。NFR-01 の
+// 対象はエージェントの状態ファイルであり board 自身の設定である fleet.tsv は
+// 対象外という整理は親 Issue #119 系列で確定し docs/requirements.md・
+// docs/architecture.md に反映済み）。
 //
 // CardDetailModal と同じくネイティブ <dialog> + showModal() を採用し、
 // フォーカストラップ・ESC・背景クリックでの close() 発火はブラウザ実装に
 // 委ねる（自前実装はしない）。
-export function AddAgentForm({ onClose, onSubmit }: AddAgentFormProps) {
+export function AddAgentForm({
+  onClose,
+  onSubmit,
+  basePath,
+}: AddAgentFormProps) {
   const [name, setName] = useState("");
-  const [path, setPath] = useState(BASE_DIR);
+  // basePath は意図的に「マウント時のシード値」としてのみ扱う（useState の
+  // 初期値は初回レンダーでのみ評価される）。Board.tsx は agent_update の
+  // たびに basePath を再計算して渡すため、フォームを開いたまま裏で新規
+  // エージェントが増える（＝computeBasePathHint の算出元が変わる）と、
+  // 以降 handleNameChange の自動補完（basePath の最新値を直接参照）が
+  // 表示中の path 欄の値と食い違いうる（セルフレビュー指摘）。ただし
+  // これはあくまで手動編集可能な補完ヒントであり、実際に影響するのは稀な
+  // タイミング（フォームを開いたまま最初の1体が追加される等）に限られる
+  // ため、prop 変化への追随は過剰実装として見送る（YAGNI）。
+  const [path, setPath] = useState(basePath);
   // path 欄をユーザーが直接編集した後は、name 変更による自動補完で上書き
   // しない（一度手動編集したら以降はユーザーの入力を尊重する）。
   const [pathTouched, setPathTouched] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
+  // サーバーへの送信中は二重送信を防ぐため送信ボタンを無効化する。
+  const [submitting, setSubmitting] = useState(false);
 
   const dialogRef = useRef<HTMLDialogElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
@@ -75,6 +106,15 @@ export function AddAgentForm({ onClose, onSubmit }: AddAgentFormProps) {
   useEffect(() => {
     onCloseRef.current = onClose;
   }, [onClose]);
+  // ESC（ネイティブ "cancel" イベント）ハンドラは mount 時の1回しか登録しない
+  // effect 内から最新の submitting を読む必要があるため、ref 経由で参照する
+  // （セルフレビュー指摘: 送信中に ESC で閉じると、後から届く onSubmit の結果
+  // （特にサーバー側エラー）を表示する先が失われ、ユーザーに何のフィード
+  // バックも残らない）。
+  const submittingRef = useRef(false);
+  useEffect(() => {
+    submittingRef.current = submitting;
+  }, [submitting]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -91,16 +131,26 @@ export function AddAgentForm({ onClose, onSubmit }: AddAgentFormProps) {
     const handleClose = () => {
       onCloseRef.current();
     };
+    // ESC 押下時は "cancel" → "close" の順でネイティブイベントが発火する。
+    // 送信中は cancel を preventDefault してダイアログを閉じさせない
+    // （オーバーレイクリック・「閉じる」ボタンのガードと合わせて三重に防ぐ）。
+    const handleCancel = (event: Event) => {
+      if (submittingRef.current) {
+        event.preventDefault();
+      }
+    };
     dialog.addEventListener("close", handleClose);
+    dialog.addEventListener("cancel", handleCancel);
     return () => {
       dialog.removeEventListener("close", handleClose);
+      dialog.removeEventListener("cancel", handleCancel);
     };
   }, []);
 
   function handleNameChange(value: string) {
     setName(value);
     if (!pathTouched) {
-      setPath(buildDefaultPath(value));
+      setPath(buildDefaultPath(value, basePath));
     }
     // 再編集を始めたら、直前の送信エラー表示は一旦引っ込める（セルフレビュー指摘）。
     setErrors([]);
@@ -112,14 +162,44 @@ export function AddAgentForm({ onClose, onSubmit }: AddAgentFormProps) {
     setErrors([]);
   }
 
-  function handleSubmit(event: FormEvent) {
+  async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     const validationErrors = validate(name, path);
     if (validationErrors.length > 0) {
       setErrors(validationErrors);
       return;
     }
-    onSubmit({ name: name.trim(), path: path.trim() });
+    setErrors([]);
+    setSubmitting(true);
+    let result: AddAgentSubmitResult;
+    try {
+      result = await onSubmit({ name: name.trim(), path: path.trim() });
+    } catch {
+      // onSubmit の契約は Promise<AddAgentSubmitResult>（reject しない想定。
+      // Board.tsx の submitAddAgent も全経路で catch 済み）だが、将来の
+      // onSubmit 実装が reject した場合でも submitting が固定されたまま
+      // 送信ボタンが恒久的に無効化されないよう防御する（セルフレビュー指摘）。
+      setSubmitting(false);
+      setErrors(["エージェントの追加に失敗しました（予期しないエラー）"]);
+      return;
+    }
+    setSubmitting(false);
+    if (result.ok) {
+      dialogRef.current?.close();
+      return;
+    }
+    // サーバー側バリデーションエラー（名前規則・パス重複・名前衝突等）を
+    // 既存のエラー表示 UI（add-agent-form-errors）に載せる。フォームは
+    // 開いたままにし、ユーザーが値を修正して再送信できるようにする。
+    setErrors([result.error]);
+  }
+
+  function closeIfNotSubmitting() {
+    // 送信中はオーバーレイクリック・「閉じる」ボタンでは閉じない
+    // （ESC 対策は上の "cancel" イベントハンドラ参照）。
+    if (submitting) {
+      return;
+    }
     dialogRef.current?.close();
   }
 
@@ -135,7 +215,7 @@ export function AddAgentForm({ onClose, onSubmit }: AddAgentFormProps) {
       }}
       onClick={(event) => {
         if (mouseDownOnDialog.current && event.target === event.currentTarget) {
-          dialogRef.current?.close();
+          closeIfNotSubmitting();
         }
         mouseDownOnDialog.current = false;
       }}
@@ -151,7 +231,7 @@ export function AddAgentForm({ onClose, onSubmit }: AddAgentFormProps) {
           <button
             type="button"
             className="modal-close-button"
-            onClick={() => dialogRef.current?.close()}
+            onClick={closeIfNotSubmitting}
           >
             閉じる
           </button>
@@ -172,7 +252,7 @@ export function AddAgentForm({ onClose, onSubmit }: AddAgentFormProps) {
             <input
               type="text"
               value={path}
-              placeholder={BASE_DIR}
+              placeholder={basePath || "絶対パスを入力してください"}
               onChange={(event) => handlePathChange(event.target.value)}
             />
           </label>
@@ -188,7 +268,11 @@ export function AddAgentForm({ onClose, onSubmit }: AddAgentFormProps) {
             </ul>
           )}
           <div className="add-agent-form-actions">
-            <button type="submit" className="add-agent-form-submit">
+            <button
+              type="submit"
+              className="add-agent-form-submit"
+              disabled={submitting}
+            >
               追加
             </button>
           </div>

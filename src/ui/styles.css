@@ -736,6 +736,15 @@ body {
   cursor: pointer;
 }
 
+/* 送信中（POST /api/fleet/agents 応答待ち）は disabled 化されるが、既定の
+   color/cursor 指定が UA の disabled 既定表示（GrayText 化等）を上書きして
+   しまい無反応に見えるため、明示的に視覚的フィードバックを与える
+   （セルフレビュー指摘・Issue #124）。 */
+.add-agent-form-submit:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .card-detail-log-heading {
   font-size: 0.85rem;
   margin: 0 0 0.5rem;

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  notifyAgentAdded,
   prefill,
   registerTerminalController,
   resetTerminalControllerForTest,
@@ -23,7 +24,10 @@ afterEach(() => {
 describe("terminal-control", () => {
   it("登録済みコントローラの prefill を呼ぶ", () => {
     const controllerPrefill = vi.fn();
-    registerTerminalController({ prefill: controllerPrefill });
+    registerTerminalController({
+      prefill: controllerPrefill,
+      addAgent: vi.fn(),
+    });
 
     prefill("medical", "echo hi");
 
@@ -37,8 +41,8 @@ describe("terminal-control", () => {
   });
 
   it("unregisterTerminalController は現在登録中のものと一致する場合のみクリアする", () => {
-    const controllerA = { prefill: vi.fn() };
-    const controllerB = { prefill: vi.fn() };
+    const controllerA = { prefill: vi.fn(), addAgent: vi.fn() };
+    const controllerB = { prefill: vi.fn(), addAgent: vi.fn() };
 
     registerTerminalController(controllerA);
     // B は現在登録されていないため、unregister しても A は残る。
@@ -51,7 +55,7 @@ describe("terminal-control", () => {
   });
 
   it("登録中のコントローラを unregister すると以後 prefill は何もしない", () => {
-    const controller = { prefill: vi.fn() };
+    const controller = { prefill: vi.fn(), addAgent: vi.fn() };
     registerTerminalController(controller);
     unregisterTerminalController(controller);
 
@@ -65,7 +69,7 @@ describe("terminal-control", () => {
     // 呼び出し元が登録済みインスタンスの参照を持っていない場合（テストの
     // afterEach 等）はクリアできない。resetTerminalControllerForTest は
     // 現在の登録内容を問わず必ず空にする。
-    const controller = { prefill: vi.fn() };
+    const controller = { prefill: vi.fn(), addAgent: vi.fn() };
     registerTerminalController(controller);
 
     resetTerminalControllerForTest();
@@ -73,5 +77,23 @@ describe("terminal-control", () => {
     prefill("medical", "echo hi");
 
     expect(controller.prefill).not.toHaveBeenCalled();
+  });
+
+  it("登録済みコントローラの addAgent を呼ぶ（Issue #124: agent_update 起点のタブ一覧反映）", () => {
+    const controllerAddAgent = vi.fn();
+    registerTerminalController({
+      prefill: vi.fn(),
+      addAgent: controllerAddAgent,
+    });
+
+    notifyAgentAdded("harness-guardian");
+
+    expect(controllerAddAgent).toHaveBeenCalledWith("harness-guardian");
+  });
+
+  it("未登録時に notifyAgentAdded を呼んでも何もしない（例外を投げない）", () => {
+    expect(() => {
+      notifyAgentAdded("harness-guardian");
+    }).not.toThrow();
   });
 });
