@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentBoard, BoardSnapshot } from "../board-types.ts";
@@ -246,6 +246,105 @@ describe("Board", () => {
     expect(mainRow?.firstElementChild).toBe(
       screen.getByTestId("preview-panel"),
     );
+  });
+
+  describe("「＋ エージェント追加」ボタン（Issue #123）", () => {
+    it("ボタンが表示され、クリックでフォームが開く", async () => {
+      const { Board } = await import("./Board.tsx");
+      render(<Board />);
+
+      act(() => {
+        latestOptions().onSnapshot(snapshot([agentBoard({ name: "medical" })]));
+      });
+
+      expect(screen.queryByTestId("add-agent-form")).not.toBeInTheDocument();
+
+      act(() => {
+        screen.getByRole("button", { name: "＋ エージェント追加" }).click();
+      });
+
+      expect(screen.getByTestId("add-agent-form")).toBeInTheDocument();
+    });
+
+    it("フォームの「閉じる」で閉じる", async () => {
+      const { Board } = await import("./Board.tsx");
+      render(<Board />);
+
+      act(() => {
+        latestOptions().onSnapshot(snapshot([agentBoard({ name: "medical" })]));
+      });
+
+      act(() => {
+        screen.getByRole("button", { name: "＋ エージェント追加" }).click();
+      });
+
+      act(() => {
+        screen.getByRole("button", { name: "閉じる" }).click();
+      });
+
+      expect(screen.queryByTestId("add-agent-form")).not.toBeInTheDocument();
+    });
+
+    it("有効な入力で送信すると、フォームが閉じる", async () => {
+      const { Board } = await import("./Board.tsx");
+      render(<Board />);
+
+      act(() => {
+        latestOptions().onSnapshot(snapshot([agentBoard({ name: "medical" })]));
+      });
+
+      act(() => {
+        screen.getByRole("button", { name: "＋ エージェント追加" }).click();
+      });
+
+      act(() => {
+        fireEvent.change(
+          screen.getByRole("textbox", { name: "エージェント名" }),
+          { target: { value: "harness-guardian" } },
+        );
+      });
+
+      act(() => {
+        screen.getByRole("button", { name: "追加" }).click();
+      });
+
+      expect(screen.queryByTestId("add-agent-form")).not.toBeInTheDocument();
+    });
+
+    // セルフレビュー指摘: 上記テストは送信ハンドラが呼ばれたこと自体は検証
+    // していたが、「送信ハンドラ自体がAPI接続をしない仮実装であること」
+    // （本チケット #123 の完了条件）を裏付けるアサーションではなかった。
+    // fetch が一切呼ばれないことを直接検証する（#124 で送信ハンドラが実処理
+    // に置き換わるとこのテストは意図的に更新・削除される想定であり、恒久的な
+    // 回帰ガードではなく #123 スコープでの仮実装であることの表明）。
+    it("有効な入力で送信しても、フォームは閉じるが fetch は一切呼ばれない（送信ハンドラはAPI接続をしない仮実装）", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      const { Board } = await import("./Board.tsx");
+      render(<Board />);
+
+      act(() => {
+        latestOptions().onSnapshot(snapshot([agentBoard({ name: "medical" })]));
+      });
+
+      act(() => {
+        screen.getByRole("button", { name: "＋ エージェント追加" }).click();
+      });
+
+      act(() => {
+        fireEvent.change(
+          screen.getByRole("textbox", { name: "エージェント名" }),
+          { target: { value: "harness-guardian" } },
+        );
+      });
+
+      act(() => {
+        screen.getByRole("button", { name: "追加" }).click();
+      });
+
+      expect(screen.queryByTestId("add-agent-form")).not.toBeInTheDocument();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
   });
 
   it("アンマウント時に close() を呼ぶ", async () => {
