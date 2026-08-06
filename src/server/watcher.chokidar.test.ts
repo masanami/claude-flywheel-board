@@ -16,6 +16,7 @@ const FIXTURES_ROOT = fileURLToPath(
 
 class FakeFSWatcher extends EventEmitter {
   close = vi.fn().mockResolvedValue(undefined);
+  add = vi.fn();
 }
 
 function mockChokidarWatch(): FakeFSWatcher {
@@ -49,6 +50,9 @@ async function waitUntil(
 
 const agentA: FleetEntry = { name: "agent-a", path: `${FIXTURES_ROOT}agent-a` };
 const agentB: FleetEntry = { name: "agent-b", path: `${FIXTURES_ROOT}agent-b` };
+// Issue #121: 動的追加（addAgentWatch）のテスト専用に、起動時 entries には
+// 含めない新規エージェント役の fixture を用意する。
+const agentC: FleetEntry = { name: "agent-c", path: `${FIXTURES_ROOT}agent-c` };
 
 beforeEach(() => {
   vi.mocked(watch).mockReset();
@@ -293,5 +297,144 @@ describe("startFleetWatcher", () => {
     ).not.toThrow();
 
     void fleetWatcher.close();
+  });
+});
+
+describe("startFleetWatcher().addAgentWatch（Issue #121: 稼働中の watcher への動的追加）", () => {
+  it("addAgentWatch 呼び出し後も chokidar.watch() は再呼び出しされない（既存監視ハンドルを再生成しない）", async () => {
+    mockChokidarWatch();
+    const cache = createMemoryBoardCache();
+    const onAgentUpdate = vi.fn();
+
+    const fleetWatcher = startFleetWatcher([agentA], cache, onAgentUpdate);
+    expect(watch).toHaveBeenCalledTimes(1);
+
+    await fleetWatcher.addAgentWatch(agentC);
+
+    expect(watch).toHaveBeenCalledTimes(1);
+
+    await fleetWatcher.close();
+  });
+
+  it("addAgentWatch が chokidarWatcher.add() を新規 entry の ledger/journal/runs パス＋repo ディレクトリで呼ぶ", async () => {
+    const fake = mockChokidarWatch();
+    const cache = createMemoryBoardCache();
+    const onAgentUpdate = vi.fn();
+
+    const fleetWatcher = startFleetWatcher([agentA], cache, onAgentUpdate);
+
+    await fleetWatcher.addAgentWatch(agentC);
+
+    expect(fake.add).toHaveBeenCalledTimes(1);
+    expect(fake.add).toHaveBeenCalledWith([
+      path.join(agentC.path, "challenge-ledger.md"),
+      path.join(agentC.path, "journal", "index.jsonl"),
+      path.join(agentC.path, ".flywheel", "runs.jsonl"),
+      agentC.path,
+    ]);
+
+    await fleetWatcher.close();
+  });
+
+  it("addAgentWatch 完了時点で新規 entry のみ初回スキャンされ onAgentUpdate が呼ばれる（既存 entry は再スキャンされない）", async () => {
+    mockChokidarWatch();
+    const cache = createMemoryBoardCache();
+    const onAgentUpdate = vi.fn();
+
+    const fleetWatcher = startFleetWatcher([agentA], cache, onAgentUpdate, {
+      debounceMs: 10,
+      fullRescanIntervalMs: 10 * 60 * 1000,
+    });
+    onAgentUpdate.mockClear();
+
+    await fleetWatcher.addAgentWatch(agentC);
+
+    expect(onAgentUpdate).toHaveBeenCalledTimes(1);
+    expect(onAgentUpdate.mock.calls[0]?.[0]?.name).toBe("agent-c");
+    expect(onAgentUpdate.mock.calls.map((call) => call[0]?.name)).not.toContain(
+      "agent-a",
+    );
+
+    await fleetWatcher.close();
+  });
+
+  it("addAgentWatch 後、新規 entry の監視パスへの change イベントが該当 entry を再スキャンする", async () => {
+    const fake = mockChokidarWatch();
+    const cache = createMemoryBoardCache();
+    const onAgentUpdate = vi.fn();
+
+    const fleetWatcher = startFleetWatcher([agentA], cache, onAgentUpdate, {
+      debounceMs: 30,
+      fullRescanIntervalMs: 10 * 60 * 1000,
+    });
+
+    await fleetWatcher.addAgentWatch(agentC);
+    onAgentUpdate.mockClear();
+
+    fake.emit("change", path.join(agentC.path, "challenge-ledger.md"));
+
+    await waitUntil(() => onAgentUpdate.mock.calls.length > 0);
+
+    expect(onAgentUpdate).toHaveBeenCalledTimes(1);
+    expect(onAgentUpdate.mock.calls[0]?.[0]?.name).toBe("agent-c");
+
+    await fleetWatcher.close();
+  });
+
+  it("close() 済みの watcher に addAgentWatch を呼ぶと拒否され、chokidar watcher は復活しない（close() 契約の維持）", async () => {
+    const fake = mockChokidarWatch();
+    const cache = createMemoryBoardCache();
+    const onAgentUpdate = vi.fn();
+
+    const fleetWatcher = startFleetWatcher([agentA], cache, onAgentUpdate);
+    await fleetWatcher.close();
+
+    await expect(fleetWatcher.addAgentWatch(agentC)).rejects.toThrow();
+    expect(fake.add).not.toHaveBeenCalled();
+  });
+
+  it("addAgentWatch 後、新規 entry の repo ディレクトリ直下への challenge-archive*.md の add イベントが該当 entry を再スキャンする（entryByDir 経路。Issue #50 ①のアーカイブ検知が動的追加でも機能することの確認）", async () => {
+    const fake = mockChokidarWatch();
+    const cache = createMemoryBoardCache();
+    const onAgentUpdate = vi.fn();
+
+    const fleetWatcher = startFleetWatcher([agentA], cache, onAgentUpdate, {
+      debounceMs: 30,
+      fullRescanIntervalMs: 10 * 60 * 1000,
+    });
+
+    await fleetWatcher.addAgentWatch(agentC);
+    onAgentUpdate.mockClear();
+
+    fake.emit("add", path.join(agentC.path, "challenge-archive-2026.md"));
+
+    await waitUntil(() => onAgentUpdate.mock.calls.length > 0);
+
+    expect(onAgentUpdate).toHaveBeenCalledTimes(1);
+    expect(onAgentUpdate.mock.calls[0]?.[0]?.name).toBe("agent-c");
+
+    await fleetWatcher.close();
+  });
+
+  it("addAgentWatch で追加した entry も低頻度フル再スキャンの対象に含まれる", async () => {
+    mockChokidarWatch();
+    const cache = createMemoryBoardCache();
+    const onAgentUpdate = vi.fn();
+
+    const fleetWatcher = startFleetWatcher([agentA], cache, onAgentUpdate, {
+      debounceMs: 10,
+      fullRescanIntervalMs: 50,
+    });
+
+    await fleetWatcher.addAgentWatch(agentC);
+    onAgentUpdate.mockClear();
+
+    await waitUntil(
+      () =>
+        onAgentUpdate.mock.calls.some((call) => call[0]?.name === "agent-a") &&
+        onAgentUpdate.mock.calls.some((call) => call[0]?.name === "agent-c"),
+    );
+
+    await fleetWatcher.close();
   });
 });

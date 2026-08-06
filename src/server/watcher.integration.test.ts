@@ -221,4 +221,50 @@ describe("watcher 結合テスト（実 chokidar・実フィクスチャファ�
     expect(missing?.challenges).toEqual([]);
     expect(missing?.parseErrors.length).toBeGreaterThan(0);
   });
+
+  it("addAgentWatch で動的に追加した repo の challenge-ledger.md 書き換えも実 chokidar で検知される（Issue #121）", async () => {
+    const repoRootA = path.join(tmpRoot, "agent-a");
+    writeAgentRepo(repoRootA, LEDGER_V1, JOURNAL_V1);
+    const entryA: FleetEntry = { name: "agent-a", path: repoRootA };
+
+    const cache = createMemoryBoardCache();
+
+    watcherHandle = startFleetWatcher([entryA], cache, () => {}, {
+      debounceMs: 100,
+      fullRescanIntervalMs: 10 * 60 * 1000,
+    });
+
+    // 固定 sleep ではなく、起動時 entry（agent-a）が ready 後の整合スキャンで
+    // cache に反映されるのを明示的に待つ（セルフレビュー指摘対応: 末尾の
+    // 「既存 entry は動的追加の影響を受けない」アサーションが暗黙に
+    // ready 完了へ依存していたため、負荷時の flaky 化要因になっていた）。
+    await waitUntil(
+      () => cache.getChallenge("agent-a", "C-500")?.status === "未分類",
+    );
+
+    // Issue #119 が想定するオンボーディングの流れ: 起動後に新規エージェントの
+    // repo が追加される。事前にファイルを用意してから動的追加する。
+    const repoRootNew = path.join(tmpRoot, "agent-new");
+    writeAgentRepo(repoRootNew, LEDGER_V1, JOURNAL_V1);
+    const entryNew: FleetEntry = { name: "agent-new", path: repoRootNew };
+
+    await watcherHandle.addAgentWatch(entryNew);
+
+    // 動的追加時の初回スキャンで新規 entry が既に反映されていること。
+    expect(cache.getChallenge("agent-new", "C-500")?.status).toBe("未分類");
+
+    fs.writeFileSync(
+      path.join(repoRootNew, "challenge-ledger.md"),
+      LEDGER_V2,
+      "utf-8",
+    );
+
+    await waitUntil(
+      () => cache.getChallenge("agent-new", "C-500")?.status === "着手中",
+    );
+
+    expect(cache.getChallenge("agent-new", "C-500")?.status).toBe("着手中");
+    // 既存 entry（agent-a）は動的追加の影響を受けず、引き続き元の状態のまま。
+    expect(cache.getChallenge("agent-a", "C-500")?.status).toBe("未分類");
+  });
 });

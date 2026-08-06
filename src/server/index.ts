@@ -9,7 +9,7 @@ import { attachWebSocketServer, registerApiRoutes } from "./api.ts";
 import type { BoardCache } from "./cache.ts";
 import { createMemoryBoardCache } from "./cache.ts";
 import { NO_FLEET_ENTRIES, loadFleetManifest } from "./manifest.ts";
-import type { GetFleetEntries } from "./manifest.ts";
+import type { FleetEntry, GetFleetEntries } from "./manifest.ts";
 import {
   TERMINAL_WS_PATH,
   createTerminalWebSocketServer,
@@ -17,6 +17,7 @@ import {
 import type { TerminalWebSocketServer } from "./pty/bridge.ts";
 import { startStaleReevaluation } from "./stale-reevaluation.ts";
 import { fullScan, startFleetWatcher } from "./watcher.ts";
+import type { FleetWatcher } from "./watcher.ts";
 
 // NFR-03 / クリティカル設計決定: サーバは 127.0.0.1 に固定バインドする。
 // 環境変数・起動引数など、外部からホストを上書きできる口は意図的に作らない。
@@ -97,6 +98,41 @@ export function attachTerminalUpgradeRouting(
       socket.destroy();
     }
   });
+}
+
+/**
+ * 稼働中サーバへ新規エージェントを1件動的に追加する「再構築機構」（Issue #121）。
+ *
+ * HTTP（registerApiRoutes / createApp 経由）・WS（attachWebSocketServer）・
+ * pty ブリッジ（createTerminalWebSocketServer）は起動時に渡された getFleetEntries
+ * コールバック経由で fleetEntries 配列を遅延参照している（Issue #62）。この
+ * 配列（同一参照）へ push することで、次回以降の getFleetEntries() 呼び出しが
+ * 新 entry を含むようになる。fleetWatcher へは addAgentWatch で追加し、
+ * 稼働中の chokidar 監視ハンドルを再生成せずに監視対象へ加える。
+ *
+ * クリティカル設計決定: loadFleetManifest() をここから再度呼び出さない
+ * （「loadFleetManifest() の呼び出しは起動時1箇所のみ」という isMainModule
+ * ブロックの不変条件を維持する）。fleet.tsv への追記（#120）・API エンドポイント
+ * としての配線（#122）・name 重複や repo パス妥当性等のバリデーションはこの
+ * 関数のスコープ外（無条件追加。将来 #122 側の責務）。
+ *
+ * 失敗時の挙動（セルフレビュー指摘対応の明記）: fleetEntries への push は常に
+ * 成功する（同期処理・例外なし）。その後の addAgentWatch が失敗した場合、
+ * push 済みの entry はロールバックされず、HTTP/WS/pty からは見えるが
+ * watcher には監視されない状態になりうる。また戻り値の Promise が resolve
+ * することは「追加した entry の初回スキャンが完了した」ことを意味するのみで、
+ * スキャン自体の成否（parseErrors の有無）までは表さない
+ * （scanAgent の既存方針どおり、読み込み失敗は例外ではなく該当 entry の
+ * ParseError として可視化される）。呼び出し元（#122）がこれらを利用者へ
+ * 通知する必要がある場合は、呼び出し元の責務として設計する。
+ */
+export async function addFleetEntry(
+  fleetEntries: FleetEntry[],
+  fleetWatcher: FleetWatcher,
+  entry: FleetEntry,
+): Promise<void> {
+  fleetEntries.push(entry);
+  await fleetWatcher.addAgentWatch(entry);
 }
 
 const isMainModule = process.argv[1] === fileURLToPath(import.meta.url);
