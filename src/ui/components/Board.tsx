@@ -5,6 +5,8 @@ import {
   createNoopMdLiveChannel,
 } from "../md-live-channel.ts";
 import { connectBoardSocket } from "../ws.ts";
+import type { AddAgentInput } from "./AddAgentForm.tsx";
+import { AddAgentForm } from "./AddAgentForm.tsx";
 import { AgentColumn } from "./AgentColumn.tsx";
 import type { BoardFilter } from "./FilterBar.tsx";
 import { FilterBar } from "./FilterBar.tsx";
@@ -37,6 +39,22 @@ function buildWebSocketUrl(): string {
   return `${protocol}//${window.location.host}/ws`;
 }
 
+// 送信ハンドラは仮実装（Issue #123 スコープ）。ディレクトリ作成・fleet.tsv
+// 追記・マニフェスト再読み込み等の API 接続は #124 のスコープであり、ここでは
+// 行わない。本チケット時点では一切の書き込みを行わないため、NFR-01（board は
+// 台帳・journal・memory・runs.jsonl に書き込まない）への抵触は無い。
+//
+// 補足（セルフレビュー指摘・#119「設計上の論点」参照。docs 未反映のため
+// "決定済み" とは言い切らない）: #124 で書く fleet.tsv は board 自身の起動
+// 設定であり、NFR-01 が禁じる「エージェントの状態ファイル」（台帳・journal・
+// memory・runs.jsonl）とは別物という整理を親 Issue #119 は提案しているが、
+// 2026-08-06 時点で requirements.md / architecture.md にはまだ反映されて
+// いない（#119 受け入れ基準の該当項目は未チェック）。#124 実装時は、まず
+// この整理を docs に反映してから fleet.tsv への書き込みに着手すること。
+function handleAddAgentSubmit(input: AddAgentInput): void {
+  console.log("TODO(#124): エージェント追加の送信処理は未実装", input);
+}
+
 function upsertAgent(agents: AgentBoard[], updated: AgentBoard): AgentBoard[] {
   const index = agents.findIndex((a) => a.name === updated.name);
   if (index === -1) {
@@ -58,6 +76,8 @@ export function Board() {
   // アーカイブビュー（Issue #50 ①）。true の間は盤面全体をライブ台帳から
   // challenge-archive*.md 表示へ切り替える。default false。
   const [archiveMode, setArchiveMode] = useState(false);
+  // 「＋ エージェント追加」フォームの開閉状態（Issue #123）。
+  const [addAgentFormOpen, setAddAgentFormOpen] = useState(false);
 
   // Issue #70: PreviewPanel との橋渡し（md-live-channel.ts 参照）。Board が
   // 保有する唯一の WS 接続の subscribeMd/unsubscribeMd をそのまま転送し、
@@ -107,6 +127,15 @@ export function Board() {
 
   return (
     <div className="board">
+      <div className="board-header">
+        <button
+          type="button"
+          className="add-agent-button"
+          onClick={() => setAddAgentFormOpen(true)}
+        >
+          ＋ エージェント追加
+        </button>
+      </div>
       <FilterBar
         value={filter}
         onChange={setFilter}
@@ -115,6 +144,12 @@ export function Board() {
         archiveMode={archiveMode}
         onArchiveModeChange={setArchiveMode}
       />
+      {addAgentFormOpen && (
+        <AddAgentForm
+          onClose={() => setAddAgentFormOpen(false)}
+          onSubmit={handleAddAgentSubmit}
+        />
+      )}
       {/* 左サイドパネル（PreviewPanel）は flex でボードカラム領域を圧縮して
           確保する（下部ターミナル領域の高さ・幅には一切影響しない。
           docs/features/markdown-preview.md「機能全体の設計」節）。この行

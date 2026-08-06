@@ -636,6 +636,106 @@ body {
   cursor: pointer;
 }
 
+/* 「＋ エージェント追加」ボタン（Issue #123）: FilterBar とは独立した
+ * ヘッダ行に配置する（filter-bar 自身の相互排他チップ/トグル群には混ぜない）。
+ */
+.board-header {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0.5rem 1rem 0;
+}
+
+.add-agent-button {
+  border: 1px solid var(--board-border);
+  background: var(--board-chip-bg);
+  color: var(--board-fg);
+  border-radius: 6px;
+  padding: 0.35rem 0.9rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+/* 「＋ エージェント追加」フォーム（Issue #123）: CardDetailModal と同じく
+ * ネイティブ <dialog> + showModal() を採用する。フォーム UI の器のみが
+ * 本チケットのスコープであり、送信ハンドラは仮実装（#124 で API 接続）。
+ */
+.add-agent-form-modal {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  background: var(--board-modal-bg);
+  border: 1px solid var(--board-modal-border);
+  border-radius: 8px;
+  padding: 0;
+  width: 100%;
+  max-width: 420px;
+}
+
+.add-agent-form-modal::backdrop {
+  background: var(--board-modal-overlay-bg);
+}
+
+.add-agent-form-content {
+  padding: 1rem 1.2rem;
+}
+
+.add-agent-form-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.add-agent-form-title {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.add-agent-form-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.add-agent-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+}
+
+.add-agent-form-field input {
+  border: 1px solid var(--board-card-border);
+  border-radius: 4px;
+  padding: 0.35rem 0.5rem;
+  background: var(--board-card-bg);
+  color: var(--board-fg);
+  font-size: 0.85rem;
+}
+
+.add-agent-form-errors {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: var(--board-needs-human-border);
+  font-size: 0.8rem;
+}
+
+.add-agent-form-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.add-agent-form-submit {
+  border: 1px solid var(--running-section-border);
+  border-radius: 4px;
+  padding: 0.35rem 0.9rem;
+  background: transparent;
+  color: var(--running-section-border);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
 .card-detail-log-heading {
   font-size: 0.85rem;
   margin: 0 0 0.5rem;
