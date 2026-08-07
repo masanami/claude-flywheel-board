@@ -287,8 +287,15 @@ export function TerminalPane({
       })
       .catch(() => {
         // 取得失敗時はタブなし（空領域）で構わない。board 自体は落とさない。
+        // ただし setAgents([]) による単純上書きはしない。上の成功経路と同じ
+        // レース（notifyAgentAdded が先に addAgent でタブを追加し、この
+        // fetchAgents の reject が後から解決する）が起き得るため、空配列で
+        // 上書きすると先行追加分のタブと消費済みの prefill マークが失われ、
+        // claude の prefill が再実行されないまま黙って消える（レビュー指摘）。
+        // 先行追加分を保持するため prev をそのまま返す（成功経路のマージと
+        // 異なり fetchAgents 側の名前が無いため、追加すべき新規名も無い）。
         if (!cancelled) {
-          setAgents([]);
+          setAgents((prev) => prev);
         }
       });
     return () => {

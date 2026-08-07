@@ -1112,6 +1112,43 @@ describe("TerminalPane", () => {
     ).toHaveBeenCalledWith("claude");
   });
 
+  it("mount 直後、初回 fetchAgents が解決する前に notifyAgentAddRequested→notifyAgentAdded が呼ばれ、その後で fetchAgents が失敗しても、先行追加分のタブは残り claude が prefill される（レビュー指摘: catch の setAgents([]) が先行追加分を破棄していた回帰防止）", async () => {
+    const harness = buildHarness([]);
+    let rejectFetch: (error: Error) => void = () => {};
+    const fetchAgents = vi.fn(
+      () =>
+        new Promise<string[]>((_resolve, reject) => {
+          rejectFetch = reject;
+        }),
+    );
+
+    render(
+      <TerminalPane
+        connect={harness.connect}
+        createXterm={harness.createXterm}
+        fetchAgents={fetchAgents}
+      />,
+    );
+
+    act(() => {
+      notifyAgentAddRequested("harness-guardian");
+      notifyAgentAdded("harness-guardian");
+    });
+    expect(screen.getByText("harness-guardian")).toBeInTheDocument();
+
+    await act(async () => {
+      rejectFetch(new Error("network error"));
+      // reject の catch ハンドラ（マイクロタスク）が実行されるのを待つ。
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("harness-guardian")).toBeInTheDocument();
+    await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(2));
+    expect(
+      harness.socketFor("harness-guardian", "agent").prefill,
+    ).toHaveBeenCalledWith("claude");
+  });
+
   it("【安全要件・#57】prefill(agent, command) は shell（右）側の接続には一切届かない", async () => {
     const harness = buildHarness(["medical"]);
 
