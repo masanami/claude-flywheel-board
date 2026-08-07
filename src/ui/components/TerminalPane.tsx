@@ -24,6 +24,13 @@ import type { CreateXtermInstance, XtermInstance } from "./xterm-adapter.ts";
 // 本コンポーネントから一切 prefill を呼び出さない（サーバ側でも構造的に
 // 弾かれる。src/server/pty/bridge.ts の allowPrefill 参照）。
 
+// Issue #125: 「＋ エージェント追加」フォーム経由で出現した新規タブに一度だけ
+// prefill する文字列。クリティカル設計決定（親 Issue #119）: ここで行うのは
+// 「claude」という未実行の文字列を流し込むことのみ。Enter 送信・trust 応答・
+// `/claude-flywheel:flywheel-init` の自動実行は一切行わない（人間が埋め込み
+// ターミナル内で操作する）。
+const CLAUDE_PREFILL_COMMAND = "claude";
+
 const MIN_HEIGHT_PX = 120;
 const MAX_HEIGHT_PX = 800;
 const DEFAULT_HEIGHT_PX = 320;
@@ -146,6 +153,14 @@ export function TerminalPane({
   // 弾くためのガード（サーバ側 resolveAgentEntry も未登録名を拒否するが、
   // クライアント側で無用な再接続ループを作らないよう二重に防御する）。
   const agentsRef = useRef<string[]>([]);
+  // Issue #125: 「エージェント追加フォーム経由で出現した新タブ」にのみ claude を
+  // 一度だけ prefill するための同期レジストリ。Board.tsx の submitAddAgent が
+  // notifyAgentAddRequested(name)/notifyAgentAddFailed(name) 経由でこの
+  // レジストリへ直接書き込む（addAgent 自身は agent_update ストリームだけを
+  // 見て判定しない）。この設計に至った経緯・なぜ agent_update ストリームだけの
+  // 推論では安全性を保証できないか（サーバ起動直後の fullScan キャッチアップ
+  // 配信との区別が原理的につかない）は terminal-control.ts 冒頭コメントが正本。
+  const pendingNewAgentNamesRef = useRef<Set<string>>(new Set());
 
   const openAgent = useCallback((agent: string) => {
     setOpenedAgents((prev) => {
@@ -252,13 +267,35 @@ export function TerminalPane({
     fetchAgents()
       .then((names) => {
         if (!cancelled) {
-          setAgents(names);
+          // セルフレビュー指摘（Issue #124）: この fetch が解決する前に
+          // notifyAgentAdded 経由で addAgent が呼ばれていた場合（mount 直後の
+          // ごく短いウィンドウで、新規エージェント追加の agent_update が
+          // /api/board の応答より先に届くレアケース）、setAgents(names) の
+          // 単純上書きだとその追加分を消してしまう。PLAUSIBLE指摘（5分毎の
+          // フル再スキャンで自然回復するため実害は限定的）だが、追加分を
+          // 残すマージにしても実装コストが小さいため対応する。
+          setAgents((prev) => {
+            const merged = [...names];
+            for (const name of prev) {
+              if (!merged.includes(name)) {
+                merged.push(name);
+              }
+            }
+            return merged;
+          });
         }
       })
       .catch(() => {
         // 取得失敗時はタブなし（空領域）で構わない。board 自体は落とさない。
+        // ただし setAgents([]) による単純上書きはしない。上の成功経路と同じ
+        // レース（notifyAgentAdded が先に addAgent でタブを追加し、この
+        // fetchAgents の reject が後から解決する）が起き得るため、空配列で
+        // 上書きすると先行追加分のタブと消費済みの prefill マークが失われ、
+        // claude の prefill が再実行されないまま黙って消える（レビュー指摘）。
+        // 先行追加分を保持するため prev をそのまま返す（成功経路のマージと
+        // 異なり fetchAgents 側の名前が無いため、追加すべき新規名も無い）。
         if (!cancelled) {
-          setAgents([]);
+          setAgents((prev) => prev);
         }
       });
     return () => {
@@ -284,29 +321,114 @@ export function TerminalPane({
 
   // #16 の D&D／＋差し込み動線から呼ばれる prefill 公開 API に自身を登録する。
   useEffect(() => {
+    // 折りたたみ中は対象ペインが不可視のため展開し、対象タブをアクティブ化・
+    // オープン（未接続なら接続確立）したうえで command を流し込む。接続が
+    // まだ確立していない場合は pendingPrefillsRef に積み、ensureConnection の
+    // 接続確立時（container mount 時）にまとめて flush される。
+    // prefill は常にエージェント（左）側接続のみを対象にする。shell（右）
+    // 接続は connectionsRef 上に存在しても、ここから参照すること自体が無い
+    // （#57 クリティカル設計決定）。
+    //
+    // 【スコープ外・既知の限定事項】(design-reviewer/code-reviewer セルフレビュー
+    // 指摘、PLAUSIBLE): addAgent 経由（Issue #125）の呼び出しは、その agent の
+    // tmux セッションがまだ存在しない状態（新規追加直後）で接続確立→prefill が
+    // 走ることが多い。tmux 側のセッション初期化（ログインシェルの rc 読み込み
+    // 等）と send-keys のタイミング競合で文字が欠落する可能性は理論上あるが、
+    // これは #16 の D&D／＋差し込み動線が元々未接続タブへ prefill する場合と
+    // 同じ pty/tmux 経路・同じ既存のタイミング特性であり、本チケットで新規に
+    // 持ち込んだリスクではない（サーバ側 src/server/pty/bridge.ts の
+    // pendingRawMessages キューイングが tmux セッション確立後の送信を保証する）。
+    // 単体テストは socket をモックしているため実 tmux でのタイミングまでは
+    // 検証できないが、既存の #16 機構と同一経路である以上、本チケット単独での
+    // 追加の実機検証は必須としない。
+    //
+    // ガード（「タブ一覧に無い agent 名は無視する」）を含まないロジック本体
+    // のみをここに置き、prefill メソッド（D&D／＋差し込み動線向け・ガードあり）と
+    // addAgent メソッド（Issue #125・新規タブ検出後にガード無しで直接呼ぶ）の
+    // 両方から共有する。
+    //
+    // 【設計判断の明記】(design-reviewer セルフレビュー指摘): addAgent 経由で
+    // deliverPrefill を呼ぶと、command の流し込みに加えてパネルの強制展開・
+    // アクティブタブの強制切替・接続の即時確立という副作用も伴う。これは
+    // Issue #125 のスコープ（「claude を prefill する」）を厳密には超えるが、
+    // 意図的な採用である: (1) #16 の D&D／＋差し込み動線が持つ既存の
+    // prefill() 契約と一貫した挙動にする（ここだけ特別扱いにしない・KISS）、
+    // (2) 「＋ エージェント追加」を実行した直後という文脈では、新タブへ
+    // フォーカスが移り claude が見える状態になることはむしろ期待される
+    // 挙動であり、（接続を確立しないまま pendingPrefillsRef に積むだけの
+    // 狭い実装も可能だったが）prefill が実際にターミナルへ現れるところまで
+    // 保証する方が完了条件「claude が prefill される」を素直に満たす。
+    const deliverPrefill = (agent: string, command: string) => {
+      setCollapsed(false);
+      setActiveAgent(agent);
+      openAgent(agent);
+      const key = connectionKey(agent, "agent");
+      const existing = connectionsRef.current.get(key);
+      if (existing) {
+        existing.socket.prefill(command);
+      } else {
+        const pending = pendingPrefillsRef.current.get(agent) ?? [];
+        pending.push(command);
+        pendingPrefillsRef.current.set(agent, pending);
+      }
+    };
+
     const controller: TerminalController = {
       prefill(agent, command) {
         if (!agentsRef.current.includes(agent)) {
           // タブ一覧に無い agent 名は無視する（不明な接続を作らない）。
           return;
         }
-        // 折りたたみ中は対象ペインが不可視のため、流し込む前に必ず展開する
-        // （D&D・差し込みの指示文が不可視ペインへ流れて「無反応に見える」問題の回避）。
-        setCollapsed(false);
-        setActiveAgent(agent);
-        openAgent(agent);
-        // prefill は常にエージェント（左）側接続のみを対象にする。shell（右）
-        // 接続は connectionsRef 上に存在しても、ここから参照すること自体が無い
-        // （#57 クリティカル設計決定）。
-        const key = connectionKey(agent, "agent");
-        const existing = connectionsRef.current.get(key);
-        if (existing) {
-          existing.socket.prefill(command);
-        } else {
-          const pending = pendingPrefillsRef.current.get(agent) ?? [];
-          pending.push(command);
-          pendingPrefillsRef.current.set(agent, pending);
+        deliverPrefill(agent, command);
+      },
+      // Issue #124/#125: Board.tsx の WS agent_update（既存経路。新しい WS
+      // 接続・ポーリングは追加しない）を起点に notifyAgentAdded 経由で呼ばれる。
+      // タブ一覧への追加はここで無条件に行う（冪等）。claude の一度きりの
+      // prefill は、pendingNewAgentNamesRef（宣言部のコメント参照）に
+      // 「エージェント追加フォームが実際に送信された」ことを示すマークが
+      // 付いている場合に限り発火し、消費（delete）する。マークは Board.tsx の
+      // notifyAgentAddRequested 経由でのみ付与されるため、通常の agent_update
+      // （既存タブの更新・WS 再接続相当の重複呼び出し・サーバ起動直後の
+      // fullScan によるキャッチアップ配信）ではマークが無く、誤って
+      // 「新規」と判定されることはない（クリティカル設計決定①）。
+      addAgent(name) {
+        // セルフレビュー指摘（round3・code-reviewer/design-reviewer 双方が
+        // CONFIRMED、medium）: AddAgentForm はクライアント側で名前の重複を
+        // 検証しない（サーバ側の責務）。そのため既存エージェントと同名で
+        // 追加を試みた場合、markPendingNewAgent が呼ばれてから
+        // clearPendingNewAgent が呼ばれるまでの短い HTTP 往復の間に、その
+        // 既存エージェントの通常の agent_update が届くと誤って新規と判定
+        // されうる。マークに加えて「まだタブ一覧に無い名前か」も見ることで
+        // この残存ウィンドウを閉じる（既存タブなら、マークがあっても新規
+        // 扱いしない）。
+        const isNewAgent =
+          pendingNewAgentNamesRef.current.has(name) &&
+          !agentsRef.current.includes(name);
+        // マーク自体は「タブ一覧に既にあったか」に関わらず消費する
+        // （残置すると、後で本当に同名タブが消えて再度追加されるような
+        // 想定外のケースでも古いマークが残り続けてしまうため）。
+        pendingNewAgentNamesRef.current.delete(name);
+        setAgents((prev) => (prev.includes(name) ? prev : [...prev, name]));
+        if (isNewAgent) {
+          deliverPrefill(name, CLAUDE_PREFILL_COMMAND);
         }
+      },
+      // Issue #125: Board.tsx の submitAddAgent（POST /api/fleet/agents の
+      // 送信ラッパー）から、ネットワーク I/O を開始する前の最も早いタイミングで
+      // 呼ばれる（サーバは fleet 追記→scan→broadcastAgentUpdate まで完了して
+      // から HTTP レスポンスを返すため、fetch() 成功後にマークすると WS 経由の
+      // agent_update がレスポンスより先に届くレースで取り逃しうる。宣言部の
+      // コメント参照）。
+      markPendingNewAgent(name) {
+        pendingNewAgentNamesRef.current.add(name);
+      },
+      // Issue #125: submitAddAgent が失敗した場合に呼ばれる。この name の
+      // エージェントは（少なくともこの送信では）作られないため、マークを
+      // 取り消す。取り消さないと、同名の既存エージェント（例: 重複名エラー）
+      // が後で通常の agent_update を受け取った際に誤って新規追加と判定され、
+      // 稼働中セッションへ claude を誤 prefill しうる。
+      clearPendingNewAgent(name) {
+        pendingNewAgentNamesRef.current.delete(name);
       },
     };
     registerTerminalController(controller);

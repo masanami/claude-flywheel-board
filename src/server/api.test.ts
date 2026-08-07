@@ -1,3 +1,4 @@
+import * as childProcess from "node:child_process";
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import type { AddressInfo } from "node:net";
@@ -16,8 +17,10 @@ import {
   isAllowedOrigin,
   registerApiRoutes,
 } from "./api.ts";
+import type { FleetAgentAdditionDeps } from "./api.ts";
 import { createMemoryBoardCache } from "./cache.ts";
 import type { FleetEntry } from "./manifest.ts";
+import type { FleetWatcher } from "./watcher.ts";
 
 // Issue #88: md_subscribe/md_unsubscribe（Issue #67）ブロックが実 chokidar・
 // 固定 sleep に依存し、負荷の高い CI で偽陽性・偽陰性を招きうるため、
@@ -26,6 +29,18 @@ import type { FleetEntry } from "./manifest.ts";
 // md/watch.ts → chokidar の依存グラフ全体）に透過的に効く。他の describe
 // ブロックは chokidar に依存しないため影響しない。
 vi.mock("chokidar", () => ({ watch: vi.fn() }));
+
+// PR #134 レビュー指摘の回帰テスト（git init のタイムアウト/maxBuffer 指定）用。
+// ESM の名前空間エクスポートは vi.spyOn で直接差し替えできないため、
+// vi.mock + importOriginal で execFile だけ vi.fn ラップし、実装は素通しする
+// （呼び出し引数の検証のみが目的で、挙動そのものは変えない）。
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFile: vi.fn(actual.execFile),
+  };
+});
 
 describe("isAllowedHost", () => {
   it("localhost を許可する", () => {
@@ -1097,5 +1112,581 @@ describe("attachWebSocketServer の getFleetEntries 供給経路（Issue #62）"
 
     expect(getFleetEntries).not.toHaveBeenCalled();
     ws.close();
+  });
+});
+
+// Issue #122: POST /api/fleet/agents（エージェント追加のオーケストレーション）。
+// CLAUDE.md のテスト方針（状態ファイルの読み取りはフィクスチャの実ファイルで検証する）
+// を書き込み側にも適用し、実際に一時ディレクトリ・一時 fleet.tsv に対して発行して
+// 検証する（モックで済ませない。fleetWatcher のみフェイクに差し替える）。
+describe("POST /api/fleet/agents（Issue #122）", () => {
+  const ENV_KEY = "FLYWHEEL_FLEET_MANIFEST";
+  let originalEnv: string | undefined;
+  let tmpDir: string;
+  let fleetManifestPath: string;
+  let existingAgentPath: string;
+
+  beforeEach(() => {
+    originalEnv = process.env[ENV_KEY];
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "api-fleet-agents-test-"));
+    existingAgentPath = path.join(tmpDir, "existing-agent");
+    fs.mkdirSync(existingAgentPath);
+    fleetManifestPath = path.join(tmpDir, "fleet.tsv");
+    fs.writeFileSync(
+      fleetManifestPath,
+      `existing-agent\t${existingAgentPath}\n`,
+      "utf-8",
+    );
+    process.env[ENV_KEY] = fleetManifestPath;
+  });
+
+  afterEach(() => {
+    if (originalEnv === undefined) {
+      delete process.env[ENV_KEY];
+    } else {
+      process.env[ENV_KEY] = originalEnv;
+    }
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function createFakeFleetWatcher(
+    overrides?: Partial<FleetWatcher>,
+  ): FleetWatcher & { addAgentWatch: ReturnType<typeof vi.fn> } {
+    return {
+      addAgentWatch: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn().mockResolvedValue(undefined),
+      ...overrides,
+    } as FleetWatcher & { addAgentWatch: ReturnType<typeof vi.fn> };
+  }
+
+  function buildApp(opts?: {
+    fleetWatcher?: FleetWatcher;
+    fleetEntries?: FleetEntry[];
+    omitDeps?: boolean;
+    resolveDeps?: boolean;
+  }) {
+    const cache = createMemoryBoardCache();
+    const app = new Hono();
+    const fleetEntries =
+      opts?.fleetEntries ??
+      ([{ name: "existing-agent", path: existingAgentPath }] as FleetEntry[]);
+    const fleetWatcher = opts?.fleetWatcher ?? createFakeFleetWatcher();
+    const resolveDeps = opts?.resolveDeps ?? true;
+    const deps: FleetAgentAdditionDeps | undefined = opts?.omitDeps
+      ? undefined
+      : {
+          fleetEntries,
+          getFleetWatcher: () => (resolveDeps ? fleetWatcher : undefined),
+        };
+    registerApiRoutes(app, cache, () => fleetEntries, deps);
+    return { app, fleetEntries, fleetWatcher, cache };
+  }
+
+  function postAgent(
+    app: Hono,
+    body: unknown,
+    headers?: Record<string, string>,
+  ) {
+    return app.request("/api/fleet/agents", {
+      method: "POST",
+      headers: {
+        host: "localhost",
+        "content-type": "application/json",
+        ...headers,
+      },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it("正常系: 201 でエージェントを返し、ディレクトリ作成・git init・fleet.tsv 追記・監視登録が行われる", async () => {
+    const newRepoPath = path.join(tmpDir, "new-agent");
+    const { app, fleetEntries, fleetWatcher } = buildApp();
+
+    const res = await postAgent(app, { name: "new-agent", path: newRepoPath });
+
+    expect(res.status).toBe(201);
+    const bodyJson = await res.json();
+    expect(bodyJson).toEqual({
+      agent: { name: "new-agent", path: newRepoPath },
+    });
+
+    expect(fs.existsSync(newRepoPath)).toBe(true);
+    expect(fs.existsSync(path.join(newRepoPath, ".git"))).toBe(true);
+
+    const manifestContent = fs.readFileSync(fleetManifestPath, "utf-8");
+    expect(manifestContent).toContain(`new-agent\t${newRepoPath}`);
+
+    expect(fleetEntries).toEqual([
+      { name: "existing-agent", path: existingAgentPath },
+      { name: "new-agent", path: newRepoPath },
+    ]);
+
+    expect(fleetWatcher.addAgentWatch).toHaveBeenCalledTimes(1);
+    expect(fleetWatcher.addAgentWatch).toHaveBeenCalledWith({
+      name: "new-agent",
+      path: newRepoPath,
+    });
+  });
+
+  it("git init 実行時に timeout と maxBuffer を指定する（ハング防止、PR #134 レビュー指摘の回帰テスト）", async () => {
+    // execFile は vi.mock により実装を素通しする vi.fn でラップされている
+    // （ファイル冒頭参照）。ここでは呼び出し引数のみを検証し、timeout 発火の
+    // 実時間待ちは行わない。
+    const execFileMock = vi.mocked(childProcess.execFile);
+    execFileMock.mockClear();
+    const newRepoPath = path.join(tmpDir, "timeout-option-agent");
+    const { app } = buildApp();
+
+    const res = await postAgent(app, {
+      name: "timeout-option-agent",
+      path: newRepoPath,
+    });
+
+    expect(res.status).toBe(201);
+    const gitInitCall = execFileMock.mock.calls.find(
+      (call) =>
+        call[0] === "git" && Array.isArray(call[1]) && call[1][0] === "init",
+    );
+    expect(gitInitCall).toBeDefined();
+    const options = gitInitCall?.[2] as
+      | { timeout?: number; maxBuffer?: number }
+      | undefined;
+    expect(options?.timeout).toBe(30_000);
+    expect(options?.maxBuffer).toBeGreaterThan(0);
+  });
+
+  it("name が欠落したリクエストは 400 と構造化エラーを返す（fs には触れない）", async () => {
+    const newRepoPath = path.join(tmpDir, "no-name-agent");
+    const { app } = buildApp();
+
+    const res = await postAgent(app, { path: newRepoPath });
+
+    expect(res.status).toBe(400);
+    const bodyJson = await res.json();
+    expect(typeof bodyJson.error).toBe("string");
+    expect(fs.existsSync(newRepoPath)).toBe(false);
+  });
+
+  it("path が欠落したリクエストは 400 を返す", async () => {
+    const { app } = buildApp();
+
+    const res = await postAgent(app, { name: "no-path-agent" });
+
+    expect(res.status).toBe(400);
+    const bodyJson = await res.json();
+    expect(typeof bodyJson.error).toBe("string");
+  });
+
+  it("path が相対パスの場合は 400 を返し、ディレクトリを作成しない", async () => {
+    const { app } = buildApp();
+
+    const res = await postAgent(app, {
+      name: "relative-path-agent",
+      path: "relative/path/to/agent",
+    });
+
+    expect(res.status).toBe(400);
+    const bodyJson = await res.json();
+    expect(bodyJson.error).toMatch(/絶対パス/);
+    expect(fs.existsSync(path.join(tmpDir, "relative", "path"))).toBe(false);
+  });
+
+  it('name が予約接尾辞 "-shell" の場合は 400 を返し、作成したディレクトリを後始末する', async () => {
+    const newRepoPath = path.join(tmpDir, "reserved-suffix-agent");
+    const { app, fleetEntries } = buildApp();
+
+    const res = await postAgent(app, {
+      name: "foo-shell",
+      path: newRepoPath,
+    });
+
+    expect(res.status).toBe(400);
+    const bodyJson = await res.json();
+    expect(bodyJson.error).toMatch(/-shell/);
+    expect(fs.existsSync(newRepoPath)).toBe(false);
+    expect(fleetEntries).toEqual([
+      { name: "existing-agent", path: existingAgentPath },
+    ]);
+    expect(fs.readFileSync(fleetManifestPath, "utf-8")).not.toContain(
+      "foo-shell",
+    );
+  });
+
+  it("既存 fleet と name が重複する場合は 400 を返し、ディレクトリを作成しない（副作用なし）", async () => {
+    const newRepoPath = path.join(tmpDir, "dup-name-agent");
+    const { app } = buildApp();
+
+    const res = await postAgent(app, {
+      name: "existing-agent",
+      path: newRepoPath,
+    });
+
+    expect(res.status).toBe(400);
+    const bodyJson = await res.json();
+    expect(bodyJson.error).toMatch(/existing-agent.*重複/s);
+    expect(fs.existsSync(newRepoPath)).toBe(false);
+  });
+
+  it("既存 fleet と path が重複する場合は 400 を返し、既存ディレクトリに git init を実行しない（既存エージェントへの影響なし）", async () => {
+    const { app } = buildApp();
+
+    const res = await postAgent(app, {
+      name: "another-name",
+      path: existingAgentPath,
+    });
+
+    expect(res.status).toBe(400);
+    const bodyJson = await res.json();
+    expect(bodyJson.error).toMatch(/重複/);
+    expect(fs.existsSync(existingAgentPath)).toBe(true);
+    // 既存エージェントのディレクトリに git init が実行されていないこと
+    // （まだ git 化されていない既存ディレクトリを、無関係な失敗リクエストの
+    // 副作用で書き換えないことの確認）。
+    expect(fs.existsSync(path.join(existingAgentPath, ".git"))).toBe(false);
+  });
+
+  it("fleet.tsv 側にのみ存在する（in-memory 未反映の）重複 path で appendFleetEntry が失敗した場合も、実行済みの git init をロールバックする", async () => {
+    // fleetEntries（in-memory）には無いが、fleet.tsv（ディスク）には既に登録
+    // されている既存の未 git 化ディレクトリを path に指定する。事前チェック
+    // （in-memory 突合）はすり抜けるため、mkdir（no-op）→ git init が実行された
+    // 後、権威側検証である appendFleetEntry のファイル読み込みベースの重複
+    // チェックで初めて失敗する。この経路でも git init の後始末が行われることを
+    // 確認する（セルフレビュー指摘対応の回帰テスト）。
+    const manualAgentPath = path.join(tmpDir, "manual-agent");
+    fs.mkdirSync(manualAgentPath);
+    fs.appendFileSync(
+      fleetManifestPath,
+      `manual-agent\t${manualAgentPath}\n`,
+      "utf-8",
+    );
+    // buildApp の既定 fleetEntries は fleet.tsv の内容を反映しない固定配列
+    // （既存の existing-agent のみ）のため、manual-agent は in-memory 上は
+    // 未知のまま。
+    const { app } = buildApp();
+
+    const res = await postAgent(app, {
+      name: "manual-agent",
+      path: manualAgentPath,
+    });
+
+    expect(res.status).toBe(400);
+    const bodyJson = await res.json();
+    expect(bodyJson.error).toMatch(/重複/);
+    expect(fs.existsSync(manualAgentPath)).toBe(true);
+    expect(fs.existsSync(path.join(manualAgentPath, ".git"))).toBe(false);
+  });
+
+  it("path の前後に空白があっても trim 後に絶対パスと判定され、成功する", async () => {
+    const targetPath = path.join(tmpDir, "leading-space-agent");
+    const { app } = buildApp();
+
+    const res = await postAgent(app, {
+      name: "leading-space-agent",
+      path: ` ${targetPath} `,
+    });
+
+    expect(res.status).toBe(201);
+    const bodyJson = await res.json();
+    expect(bodyJson.agent).toEqual({
+      name: "leading-space-agent",
+      path: targetPath,
+    });
+  });
+
+  it("末尾改行の無い fleet.tsv へ追記した直後にロールバックしても、直前の行が壊れない（回帰テスト）", async () => {
+    // 末尾改行の無い fleet.tsv を用意する。
+    fs.writeFileSync(
+      fleetManifestPath,
+      `existing-agent\t${existingAgentPath}`,
+      "utf-8",
+    );
+    const newRepoPath = path.join(tmpDir, "no-trailing-newline-agent");
+    const fleetWatcher = createFakeFleetWatcher({
+      addAgentWatch: vi
+        .fn()
+        .mockRejectedValue(new Error("watcher は close 済みです")),
+    });
+    const { app } = buildApp({ fleetWatcher });
+
+    const res = await postAgent(app, {
+      name: "no-trailing-newline-agent",
+      path: newRepoPath,
+    });
+
+    expect(res.status).toBe(500);
+    const manifestContent = fs.readFileSync(fleetManifestPath, "utf-8");
+    expect(manifestContent).not.toContain("no-trailing-newline-agent");
+    // ロールバック前に存在した行が、改行の連結崩れなどで壊れていないこと。
+    expect(manifestContent).toContain(`existing-agent\t${existingAgentPath}`);
+  });
+
+  it("既に存在する（未登録の）ディレクトリを path に指定した場合、成功してもそのディレクトリは削除されない", async () => {
+    const preexistingPath = path.join(tmpDir, "preexisting");
+    fs.mkdirSync(preexistingPath);
+    fs.writeFileSync(path.join(preexistingPath, "keep.txt"), "keep-me");
+
+    const { app } = buildApp();
+    const res = await postAgent(app, {
+      name: "preexisting-agent",
+      path: preexistingPath,
+    });
+
+    expect(res.status).toBe(201);
+    expect(fs.existsSync(preexistingPath)).toBe(true);
+    expect(fs.existsSync(path.join(preexistingPath, "keep.txt"))).toBe(true);
+    expect(fs.existsSync(path.join(preexistingPath, ".git"))).toBe(true);
+  });
+
+  it("既に git 初期化済みのディレクトリを指定した場合、git init を再実行せず成功する", async () => {
+    const gitRepoPath = path.join(tmpDir, "already-git");
+    fs.mkdirSync(gitRepoPath);
+    fs.mkdirSync(path.join(gitRepoPath, ".git"));
+    fs.writeFileSync(path.join(gitRepoPath, ".git", "marker"), "keep-me");
+
+    const { app } = buildApp();
+    const res = await postAgent(app, {
+      name: "already-git-agent",
+      path: gitRepoPath,
+    });
+
+    expect(res.status).toBe(201);
+    // 既存 .git の中身が変更されていない（git init を再実行してマーカーファイルが
+    // 消えていない）ことを確認する。
+    expect(fs.existsSync(path.join(gitRepoPath, ".git", "marker"))).toBe(true);
+  });
+
+  it("動的監視登録（addAgentWatch）失敗時、作成したディレクトリ・fleet.tsv 追記・fleetEntries 配列をすべて後始末する（500 を返す）", async () => {
+    const newRepoPath = path.join(tmpDir, "watch-fail-agent");
+    const fleetWatcher = createFakeFleetWatcher({
+      addAgentWatch: vi
+        .fn()
+        .mockRejectedValue(new Error("watcher は close 済みです")),
+    });
+    const before = fs.readFileSync(fleetManifestPath, "utf-8");
+    const { app, fleetEntries } = buildApp({ fleetWatcher });
+
+    const res = await postAgent(app, {
+      name: "watch-fail-agent",
+      path: newRepoPath,
+    });
+
+    expect(res.status).toBe(500);
+    const bodyJson = await res.json();
+    expect(bodyJson.error).toMatch(/監視登録/);
+
+    expect(fs.existsSync(newRepoPath)).toBe(false);
+    expect(fs.readFileSync(fleetManifestPath, "utf-8")).toBe(before);
+    expect(fleetEntries).toEqual([
+      { name: "existing-agent", path: existingAgentPath },
+    ]);
+  });
+
+  it("動的監視登録失敗のロールバック中に、別リクエストが追記した行は消さない（内容ベースロールバックの回帰テスト）", async () => {
+    const newRepoPath = path.join(tmpDir, "watch-fail-agent");
+    const concurrentEntryPath = path.join(tmpDir, "concurrent-agent");
+    const fleetWatcher = createFakeFleetWatcher({
+      // addAgentWatch 呼び出し中（await で待たされている間）に、別の
+      // リクエストが fleet.tsv へ追記を終えた状況を模倣してから失敗する。
+      addAgentWatch: vi.fn().mockImplementation(async () => {
+        fs.appendFileSync(
+          fleetManifestPath,
+          `concurrent-agent\t${concurrentEntryPath}\n`,
+          "utf-8",
+        );
+        throw new Error("watcher は close 済みです");
+      }),
+    });
+    const { app, fleetEntries } = buildApp({ fleetWatcher });
+
+    const res = await postAgent(app, {
+      name: "watch-fail-agent",
+      path: newRepoPath,
+    });
+
+    expect(res.status).toBe(500);
+    const manifestContent = fs.readFileSync(fleetManifestPath, "utf-8");
+    // 自分が追記しようとした行は消えている。
+    expect(manifestContent).not.toContain("watch-fail-agent");
+    // 割り込んだ別リクエストの行は残っている（バイトオフセット truncate では
+    // ここが巻き添えで消えてしまっていた）。
+    expect(manifestContent).toContain(
+      `concurrent-agent\t${concurrentEntryPath}`,
+    );
+    expect(manifestContent).toContain(`existing-agent\t${existingAgentPath}`);
+    expect(fleetEntries).toEqual([
+      { name: "existing-agent", path: existingAgentPath },
+    ]);
+  });
+
+  it("mkdir 失敗（パス途中に非ディレクトリのファイルが存在する）は 500 を返す", async () => {
+    const blockingFilePath = path.join(tmpDir, "not-a-directory");
+    fs.writeFileSync(blockingFilePath, "i am a file, not a directory");
+    const newRepoPath = path.join(blockingFilePath, "nested-agent");
+    const { app, fleetEntries } = buildApp();
+
+    const res = await postAgent(app, {
+      name: "nested-agent",
+      path: newRepoPath,
+    });
+
+    expect(res.status).toBe(500);
+    const bodyJson = await res.json();
+    expect(bodyJson.error).toMatch(/ディレクトリの作成/);
+    expect(fleetEntries).toEqual([
+      { name: "existing-agent", path: existingAgentPath },
+    ]);
+  });
+
+  // chmod 0o444（読み取り専用）は root 実行（コンテナ CI 等）だと権限ビットが
+  // 無視されて書き込めてしまい、500 が発生しない。冒頭の canTestUnreadable と
+  // 同じ理由でここでも同条件でスキップする。
+  const canTestUnwritable =
+    process.platform !== "win32" && process.getuid?.() !== 0;
+
+  it.skipIf(!canTestUnwritable)(
+    "fleet.tsv が読み取り専用（書き込み不可）の場合、appendFleetEntry の EACCES を待たず 500 を返す（環境要因を appendFleetEntry の一般的な 400 経路に誤分類しない）",
+    async () => {
+      fs.chmodSync(fleetManifestPath, 0o444);
+      const newRepoPath = path.join(tmpDir, "readonly-manifest-agent");
+      const { app, fleetEntries } = buildApp();
+
+      try {
+        const res = await postAgent(app, {
+          name: "readonly-manifest-agent",
+          path: newRepoPath,
+        });
+
+        expect(res.status).toBe(500);
+        const bodyJson = await res.json();
+        expect(bodyJson.error).toMatch(/fleet マニフェストの読み書きに失敗/);
+        // 事前チェックで弾かれ、appendFleetEntry まで到達していない
+        // （fleetEntries が変化しない、作成したディレクトリが後始末される）。
+        expect(fs.existsSync(newRepoPath)).toBe(false);
+        expect(fleetEntries).toEqual([
+          { name: "existing-agent", path: existingAgentPath },
+        ]);
+      } finally {
+        // afterEach の rmSync（tmpDir ごと削除）が失敗しないよう権限を戻す。
+        fs.chmodSync(fleetManifestPath, 0o644);
+      }
+    },
+  );
+
+  it('name が予約接尾辞 "-shell" かつ path が未 git 化の既存ディレクトリの場合、400 を返し git init を実行しない', async () => {
+    const preexistingPath = path.join(tmpDir, "preexisting-not-git");
+    fs.mkdirSync(preexistingPath);
+
+    const { app } = buildApp();
+    const res = await postAgent(app, {
+      name: "bar-shell",
+      path: preexistingPath,
+    });
+
+    expect(res.status).toBe(400);
+    const bodyJson = await res.json();
+    expect(bodyJson.error).toMatch(/-shell/);
+    // 事前バリデーション（validateFleetEntryFields の再利用）が mkdir/git init
+    // より先に走るため、既存ディレクトリに .git が作られない。
+    expect(fs.existsSync(path.join(preexistingPath, ".git"))).toBe(false);
+  });
+
+  it("path の前後に空白を含む場合でも、mkdir・fleet.tsv 追記・監視登録がすべて同一の正規化済みパスを使う", async () => {
+    const trimmedPath = path.join(tmpDir, "trailing-space-agent");
+    const { app, fleetEntries, fleetWatcher } = buildApp();
+
+    const res = await postAgent(app, {
+      name: "  trailing-space-agent  ",
+      path: `${trimmedPath} `,
+    });
+
+    expect(res.status).toBe(201);
+    const bodyJson = await res.json();
+    expect(bodyJson.agent).toEqual({
+      name: "trailing-space-agent",
+      path: trimmedPath,
+    });
+    // 空白付きのパス（例: "…/trailing-space-agent "）が作られていない。
+    expect(fs.existsSync(`${trimmedPath} `)).toBe(false);
+    expect(fs.existsSync(trimmedPath)).toBe(true);
+    const manifestContent = fs.readFileSync(fleetManifestPath, "utf-8");
+    expect(manifestContent).toContain(`trailing-space-agent\t${trimmedPath}\n`);
+    expect(fleetEntries).toContainEqual({
+      name: "trailing-space-agent",
+      path: trimmedPath,
+    });
+    expect(fleetWatcher.addAgentWatch).toHaveBeenCalledWith({
+      name: "trailing-space-agent",
+      path: trimmedPath,
+    });
+  });
+
+  it("fleetAgentAdditionDeps 未供給（起動配線されていない）場合は 503 を返す", async () => {
+    const { app } = buildApp({ omitDeps: true });
+
+    const res = await postAgent(app, {
+      name: "new-agent",
+      path: path.join(tmpDir, "new-agent"),
+    });
+
+    expect(res.status).toBe(503);
+  });
+
+  it("fleetWatcher が未解決（起動シーケンス完了前）の場合は 503 を返す", async () => {
+    const { app } = buildApp({ resolveDeps: false });
+
+    const res = await postAgent(app, {
+      name: "new-agent",
+      path: path.join(tmpDir, "new-agent"),
+    });
+
+    expect(res.status).toBe(503);
+  });
+
+  it("不正な Host ヘッダの POST リクエストは 403 を返す（既存の Host/Origin 検証を継承）", async () => {
+    const { app } = buildApp();
+
+    const res = await postAgent(
+      app,
+      { name: "new-agent", path: path.join(tmpDir, "new-agent") },
+      { host: "evil.example.com" },
+    );
+
+    expect(res.status).toBe(403);
+  });
+
+  it("追加成功後も既存エージェントの cache 内容には影響しない", async () => {
+    const newRepoPath = path.join(tmpDir, "new-agent-no-impact");
+    const cache = createMemoryBoardCache();
+    cache.replaceAgent({
+      name: "existing-agent",
+      path: existingAgentPath,
+      challenges: [
+        { id: "C-1", title: "既存課題", status: "未分類", needsHuman: false },
+      ],
+      parseErrors: [],
+    });
+    const app = new Hono();
+    const fleetEntries: FleetEntry[] = [
+      { name: "existing-agent", path: existingAgentPath },
+    ];
+    const fleetWatcher = createFakeFleetWatcher();
+    const deps: FleetAgentAdditionDeps = {
+      fleetEntries,
+      getFleetWatcher: () => fleetWatcher,
+    };
+    registerApiRoutes(app, cache, () => fleetEntries, deps);
+
+    const res = await postAgent(app, {
+      name: "new-agent-no-impact",
+      path: newRepoPath,
+    });
+
+    expect(res.status).toBe(201);
+    const existing = cache
+      .getSnapshot()
+      .agents.find((a) => a.name === "existing-agent");
+    expect(existing?.challenges).toEqual([
+      { id: "C-1", title: "既存課題", status: "未分類", needsHuman: false },
+    ]);
   });
 });

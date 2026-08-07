@@ -243,3 +243,7 @@ describe("attachTerminalUpgradeRouting（/ws と /ws/terminal の共存）", () 
     socket.destroy();
   });
 });
+
+// addFleetEntry（Issue #121）のテストは fleet-agent-addition.test.ts へ移設した
+// （Issue #122 セルフレビュー指摘対応: 実装が fleet-agent-addition.ts へ切り出され
+// たのに合わせ、ファイル名とテスト対象の対応を保つため）。

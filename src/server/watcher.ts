@@ -259,6 +259,21 @@ export type WatcherOptions = {
 };
 
 export type FleetWatcher = {
+  /**
+   * 稼働中の watcher に単一 entry を追加する（Issue #121: 再起動なしで新規
+   * エージェントを監視対象へ加えるためのホットリロード経路）。
+   *
+   * クリティカル設計決定: 既存の chokidar インスタンス・ハンドルを再生成せず
+   * （`watch()` を再度呼び出さず）、`chokidarWatcher.add()` でパスを追加する。
+   * 戻り値の Promise は追加した entry のみの初回スキャン（既存 entry は
+   * 再スキャンしない）の完了を表す。
+   *
+   * `close()` 済みの watcher に対して呼び出した場合は reject する
+   * （chokidar の `add()` は close 済み状態を暗黙に解除して監視を復活させて
+   * しまうため、`close()` の「すべて停止する」契約を守るための意図的な失敗
+   * モード。セルフレビュー指摘対応: 消費側が型のみを見て実装しても分かるよう明記）。
+   */
+  addAgentWatch(entry: FleetEntry): Promise<void>;
   /** chokidar watcher・debounce タイマー・フル再スキャン interval をすべて停止する。 */
   close(): Promise<void>;
 };
@@ -282,6 +297,13 @@ export function startFleetWatcher(
   const fullRescanIntervalMs =
     options.fullRescanIntervalMs ?? DEFAULT_FULL_RESCAN_INTERVAL_MS;
 
+  // Issue #121: 外部呼び出し元が保持する entries 配列参照に依存させず、
+  // addAgentWatch での動的追加を安全に扱うための内部コピー。ready ハンドラ・
+  // 低頻度フル再スキャンの for ループはこのリストを参照する（外部配列を
+  // 直接クロージャ参照すると、addAgentWatch で追加した entry がここに
+  // 反映されない）。
+  const watchedEntries: FleetEntry[] = [...entries];
+
   const entryByWatchedPath = new Map<string, FleetEntry>();
   // Issue #50 ①: challenge-archive*.md は年次分割で新規ファイルが後から
   // 現れうるため、ledger/journal/runs のような固定パスの Map には載せられない。
@@ -298,8 +320,13 @@ export function startFleetWatcher(
   // 「entry.path 直下の challenge-archive*.md」という設計要求を満たしつつ、
   // repo 全体を再帰監視するコストは避ける。
   const entryByDir = new Map<string, FleetEntry>();
-  const watchedPaths: string[] = [];
-  for (const entry of entries) {
+
+  // 1 entry 分の監視パス組み立て＋索引登録（entryByWatchedPath / entryByDir）。
+  // 起動時ループと addAgentWatch（Issue #121）の両方から使う共通処理として
+  // 一本化する（DRY。監視対象ファイルの構成が将来増減した際、片方だけ更新して
+  // 「起動時 entry では拾えるが動的追加 entry では拾えない」というサイレントな
+  // 不整合を防ぐ）。
+  function registerEntryPaths(entry: FleetEntry): string[] {
     const ledgerPath = ledgerPathFor(entry);
     const journalPath = journalPathFor(entry);
     const runsPath = runsPathFor(entry);
@@ -307,7 +334,12 @@ export function startFleetWatcher(
     entryByWatchedPath.set(path.resolve(journalPath), entry);
     entryByWatchedPath.set(path.resolve(runsPath), entry);
     entryByDir.set(path.resolve(entry.path), entry);
-    watchedPaths.push(ledgerPath, journalPath, runsPath, entry.path);
+    return [ledgerPath, journalPath, runsPath, entry.path];
+  }
+
+  const watchedPaths: string[] = [];
+  for (const entry of entries) {
+    watchedPaths.push(...registerEntryPaths(entry));
   }
 
   // アーカイブ glob 経由のイベント（changedPath は実ファイルの具体パス）を
@@ -389,21 +421,45 @@ export function startFleetWatcher(
   // 見逃される可能性がある（ready 到達までのイベントは初期化中として扱われる）。
   // ready 後に全 repo を1回スキャンし、見逃しがあっても整合させる。
   chokidarWatcher.on("ready", () => {
-    for (const entry of entries) {
+    for (const entry of watchedEntries) {
       void enqueueScan(entry);
     }
   });
 
   const rescanInterval = setInterval(() => {
-    for (const entry of entries) {
+    for (const entry of watchedEntries) {
       void enqueueScan(entry);
     }
   }, fullRescanIntervalMs);
   // board 停止（プロセス終了）を interval が妨げないようにする。
   rescanInterval.unref();
 
+  // close() 済みの watcher への addAgentWatch を拒否するためのフラグ。
+  // chokidar v5 の FSWatcher.add() は closed 状態を暗黙に解除して監視を
+  // 復活させてしまう（close() の「すべて停止する」契約が壊れる）ため、
+  // ここで明示的にガードする（セルフレビュー指摘対応）。
+  let closed = false;
+
   return {
+    async addAgentWatch(entry: FleetEntry): Promise<void> {
+      if (closed) {
+        throw new Error(
+          `[watcher] addAgentWatch: close() 済みの watcher には追加できません（entry: ${entry.name}）`,
+        );
+      }
+
+      const watchPaths = registerEntryPaths(entry);
+      watchedEntries.push(entry);
+
+      // 既存の chokidarWatcher インスタンスへパスを追加するのみで、
+      // watch() の再呼び出しは行わない（クリティカル設計決定）。
+      chokidarWatcher.add(watchPaths);
+
+      // 追加した entry のみの初回スキャン（全 entries の再スキャンはしない）。
+      await enqueueScan(entry);
+    },
     async close(): Promise<void> {
+      closed = true;
       clearInterval(rescanInterval);
       for (const timer of debounceTimers.values()) {
         clearTimeout(timer);

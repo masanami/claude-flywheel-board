@@ -1,7 +1,12 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentBoard, BoardSnapshot } from "../board-types.ts";
+import {
+  notifyAgentAddFailed,
+  notifyAgentAddRequested,
+  notifyAgentAdded,
+} from "../terminal-control.ts";
 import type { BoardSocketOptions } from "../ws.ts";
 
 const connectBoardSocket = vi.fn();
@@ -12,6 +17,31 @@ const unsubscribeMdMock = vi.fn();
 vi.mock("../ws.ts", () => ({
   connectBoardSocket: (options: BoardSocketOptions) =>
     connectBoardSocket(options),
+}));
+
+// Issue #124 セルフレビュー指摘: TerminalPane はタブ一覧を独自の REST 1回読みで
+// 確定しており Board の WS agent_update を購読していないため、Board 側から
+// terminal-control.ts の疎結合レジストリ経由で通知する（notifyAgentAdded）。
+// ここでは Board が agent_update のたびに正しく呼ぶことだけを検証し、
+// TerminalPane 側の反映（タブ一覧への追加）は TerminalPane.test.tsx の責務とする。
+vi.mock("../terminal-control.ts", () => ({
+  notifyAgentAdded: vi.fn(),
+  // セルフレビュー指摘（round2）: Board.tsx 自体は prefill を呼ばないが、
+  // Board 配下の AgentColumn.tsx/CardDetailModal.tsx は同モジュールから
+  // prefill を import している（AgentColumn.test.tsx の既存モックも同様に
+  // prefill をモックしている）。モックが notifyAgentAdded だけだと、将来
+  // Board.test.tsx にカード詳細の再開コマンド差し込み等 prefill 経路を通す
+  // テストを足した時点で「No "prefill" export is defined on the mock」という
+  // 原因の分かりにくいエラーで落ちる。registerTerminalController 等の残り3
+  // export は Board 配下のどのコンポーネントからも import されていないため、
+  // 現時点でモックに含める必要は無い（YAGNI。将来それらを使うテストを足す
+  // 際に、必要な分だけこのモックへ追加する）。
+  prefill: vi.fn(),
+  // Issue #125: submitAddAgent（Board.tsx）が新規追加の因果的な確定に使う。
+  // モックしないと「No export is defined on the mock」で submitAddAgent 経由の
+  // 既存テストが軒並み落ちる。
+  notifyAgentAddRequested: vi.fn(),
+  notifyAgentAddFailed: vi.fn(),
 }));
 
 function agentBoard(overrides: Partial<AgentBoard> = {}): AgentBoard {
@@ -44,6 +74,9 @@ beforeEach(() => {
   closeMock.mockReset();
   subscribeMdMock.mockReset();
   unsubscribeMdMock.mockReset();
+  vi.mocked(notifyAgentAdded).mockReset();
+  vi.mocked(notifyAgentAddRequested).mockReset();
+  vi.mocked(notifyAgentAddFailed).mockReset();
   connectBoardSocket.mockReturnValue({
     close: closeMock,
     subscribeMd: subscribeMdMock,
@@ -121,6 +154,21 @@ describe("Board", () => {
     expect(screen.getByText("新タイトル")).toBeInTheDocument();
     expect(screen.queryByText("旧タイトル")).not.toBeInTheDocument();
     expect(screen.getByText("bi")).toBeInTheDocument();
+  });
+
+  it("agent_update 受信のたびに terminal-control.notifyAgentAdded を呼ぶ（Issue #124: TerminalPane のタブ一覧への反映）", async () => {
+    const { Board } = await import("./Board.tsx");
+    render(<Board />);
+
+    act(() => {
+      latestOptions().onSnapshot(snapshot([agentBoard({ name: "medical" })]));
+    });
+
+    act(() => {
+      latestOptions().onAgentUpdate(agentBoard({ name: "harness-guardian" }));
+    });
+
+    expect(notifyAgentAdded).toHaveBeenCalledWith("harness-guardian");
   });
 
   it("承認待ちフィルタ選択時、needsHuman な課題のみカラムに表示される", async () => {
@@ -246,6 +294,393 @@ describe("Board", () => {
     expect(mainRow?.firstElementChild).toBe(
       screen.getByTestId("preview-panel"),
     );
+  });
+
+  describe("「＋ エージェント追加」ボタン（Issue #123）", () => {
+    it("ボタンが表示され、クリックでフォームが開く", async () => {
+      const { Board } = await import("./Board.tsx");
+      render(<Board />);
+
+      act(() => {
+        latestOptions().onSnapshot(snapshot([agentBoard({ name: "medical" })]));
+      });
+
+      expect(screen.queryByTestId("add-agent-form")).not.toBeInTheDocument();
+
+      act(() => {
+        screen.getByRole("button", { name: "＋ エージェント追加" }).click();
+      });
+
+      expect(screen.getByTestId("add-agent-form")).toBeInTheDocument();
+    });
+
+    it("フォームの「閉じる」で閉じる", async () => {
+      const { Board } = await import("./Board.tsx");
+      render(<Board />);
+
+      act(() => {
+        latestOptions().onSnapshot(snapshot([agentBoard({ name: "medical" })]));
+      });
+
+      act(() => {
+        screen.getByRole("button", { name: "＋ エージェント追加" }).click();
+      });
+
+      act(() => {
+        screen.getByRole("button", { name: "閉じる" }).click();
+      });
+
+      expect(screen.queryByTestId("add-agent-form")).not.toBeInTheDocument();
+    });
+
+    // Issue #124: 送信ハンドラは POST /api/fleet/agents を呼び出す実処理に
+    // 置き換わった。新カラム出現は既存の agent_update → upsertAgent 経路で
+    // 検証する（レスポンス body から直接 agents state を更新しないことの
+    // 裏付けとして、agent_update が来るまではカラムが増えないことも確認する）。
+    function stubFleetAgentsFetch(
+      response: { ok: true } | { ok: false; status: number; error: string },
+    ) {
+      const fetchMock = vi.fn().mockResolvedValue(
+        response.ok
+          ? {
+              ok: true,
+              status: 201,
+              json: () =>
+                Promise.resolve({
+                  agent: {
+                    name: "harness-guardian",
+                    path: "/agents/harness-guardian",
+                  },
+                }),
+            }
+          : {
+              ok: false,
+              status: response.status,
+              json: () => Promise.resolve({ error: response.error }),
+            },
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      return fetchMock;
+    }
+
+    async function openFormAndFillName(name: string) {
+      act(() => {
+        screen.getByRole("button", { name: "＋ エージェント追加" }).click();
+      });
+
+      act(() => {
+        fireEvent.change(
+          screen.getByRole("textbox", { name: "エージェント名" }),
+          { target: { value: name } },
+        );
+      });
+    }
+
+    it("有効な入力で送信すると、POST /api/fleet/agents が name/path 付きで呼ばれる", async () => {
+      const fetchMock = stubFleetAgentsFetch({ ok: true });
+      const { Board } = await import("./Board.tsx");
+      render(<Board />);
+
+      act(() => {
+        latestOptions().onSnapshot(
+          snapshot([agentBoard({ name: "medical", path: "/agents/medical" })]),
+        );
+      });
+
+      await openFormAndFillName("harness-guardian");
+
+      await act(async () => {
+        screen.getByRole("button", { name: "追加" }).click();
+        await Promise.resolve();
+      });
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/fleet/agents",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({
+            name: "harness-guardian",
+            path: "/agents/harness-guardian",
+          }),
+        }),
+      );
+    });
+
+    // Issue #125: submitAddAgent はネットワーク I/O を開始する前に
+    // notifyAgentAddRequested を呼び、TerminalPane 側へ「次にこの名前が
+    // agent_update で届いたら claude を一度だけ prefill してよい」と伝える
+    // （TerminalPane.tsx の pendingNewAgentNamesRef 参照）。
+    it("送信時、fetch より先に notifyAgentAddRequested(name) を呼ぶ（Issue #125: WS agent_update がレスポンスより先に届くレースの回避）", async () => {
+      const callOrder: string[] = [];
+      const fetchMock = vi.fn().mockImplementation(() => {
+        callOrder.push("fetch");
+        return Promise.resolve({
+          ok: true,
+          status: 201,
+          json: () =>
+            Promise.resolve({
+              agent: {
+                name: "harness-guardian",
+                path: "/agents/harness-guardian",
+              },
+            }),
+        });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      vi.mocked(notifyAgentAddRequested).mockImplementation(() => {
+        callOrder.push("notifyAgentAddRequested");
+      });
+      const { Board } = await import("./Board.tsx");
+      render(<Board />);
+
+      act(() => {
+        latestOptions().onSnapshot(
+          snapshot([agentBoard({ name: "medical", path: "/agents/medical" })]),
+        );
+      });
+
+      await openFormAndFillName("harness-guardian");
+
+      await act(async () => {
+        screen.getByRole("button", { name: "追加" }).click();
+        await Promise.resolve();
+      });
+
+      expect(notifyAgentAddRequested).toHaveBeenCalledWith("harness-guardian");
+      expect(callOrder).toEqual(["notifyAgentAddRequested", "fetch"]);
+      expect(notifyAgentAddFailed).not.toHaveBeenCalled();
+    });
+
+    it("サーバー側バリデーションエラー（400）の場合、notifyAgentAddFailed(name) でマークを取り消す（Issue #125: 同名の既存エージェントへの誤 prefill 防止）", async () => {
+      stubFleetAgentsFetch({
+        ok: false,
+        status: 400,
+        error: 'name "harness-guardian" が既存 fleet と重複しています',
+      });
+      const { Board } = await import("./Board.tsx");
+      render(<Board />);
+
+      act(() => {
+        latestOptions().onSnapshot(
+          snapshot([agentBoard({ name: "medical", path: "/agents/medical" })]),
+        );
+      });
+
+      await openFormAndFillName("harness-guardian");
+
+      await act(async () => {
+        screen.getByRole("button", { name: "追加" }).click();
+        await Promise.resolve();
+      });
+
+      expect(notifyAgentAddRequested).toHaveBeenCalledWith("harness-guardian");
+      expect(notifyAgentAddFailed).toHaveBeenCalledWith("harness-guardian");
+    });
+
+    it("fetch 自体が失敗（通信エラー）した場合も notifyAgentAddFailed(name) でマークを取り消す（Issue #125）", async () => {
+      const fetchMock = vi.fn().mockRejectedValue(new Error("network error"));
+      vi.stubGlobal("fetch", fetchMock);
+      const { Board } = await import("./Board.tsx");
+      render(<Board />);
+
+      act(() => {
+        latestOptions().onSnapshot(
+          snapshot([agentBoard({ name: "medical", path: "/agents/medical" })]),
+        );
+      });
+
+      await openFormAndFillName("harness-guardian");
+
+      await act(async () => {
+        screen.getByRole("button", { name: "追加" }).click();
+        await Promise.resolve();
+      });
+
+      expect(notifyAgentAddRequested).toHaveBeenCalledWith("harness-guardian");
+      expect(notifyAgentAddFailed).toHaveBeenCalledWith("harness-guardian");
+    });
+
+    it("201 応答（成功）の場合、notifyAgentAddFailed は呼ばれない（マークは addAgent 側の一度きりの消費に委ねる）", async () => {
+      stubFleetAgentsFetch({ ok: true });
+      const { Board } = await import("./Board.tsx");
+      render(<Board />);
+
+      act(() => {
+        latestOptions().onSnapshot(
+          snapshot([agentBoard({ name: "medical", path: "/agents/medical" })]),
+        );
+      });
+
+      await openFormAndFillName("harness-guardian");
+
+      await act(async () => {
+        screen.getByRole("button", { name: "追加" }).click();
+        await Promise.resolve();
+      });
+
+      expect(notifyAgentAddFailed).not.toHaveBeenCalled();
+    });
+
+    it("201 応答時、フォームが閉じる（agents state はレスポンス body からは更新しない。agent_update 受信で初めてカラムが増える）", async () => {
+      stubFleetAgentsFetch({ ok: true });
+      const { Board } = await import("./Board.tsx");
+      render(<Board />);
+
+      act(() => {
+        latestOptions().onSnapshot(
+          snapshot([agentBoard({ name: "medical", path: "/agents/medical" })]),
+        );
+      });
+
+      await openFormAndFillName("harness-guardian");
+
+      await act(async () => {
+        screen.getByRole("button", { name: "追加" }).click();
+        await Promise.resolve();
+      });
+
+      expect(screen.queryByTestId("add-agent-form")).not.toBeInTheDocument();
+      // POST のレスポンス body だけでは新カラムは増えない（二重更新の防止）。
+      expect(screen.queryByText("harness-guardian")).not.toBeInTheDocument();
+
+      act(() => {
+        latestOptions().onAgentUpdate(
+          agentBoard({
+            name: "harness-guardian",
+            path: "/agents/harness-guardian",
+          }),
+        );
+      });
+
+      // agent_update 経由（既存の upsertAgent 経路）で初めてカラムが増える。
+      expect(screen.getByText("harness-guardian")).toBeInTheDocument();
+    });
+
+    it("サーバー側バリデーションエラー（400）の場合、フォームは閉じずエラーメッセージが表示される", async () => {
+      stubFleetAgentsFetch({
+        ok: false,
+        status: 400,
+        error: 'name "harness-guardian" が既存 fleet と重複しています',
+      });
+      const { Board } = await import("./Board.tsx");
+      render(<Board />);
+
+      act(() => {
+        latestOptions().onSnapshot(
+          snapshot([agentBoard({ name: "medical", path: "/agents/medical" })]),
+        );
+      });
+
+      await openFormAndFillName("harness-guardian");
+
+      await act(async () => {
+        screen.getByRole("button", { name: "追加" }).click();
+        await Promise.resolve();
+      });
+
+      expect(screen.getByTestId("add-agent-form")).toBeInTheDocument();
+      expect(screen.getByTestId("add-agent-form-errors")).toHaveTextContent(
+        'name "harness-guardian" が既存 fleet と重複しています',
+      );
+    });
+
+    it("fetch 自体が失敗（通信エラー）した場合、フォームは閉じず通信エラーのメッセージが表示される", async () => {
+      const fetchMock = vi.fn().mockRejectedValue(new Error("network error"));
+      vi.stubGlobal("fetch", fetchMock);
+      const { Board } = await import("./Board.tsx");
+      render(<Board />);
+
+      act(() => {
+        latestOptions().onSnapshot(
+          snapshot([agentBoard({ name: "medical", path: "/agents/medical" })]),
+        );
+      });
+
+      await openFormAndFillName("harness-guardian");
+
+      await act(async () => {
+        screen.getByRole("button", { name: "追加" }).click();
+        await Promise.resolve();
+      });
+
+      expect(screen.getByTestId("add-agent-form")).toBeInTheDocument();
+      expect(screen.getByTestId("add-agent-form-errors")).toHaveTextContent(
+        "通信エラー",
+      );
+    });
+
+    it("エラー応答のボディが JSON でない場合、status を含むフォールバックメッセージが表示される", async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 403,
+        json: () => Promise.reject(new Error("not json")),
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const { Board } = await import("./Board.tsx");
+      render(<Board />);
+
+      act(() => {
+        latestOptions().onSnapshot(
+          snapshot([agentBoard({ name: "medical", path: "/agents/medical" })]),
+        );
+      });
+
+      await openFormAndFillName("harness-guardian");
+
+      await act(async () => {
+        screen.getByRole("button", { name: "追加" }).click();
+        await Promise.resolve();
+      });
+
+      expect(screen.getByTestId("add-agent-form")).toBeInTheDocument();
+      expect(screen.getByTestId("add-agent-form-errors")).toHaveTextContent(
+        "status: 403",
+      );
+    });
+
+    it("パス欄の初期値は既存エージェントの絶対パスの親ディレクトリになる", async () => {
+      const { Board } = await import("./Board.tsx");
+      render(<Board />);
+
+      act(() => {
+        latestOptions().onSnapshot(
+          snapshot([agentBoard({ name: "medical", path: "/agents/medical" })]),
+        );
+      });
+
+      act(() => {
+        screen.getByRole("button", { name: "＋ エージェント追加" }).click();
+      });
+
+      expect(screen.getByRole("textbox", { name: "パス" })).toHaveValue(
+        "/agents",
+      );
+    });
+
+    // セルフレビュー指摘: fleet.tsv は人間が手書きする設定ファイルで、読み込み
+    // 時の正規化は trim のみのため、末尾に "/" が残ったパスがそのまま
+    // AgentBoard.path に載りうる。末尾スラッシュを除去せずに親ディレクトリを
+    // 算出すると、既存エージェント自身のディレクトリを親ディレクトリと誤認する
+    // （既存エージェントの作業ツリー内に新規ディレクトリ・git init が作られる
+    // 事故につながる）。
+    it("既存エージェントのパスが末尾スラッシュ付きでも、そのエージェント自身のディレクトリではなく親ディレクトリが算出される", async () => {
+      const { Board } = await import("./Board.tsx");
+      render(<Board />);
+
+      act(() => {
+        latestOptions().onSnapshot(
+          snapshot([agentBoard({ name: "medical", path: "/agents/medical/" })]),
+        );
+      });
+
+      act(() => {
+        screen.getByRole("button", { name: "＋ エージェント追加" }).click();
+      });
+
+      expect(screen.getByRole("textbox", { name: "パス" })).toHaveValue(
+        "/agents",
+      );
+    });
   });
 
   it("アンマウント時に close() を呼ぶ", async () => {

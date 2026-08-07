@@ -6,6 +6,7 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import { attachWebSocketServer, registerApiRoutes } from "./api.ts";
+import type { FleetAgentAdditionDeps } from "./api.ts";
 import type { BoardCache } from "./cache.ts";
 import { createMemoryBoardCache } from "./cache.ts";
 import { NO_FLEET_ENTRIES, loadFleetManifest } from "./manifest.ts";
@@ -17,6 +18,7 @@ import {
 import type { TerminalWebSocketServer } from "./pty/bridge.ts";
 import { startStaleReevaluation } from "./stale-reevaluation.ts";
 import { fullScan, startFleetWatcher } from "./watcher.ts";
+import type { FleetWatcher } from "./watcher.ts";
 
 // NFR-03 / クリティカル設計決定: サーバは 127.0.0.1 に固定バインドする。
 // 環境変数・起動引数など、外部からホストを上書きできる口は意図的に作らない。
@@ -43,10 +45,11 @@ const UI_DIST_ROOT = fileURLToPath(new URL("../../dist/ui", import.meta.url));
 export function createApp(
   cache: BoardCache = createMemoryBoardCache(),
   getFleetEntries: GetFleetEntries = NO_FLEET_ENTRIES,
+  fleetAgentAdditionDeps?: FleetAgentAdditionDeps,
 ) {
   const app = new Hono();
   // api ルートは静的配信ミドルウェアより先に登録する。
-  registerApiRoutes(app, cache, getFleetEntries);
+  registerApiRoutes(app, cache, getFleetEntries, fleetAgentAdditionDeps);
   app.use("/*", serveStatic({ root: UI_DIST_ROOT }));
   return app;
 }
@@ -60,9 +63,10 @@ export function getServeOptions(
   port: number = DEFAULT_PORT,
   cache: BoardCache = createMemoryBoardCache(),
   getFleetEntries: GetFleetEntries = NO_FLEET_ENTRIES,
+  fleetAgentAdditionDeps?: FleetAgentAdditionDeps,
 ) {
   return {
-    fetch: createApp(cache, getFleetEntries).fetch,
+    fetch: createApp(cache, getFleetEntries, fleetAgentAdditionDeps).fetch,
     hostname: LISTEN_HOSTNAME,
     port,
   };
@@ -119,10 +123,35 @@ if (isMainModule) {
   const fleetEntries = loadFleetManifest();
   const getFleetEntries: GetFleetEntries = () => fleetEntries;
 
+  // Issue #122: POST /api/fleet/agents が必要とする fleetWatcher は、下の
+  // getServeOptions() 呼び出し（registerApiRoutes 経由でハンドラを構築する
+  // 時点）ではまだ存在しない（startFleetWatcher ステップで後から生成される）。
+  // getFleetEntries と同じ「呼び出し時点で遅延解決するコールバック」パターンで
+  // DI し、実際にリクエストが飛んでくる頃（起動シーケンス完了後）に解決済みに
+  // なるようにする。起動直後のごく短いウィンドウで来たリクエストはハンドラ側が
+  // 503 を返す。
+  //
+  // セルフレビュー指摘対応: 当初 broadcastAgentUpdate も同じ遅延参照で保持して
+  // いたが、POST ハンドラは一度も呼び出さない（新エージェントへの scan・配信は
+  // fleetWatcher.addAgentWatch が内部で行うため）。readiness 判定は
+  // fleetWatcher の解決有無だけで十分であり、fleetWatcher は起動シーケンス上
+  // broadcastAgentUpdate より後に生成される（より保守的なタイミング）ため、
+  // 不要な DI シームを削って YAGNI に倣う。
+  const fleetAgentAdditionRefs: { fleetWatcher?: FleetWatcher } = {};
+  const fleetAgentAdditionDeps: FleetAgentAdditionDeps = {
+    fleetEntries,
+    getFleetWatcher: () => fleetAgentAdditionRefs.fleetWatcher,
+  };
+
   // HTTP と WS で同一の cache インスタンスを共有する。
   const cache = createMemoryBoardCache();
   const server = serve(
-    getServeOptions(DEFAULT_PORT, cache, getFleetEntries),
+    getServeOptions(
+      DEFAULT_PORT,
+      cache,
+      getFleetEntries,
+      fleetAgentAdditionDeps,
+    ),
     (info) => {
       console.log(
         `claude-flywheel-board listening on http://${LISTEN_HOSTNAME}:${info.port}`,
@@ -147,6 +176,7 @@ if (isMainModule) {
     cache,
     broadcastAgentUpdate,
   );
+  fleetAgentAdditionRefs.fleetWatcher = fleetWatcher;
 
   // P3: fs イベントも API 呼び出しも起きない間に stale へ変わったことへ誰も
   // 気づけない問題を解消するための定期再評価（既定1分間隔）。
