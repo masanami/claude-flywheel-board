@@ -472,4 +472,34 @@ describe("removeFleetEntry（Issue #122: POST /api/fleet/agents のロールバ�
       "#research\t/repos/research-agent\nmedical\t/repos/medical-agent\n",
     );
   });
+
+  // chmod 0o444（読み取り専用）は root 実行（コンテナ CI 等）だと権限ビットが
+  // 無視されて書き込めてしまい、例外が発生しない。api.test.ts の
+  // canTestUnwritable と同じ理由でここでも同条件でスキップする。
+  const canTestUnwritable =
+    process.platform !== "win32" && process.getuid?.() !== 0;
+
+  it.skipIf(!canTestUnwritable)(
+    "書き込み失敗（読み取り専用ファイル）時は例外を投げず false を返す",
+    () => {
+      appendFleetEntry(
+        { name: "research", path: "/repos/research-agent" },
+        tmpManifestPath,
+      );
+      fs.chmodSync(tmpManifestPath, 0o444);
+
+      try {
+        const removed = removeFleetEntry(
+          "research",
+          "/repos/research-agent",
+          tmpManifestPath,
+        );
+
+        expect(removed).toBe(false);
+      } finally {
+        // afterEach の rmSync（tmpDir ごと削除）が失敗しないよう権限を戻す。
+        fs.chmodSync(tmpManifestPath, 0o644);
+      }
+    },
+  );
 });

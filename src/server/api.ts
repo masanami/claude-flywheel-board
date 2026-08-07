@@ -59,16 +59,37 @@ export type FleetAgentAdditionDeps = {
   getFleetWatcher: () => FleetWatcher | undefined;
 };
 
+/**
+ * `git init` のハング防止用タイムアウト（PR #134 レビュー指摘）。
+ * 遅いネットワークマウント等で `git init` が返らなくなった場合、
+ * `POST /api/fleet/agents` がリクエストを握ったまま返らなくなるのを防ぐ。
+ * タイムアウト到達時は `error.killed === true` で既存の catch →
+ * `cleanupSideEffects()` → 500 応答の経路にそのまま乗る。
+ */
+const GIT_INIT_TIMEOUT_MS = 30_000;
+
+/** `git init` の標準出力/エラー出力バッファ上限（異常出力での無制限バッファリング防止）。 */
+const GIT_INIT_MAX_BUFFER_BYTES = 1024 * 1024;
+
 /** `git init` を子プロセスとして実行する（tmux.ts の execFile Promise 化パターンを踏襲）。 */
 function runGitInit(cwd: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    execFile("git", ["init"], { cwd }, (error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve();
-    });
+    execFile(
+      "git",
+      ["init"],
+      {
+        cwd,
+        timeout: GIT_INIT_TIMEOUT_MS,
+        maxBuffer: GIT_INIT_MAX_BUFFER_BYTES,
+      },
+      (error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      },
+    );
   });
 }
 
@@ -388,17 +409,20 @@ export function registerApiRoutes(
       }
     }
 
-    // fleet.tsv 自体が読めることを事前に確認する（存在しない・権限不足等はクライアント
-    // 入力の問題ではないため 500 として appendFleetEntry の一般的な 400 経路とは
-    // 区別する）。
+    // fleet.tsv 自体が読み書きできることを事前に確認する（存在しない・権限不足等は
+    // クライアント入力の問題ではないため 500 として appendFleetEntry の一般的な
+    // 400 経路とは区別する）。後続の appendFleetEntry は追記（書き込み）を行うため、
+    // 読み取り権限のみの確認では書き込み不可のケースを検出できず、appendFileSync が
+    // EACCES で失敗して下の catch により 400（入力エラー扱い）に誤分類されてしまう。
+    // そのため R_OK と併せて W_OK も検査する。
     const manifestPath = resolveFleetManifestPath();
     try {
-      fs.accessSync(manifestPath, fs.constants.R_OK);
+      fs.accessSync(manifestPath, fs.constants.R_OK | fs.constants.W_OK);
     } catch (error) {
       cleanupSideEffects();
       return c.json(
         {
-          error: `fleet マニフェストの読み込みに失敗しました: ${toErrorMessage(error)}`,
+          error: `fleet マニフェストの読み書きに失敗しました: ${toErrorMessage(error)}`,
         },
         500,
       );

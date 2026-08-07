@@ -326,6 +326,18 @@ export function removeFleetEntry(
   }
 
   const updated = content.slice(0, idx) + content.slice(idx + line.length);
-  fs.writeFileSync(manifestPath, updated, "utf-8");
+  try {
+    fs.writeFileSync(manifestPath, updated, "utf-8");
+  } catch (error) {
+    // JSDoc の契約どおり例外は投げない（権限不足・ディスク不足等での
+    // writeFileSync 失敗を握り潰し false を返す）。この関数は api.ts の
+    // ロールバック経路から呼ばれるため、ここで例外が漏れると本来クライアントへ
+    // 返すはずの元のエラー応答が失われてしまう。
+    console.error(
+      "[manifest] fleet.tsv の更新に失敗しました（ロールバック用の書き込み）:",
+      error,
+    );
+    return false;
+  }
   return true;
 }

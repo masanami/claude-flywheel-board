@@ -1,3 +1,4 @@
+import * as childProcess from "node:child_process";
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import type { AddressInfo } from "node:net";
@@ -28,6 +29,18 @@ import type { FleetWatcher } from "./watcher.ts";
 // md/watch.ts → chokidar の依存グラフ全体）に透過的に効く。他の describe
 // ブロックは chokidar に依存しないため影響しない。
 vi.mock("chokidar", () => ({ watch: vi.fn() }));
+
+// PR #134 レビュー指摘の回帰テスト（git init のタイムアウト/maxBuffer 指定）用。
+// ESM の名前空間エクスポートは vi.spyOn で直接差し替えできないため、
+// vi.mock + importOriginal で execFile だけ vi.fn ラップし、実装は素通しする
+// （呼び出し引数の検証のみが目的で、挙動そのものは変えない）。
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFile: vi.fn(actual.execFile),
+  };
+});
 
 describe("isAllowedHost", () => {
   it("localhost を許可する", () => {
@@ -1215,6 +1228,33 @@ describe("POST /api/fleet/agents（Issue #122）", () => {
     });
   });
 
+  it("git init 実行時に timeout と maxBuffer を指定する（ハング防止、PR #134 レビュー指摘の回帰テスト）", async () => {
+    // execFile は vi.mock により実装を素通しする vi.fn でラップされている
+    // （ファイル冒頭参照）。ここでは呼び出し引数のみを検証し、timeout 発火の
+    // 実時間待ちは行わない。
+    const execFileMock = vi.mocked(childProcess.execFile);
+    execFileMock.mockClear();
+    const newRepoPath = path.join(tmpDir, "timeout-option-agent");
+    const { app } = buildApp();
+
+    const res = await postAgent(app, {
+      name: "timeout-option-agent",
+      path: newRepoPath,
+    });
+
+    expect(res.status).toBe(201);
+    const gitInitCall = execFileMock.mock.calls.find(
+      (call) =>
+        call[0] === "git" && Array.isArray(call[1]) && call[1][0] === "init",
+    );
+    expect(gitInitCall).toBeDefined();
+    const options = gitInitCall?.[2] as
+      | { timeout?: number; maxBuffer?: number }
+      | undefined;
+    expect(options?.timeout).toBe(30_000);
+    expect(options?.maxBuffer).toBeGreaterThan(0);
+  });
+
   it("name が欠落したリクエストは 400 と構造化エラーを返す（fs には触れない）", async () => {
     const newRepoPath = path.join(tmpDir, "no-name-agent");
     const { app } = buildApp();
@@ -1496,6 +1536,41 @@ describe("POST /api/fleet/agents（Issue #122）", () => {
       { name: "existing-agent", path: existingAgentPath },
     ]);
   });
+
+  // chmod 0o444（読み取り専用）は root 実行（コンテナ CI 等）だと権限ビットが
+  // 無視されて書き込めてしまい、500 が発生しない。冒頭の canTestUnreadable と
+  // 同じ理由でここでも同条件でスキップする。
+  const canTestUnwritable =
+    process.platform !== "win32" && process.getuid?.() !== 0;
+
+  it.skipIf(!canTestUnwritable)(
+    "fleet.tsv が読み取り専用（書き込み不可）の場合、appendFleetEntry の EACCES を待たず 500 を返す（環境要因を appendFleetEntry の一般的な 400 経路に誤分類しない）",
+    async () => {
+      fs.chmodSync(fleetManifestPath, 0o444);
+      const newRepoPath = path.join(tmpDir, "readonly-manifest-agent");
+      const { app, fleetEntries } = buildApp();
+
+      try {
+        const res = await postAgent(app, {
+          name: "readonly-manifest-agent",
+          path: newRepoPath,
+        });
+
+        expect(res.status).toBe(500);
+        const bodyJson = await res.json();
+        expect(bodyJson.error).toMatch(/fleet マニフェストの読み書きに失敗/);
+        // 事前チェックで弾かれ、appendFleetEntry まで到達していない
+        // （fleetEntries が変化しない、作成したディレクトリが後始末される）。
+        expect(fs.existsSync(newRepoPath)).toBe(false);
+        expect(fleetEntries).toEqual([
+          { name: "existing-agent", path: existingAgentPath },
+        ]);
+      } finally {
+        // afterEach の rmSync（tmpDir ごと削除）が失敗しないよう権限を戻す。
+        fs.chmodSync(fleetManifestPath, 0o644);
+      }
+    },
+  );
 
   it('name が予約接尾辞 "-shell" かつ path が未 git 化の既存ディレクトリの場合、400 を返し git init を実行しない', async () => {
     const preexistingPath = path.join(tmpDir, "preexisting-not-git");
