@@ -127,19 +127,33 @@ body {
 
 .filter-bar {
   display: flex;
+  /* Issue #136 で「＋ エージェント追加」ボタンが加わり同一行のコントロール数
+   * が増えたため、狭幅ウィンドウでの折り返しを許容する（wrap しないと行が
+   * document レベルの横スクロールへ溢れ、下部ターミナル領域を含む画面全体
+   * に影響しうる。#64 で board-columns 側に同種の対策済み）。通常幅では
+   * 折り返さないため、上部バーを1行にまとめる狙い自体は維持される。 */
+  flex-wrap: wrap;
   gap: 0.5rem;
   padding: 0.75rem 1rem;
   border-bottom: 1px solid var(--board-border);
 }
 
-.filter-chip {
+.filter-chip,
+.add-agent-button {
+  /* フィルタチップ（丸ピル）と＋エージェント追加ボタン（角丸6px）は同じ行の
+   * 兄弟要素になった（#136）が見た目のグループを区別するため意図的に
+   * border-radius だけを変えている。それ以外の外観プロパティは共通化する
+   * （DRY）。 */
   border: 1px solid var(--board-border);
   background: var(--board-chip-bg);
   color: var(--board-fg);
-  border-radius: 999px;
   padding: 0.35rem 0.9rem;
   font-size: 0.85rem;
   cursor: pointer;
+}
+
+.filter-chip {
+  border-radius: 999px;
 }
 
 .filter-chip[aria-pressed="true"] {
@@ -150,7 +164,10 @@ body {
 
 .filter-toggle {
   /* すべて/承認待ちの相互排他チップ群とは独立したトグルであることを示すため、
-   * 右端へ寄せて視覚的に分離する。 */
+   * 右端へ寄せて視覚的に分離する。この margin-left: auto が、後続に続く
+   * 「🗄 アーカイブ表示」「＋ エージェント追加」（#136）を含む右端グループ
+   * 全体を成立させるアンカーになっている。この宣言を外す・並び順を変える
+   * 場合は、後続ボタン群の右端寄せが巻き添えで崩れる点に注意すること。 */
   margin-left: auto;
 }
 
@@ -636,23 +653,17 @@ body {
   cursor: pointer;
 }
 
-/* 「＋ エージェント追加」ボタン（Issue #123）: FilterBar とは独立した
- * ヘッダ行に配置する（filter-bar 自身の相互排他チップ/トグル群には混ぜない）。
+/* 「＋ エージェント追加」ボタン（Issue #123）: FilterBar 行（.filter-bar）内、
+ * アーカイブ表示トグルの後ろに配置する（Issue #136 で専用の board-header 行
+ * を廃止し統合）。filter-toggle の margin-left: auto により後続ボタンも
+ * 自動的に右端グループへ含まれるため、このボタン自体に追加のレイアウト
+ * 指定は不要。フィルタチップ群の相互排他ロジック（liveFiltersDisabled）
+ * には巻き込まない独立操作。共通の外観プロパティは `.filter-chip,
+ * .add-agent-button` （本ファイル上部）にまとめてあり、ここでは
+ * フィルタチップ（丸ピル）と区別するための border-radius のみ上書きする。
  */
-.board-header {
-  display: flex;
-  justify-content: flex-end;
-  padding: 0.5rem 1rem 0;
-}
-
 .add-agent-button {
-  border: 1px solid var(--board-border);
-  background: var(--board-chip-bg);
-  color: var(--board-fg);
   border-radius: 6px;
-  padding: 0.35rem 0.9rem;
-  font-size: 0.85rem;
-  cursor: pointer;
 }
 
 /* 「＋ エージェント追加」フォーム（Issue #123）: CardDetailModal と同じく
