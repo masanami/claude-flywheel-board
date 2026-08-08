@@ -12,6 +12,7 @@ describe("FilterBar", () => {
         onShowCompletedChange={vi.fn()}
         archiveMode={false}
         onArchiveModeChange={vi.fn()}
+        onAddAgentClick={vi.fn()}
       />,
     );
 
@@ -30,6 +31,7 @@ describe("FilterBar", () => {
         onShowCompletedChange={vi.fn()}
         archiveMode={false}
         onArchiveModeChange={vi.fn()}
+        onAddAgentClick={vi.fn()}
       />,
     );
 
@@ -53,6 +55,7 @@ describe("FilterBar", () => {
         onShowCompletedChange={vi.fn()}
         archiveMode={false}
         onArchiveModeChange={vi.fn()}
+        onAddAgentClick={vi.fn()}
       />,
     );
 
@@ -71,6 +74,7 @@ describe("FilterBar", () => {
         onShowCompletedChange={vi.fn()}
         archiveMode={false}
         onArchiveModeChange={vi.fn()}
+        onAddAgentClick={vi.fn()}
       />,
     );
 
@@ -88,6 +92,7 @@ describe("FilterBar", () => {
         onShowCompletedChange={vi.fn()}
         archiveMode={false}
         onArchiveModeChange={vi.fn()}
+        onAddAgentClick={vi.fn()}
       />,
     );
 
@@ -107,6 +112,7 @@ describe("FilterBar", () => {
         onShowCompletedChange={onShowCompletedChange}
         archiveMode={false}
         onArchiveModeChange={vi.fn()}
+        onAddAgentClick={vi.fn()}
       />,
     );
 
@@ -124,6 +130,7 @@ describe("FilterBar", () => {
         onShowCompletedChange={vi.fn()}
         archiveMode={false}
         onArchiveModeChange={vi.fn()}
+        onAddAgentClick={vi.fn()}
       />,
     );
 
@@ -139,12 +146,96 @@ describe("FilterBar", () => {
         onShowCompletedChange={vi.fn()}
         archiveMode={false}
         onArchiveModeChange={vi.fn()}
+        onAddAgentClick={vi.fn()}
       />,
     );
 
     expect(
       screen.getByRole("button", { name: "完了を表示" }),
     ).not.toBeDisabled();
+  });
+
+  describe("「＋ エージェント追加」ボタン（Issue #136: board-header 行を廃止し FilterBar 行に統合）", () => {
+    it("「＋ エージェント追加」ボタンを表示する", () => {
+      render(
+        <FilterBar
+          value="all"
+          onChange={vi.fn()}
+          showCompleted={false}
+          onShowCompletedChange={vi.fn()}
+          archiveMode={false}
+          onArchiveModeChange={vi.fn()}
+          onAddAgentClick={vi.fn()}
+        />,
+      );
+
+      expect(
+        screen.getByRole("button", { name: "＋ エージェント追加" }),
+      ).toBeInTheDocument();
+    });
+
+    it("「＋ エージェント追加」クリックで onAddAgentClick を呼ぶ", () => {
+      const onAddAgentClick = vi.fn();
+      render(
+        <FilterBar
+          value="all"
+          onChange={vi.fn()}
+          showCompleted={false}
+          onShowCompletedChange={vi.fn()}
+          archiveMode={false}
+          onArchiveModeChange={vi.fn()}
+          onAddAgentClick={onAddAgentClick}
+        />,
+      );
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "＋ エージェント追加" }),
+      );
+
+      expect(onAddAgentClick).toHaveBeenCalledOnce();
+    });
+
+    it("アーカイブ表示中でも「＋ エージェント追加」ボタンは無効化されない（liveFiltersDisabled の対象外）", () => {
+      render(
+        <FilterBar
+          value="all"
+          onChange={vi.fn()}
+          showCompleted={false}
+          onShowCompletedChange={vi.fn()}
+          archiveMode={true}
+          onArchiveModeChange={vi.fn()}
+          onAddAgentClick={vi.fn()}
+        />,
+      );
+
+      expect(
+        screen.getByRole("button", { name: "＋ エージェント追加" }),
+      ).not.toBeDisabled();
+    });
+
+    it("「🗄 アーカイブ表示」ボタンより後ろ（.filter-bar の末尾）に配置され、右端グループの一員になる", () => {
+      const { container } = render(
+        <FilterBar
+          value="all"
+          onChange={vi.fn()}
+          showCompleted={false}
+          onShowCompletedChange={vi.fn()}
+          archiveMode={false}
+          onArchiveModeChange={vi.fn()}
+          onAddAgentClick={vi.fn()}
+        />,
+      );
+
+      // 右端寄せは filter-toggle（完了を表示）の margin-left: auto を
+      // アンカーに、後続の兄弟要素がまとめて右端グループへ含まれる構造に
+      // 依存する（styles.css .filter-toggle 参照）。「一番最後に配置する」
+      // という設計を DOM 順序で固定し、将来の並び替えでレイアウトが
+      // 意図せず崩れることを検知できるようにする。
+      const filterBar = container.querySelector(".filter-bar");
+      expect(filterBar?.lastElementChild).toBe(
+        screen.getByRole("button", { name: "＋ エージェント追加" }),
+      );
+    });
   });
 
   describe("アーカイブ表示トグル（Issue #50 ①）", () => {
@@ -157,6 +248,7 @@ describe("FilterBar", () => {
           onShowCompletedChange={vi.fn()}
           archiveMode={true}
           onArchiveModeChange={vi.fn()}
+          onAddAgentClick={vi.fn()}
         />,
       );
 
@@ -175,6 +267,7 @@ describe("FilterBar", () => {
           onShowCompletedChange={vi.fn()}
           archiveMode={false}
           onArchiveModeChange={onArchiveModeChange}
+          onAddAgentClick={vi.fn()}
         />,
       );
 
@@ -192,6 +285,7 @@ describe("FilterBar", () => {
           onShowCompletedChange={vi.fn()}
           archiveMode={true}
           onArchiveModeChange={vi.fn()}
+          onAddAgentClick={vi.fn()}
         />,
       );
 
@@ -211,6 +305,7 @@ describe("FilterBar", () => {
           onShowCompletedChange={vi.fn()}
           archiveMode={false}
           onArchiveModeChange={vi.fn()}
+          onAddAgentClick={vi.fn()}
         />,
       );
 
