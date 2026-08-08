@@ -12,13 +12,28 @@ const selectionChangeCallbacks: Array<() => void> = [];
 // hasSelection/getSelection の戻り値をテストごとに差し替えるための状態。
 let mockHasSelection = false;
 let mockSelectionText = "";
+// terminal.loadAddon() に渡されたインスタンスを捕捉し、FitAddon/ClipboardAddon
+// の双方がロードされたことを検証できるようにする（OSC 52 パススルー対応）。
+// ClipboardAddon は `provider`（xterm-adapter.ts が渡すカスタム
+// IClipboardProvider）も保持し、読み取り無効化・書き込み委譲の直接検証に使う
+// （PR #138 レビュー指摘対応）。
+type MockClipboardProvider = {
+  readText: (selection?: string) => string | Promise<string>;
+  writeText: (selection: string, data: string) => void | Promise<void>;
+};
+const LOADED_ADDONS: Array<{
+  kind: string;
+  provider?: MockClipboardProvider;
+}> = [];
 
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
     constructor(options: Record<string, unknown>) {
       terminalCtor(options);
     }
-    loadAddon() {}
+    loadAddon(addon: { kind: string }) {
+      LOADED_ADDONS.push(addon);
+    }
     open() {}
     attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean) {
       customKeyEventHandlers.push(handler);
@@ -36,9 +51,44 @@ vi.mock("@xterm/xterm", () => ({
 }));
 vi.mock("@xterm/addon-fit", () => ({
   FitAddon: class {
+    kind = "fit";
     fit() {}
   },
 }));
+vi.mock("@xterm/addon-clipboard", () => ({
+  ClipboardAddon: class {
+    kind = "clipboard";
+    provider?: MockClipboardProvider;
+    // 実物と同じ (base64?, provider?) の引数順で受け取る。
+    constructor(_base64: unknown, provider?: MockClipboardProvider) {
+      this.provider = provider;
+    }
+  },
+}));
+
+/**
+ * Promise チェーン（writeText の reject → execCommand フォールバック →
+ * dedup ロールバック等）がすべて解決するまでマイクロタスク/タイマーキューを
+ * flush する。setTimeout(0) はイベントループを一周させるため、途中に挟まる
+ * 複数段の .then/.catch チェーンをまとめて待てる。
+ */
+function flushAsync(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+// jsdom は document.execCommand 自体を実装しない（未定義プロパティ）ため、
+// テストごとに差し替えられるよう型付きの薄いヘルパーを介して操作する
+// （`any` キャスト・`delete` 演算子を避ける。Issue #116）。
+type ExecCommandFn = (commandId: string) => boolean;
+type DocumentWithExecCommand = { execCommand?: ExecCommandFn };
+
+function stubExecCommand(fn: ExecCommandFn | undefined): void {
+  Object.defineProperty(document as DocumentWithExecCommand, "execCommand", {
+    value: fn,
+    writable: true,
+    configurable: true,
+  });
+}
 
 // brightBlack が background/foreground の中間の明度にあることを検証するための
 // ざっくりした明度（0〜255）。3色ともグレー系（RGB 各チャンネルがほぼ同値）
@@ -56,12 +106,15 @@ describe("createXtermInstance", () => {
     terminalCtor.mockClear();
     customKeyEventHandlers.length = 0;
     selectionChangeCallbacks.length = 0;
+    LOADED_ADDONS.length = 0;
     mockHasSelection = false;
     mockSelectionText = "";
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    // テスト間の汚染を防ぐため、execCommand スタブを毎回リセットする。
+    stubExecCommand(undefined);
   });
 
   it("等幅フォントスタックと明示的な fontSize を Terminal に渡す（プロンプト表示の文字崩れ防止 #27）", async () => {
@@ -83,6 +136,17 @@ describe("createXtermInstance", () => {
     expect(options.fontFamily).toMatch(/ui-monospace|SFMono|Menlo/);
     expect(typeof options.fontSize).toBe("number");
     expect(options.fontSize).toBeGreaterThan(0);
+  });
+
+  it("macOptionClickForcesSelection を true にする（Issue #116: tmux の mouse on 環境で Option+ドラッグにより xterm.js のネイティブ選択を強制する既定 false の逃げ道を有効化する）", async () => {
+    const { createXtermInstance } = await import("./xterm-adapter.ts");
+
+    createXtermInstance(document.createElement("div"));
+
+    const call = terminalCtor.mock.calls[0];
+    if (!call) throw new Error("Terminal コンストラクタが呼ばれていません");
+    const options = call[0] as { macOptionClickForcesSelection?: boolean };
+    expect(options.macOptionClickForcesSelection).toBe(true);
   });
 
   it("theme に background より明るく foreground より暗い brightBlack を定義する（補完候補の視認性 #46）", async () => {
@@ -231,8 +295,10 @@ describe("createXtermInstance", () => {
     expect(writeText).not.toHaveBeenCalled();
   });
 
-  it("navigator.clipboard が undefined の環境では選択変化イベントで例外を投げず何も起きない", async () => {
+  it("navigator.clipboard が undefined の環境では選択変化イベントで例外を投げず、代わりに execCommand フォールバックでコピーする", async () => {
     vi.stubGlobal("navigator", {});
+    const execCommand = vi.fn().mockReturnValue(true);
+    stubExecCommand(execCommand);
 
     const { createXtermInstance } = await import("./xterm-adapter.ts");
     createXtermInstance(document.createElement("div"));
@@ -245,6 +311,8 @@ describe("createXtermInstance", () => {
     mockSelectionText = "no clipboard api";
 
     expect(() => onSelectionChange()).not.toThrow();
+    await flushAsync();
+    expect(execCommand).toHaveBeenCalledWith("copy");
   });
 
   it("直前にコピーした文字列と同一の選択変化通知では writeText を再度呼ばない（ドラッグ中の高頻度発火の抑制）", async () => {
@@ -290,5 +358,191 @@ describe("createXtermInstance", () => {
     onSelectionChange();
 
     expect(writeText).toHaveBeenCalledTimes(2);
+  });
+
+  it("書き込みに失敗した選択内容は dedup 記録されず、次の選択変化で再試行される（Issue #116: writeText 失敗時に誤って dedup 記録していたバグの修正）", async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const execCommand = vi.fn().mockReturnValue(false);
+    stubExecCommand(execCommand);
+
+    const { createXtermInstance } = await import("./xterm-adapter.ts");
+    createXtermInstance(document.createElement("div"));
+
+    const onSelectionChange = selectionChangeCallbacks[0];
+    if (!onSelectionChange)
+      throw new Error("onSelectionChange が登録されていません");
+
+    mockHasSelection = true;
+    mockSelectionText = "flaky text";
+    onSelectionChange();
+    await flushAsync();
+
+    // writeText・execCommand フォールバックの両方が失敗しているため
+    // dedup状態は確定しておらず、同一内容の再通知でも再試行できるはず。
+    onSelectionChange();
+    await flushAsync();
+
+    expect(writeText).toHaveBeenCalledTimes(2);
+  });
+
+  it("ClipboardAddon をロードする（OSC 52 経由でクリップボード書き込みを要求するプログラムの橋渡し。読み取り無効化のカスタム IClipboardProvider を使用。Issue #116）", async () => {
+    const { createXtermInstance } = await import("./xterm-adapter.ts");
+    createXtermInstance(document.createElement("div"));
+
+    expect(LOADED_ADDONS.some((addon) => addon.kind === "clipboard")).toBe(
+      true,
+    );
+    // FitAddon が既存どおりロードされ続けていることも合わせて回帰確認する。
+    expect(LOADED_ADDONS.some((addon) => addon.kind === "fit")).toBe(true);
+  });
+
+  describe("ClipboardAddon に渡すカスタム IClipboardProvider（PR #138 レビュー指摘: OSC 52 の読み取り要求でクリップボード内容が pty 入力へ流出する経路の遮断）", () => {
+    function getLoadedClipboardProvider(): MockClipboardProvider {
+      const clipboardAddon = LOADED_ADDONS.find(
+        (addon) => addon.kind === "clipboard",
+      );
+      if (!clipboardAddon?.provider) {
+        throw new Error("ClipboardAddon に provider が渡されていません");
+      }
+      return clipboardAddon.provider;
+    }
+
+    it("readText は常に空文字列を返し、navigator.clipboard.readText を呼ばない（OSC 52 の読み取り要求 `?` 相当）", async () => {
+      const readText = vi.fn().mockResolvedValue("secret from os clipboard");
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { clipboard: { readText, writeText } });
+
+      const { createXtermInstance } = await import("./xterm-adapter.ts");
+      createXtermInstance(document.createElement("div"));
+
+      const result = getLoadedClipboardProvider().readText("c");
+
+      expect(result).toBe("");
+      expect(readText).not.toHaveBeenCalled();
+    });
+
+    it("writeText は既存のコピー経路（copyToClipboard）へ委譲する（OSC 52 の書き込み要求）", async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+
+      const { createXtermInstance } = await import("./xterm-adapter.ts");
+      createXtermInstance(document.createElement("div"));
+
+      await getLoadedClipboardProvider().writeText("c", "osc52 written text");
+
+      expect(writeText).toHaveBeenCalledWith("osc52 written text");
+    });
+
+    it("writeText の委譲先（copyToClipboard）が失敗しても例外を投げない", async () => {
+      const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+      stubExecCommand(vi.fn().mockReturnValue(false));
+
+      const { createXtermInstance } = await import("./xterm-adapter.ts");
+      createXtermInstance(document.createElement("div"));
+
+      await expect(
+        getLoadedClipboardProvider().writeText("c", "will fail"),
+      ).resolves.toBeUndefined();
+    });
+  });
+
+  describe("Cmd+C ハンドラの execCommand フォールバック（#116: 実ブラウザでは navigator.clipboard.writeText が非同期APIの拒否等で reject しうる）", () => {
+    it("navigator.clipboard.writeText が reject した場合、document.execCommand('copy') フォールバックでコピーする", async () => {
+      const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+      const execCommand = vi.fn().mockReturnValue(true);
+      stubExecCommand(execCommand);
+      mockHasSelection = true;
+      mockSelectionText = "selected text";
+
+      const { createXtermInstance } = await import("./xterm-adapter.ts");
+      createXtermInstance(document.createElement("div"));
+
+      const handler = customKeyEventHandlers[0];
+      if (!handler)
+        throw new Error("attachCustomKeyEventHandler が登録されていません");
+      const event = new KeyboardEvent("keydown", { key: "c", metaKey: true });
+
+      const result = handler(event);
+      await flushAsync();
+
+      expect(result).toBe(false);
+      expect(writeText).toHaveBeenCalledWith("selected text");
+      expect(execCommand).toHaveBeenCalledWith("copy");
+    });
+
+    it("execCommand フォールバック実行後、コピー前にフォーカスしていた要素（xterm.js の隠し textarea 相当）へ明示的にフォーカスを復元する（フォールバックが xterm への入力フォーカスを奪ったままにしない。code-reviewer 指摘の回帰防止）", async () => {
+      const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+      const hiddenXtermTextarea = document.createElement("textarea");
+      document.body.appendChild(hiddenXtermTextarea);
+      hiddenXtermTextarea.focus();
+      // jsdom は select() での暗黙のフォーカス移動（実ブラウザの仕様）を再現
+      // しないため、「元のフォーカス先へ戻す実装」の有無を、活性要素の比較
+      // ではなく明示的な focus() 呼び出しの有無で検証する。
+      const restoreFocusSpy = vi.spyOn(hiddenXtermTextarea, "focus");
+      const execCommand = vi.fn().mockReturnValue(true);
+      stubExecCommand(execCommand);
+      mockHasSelection = true;
+      mockSelectionText = "selected text";
+
+      const { createXtermInstance } = await import("./xterm-adapter.ts");
+      createXtermInstance(document.createElement("div"));
+
+      const handler = customKeyEventHandlers[0];
+      if (!handler)
+        throw new Error("attachCustomKeyEventHandler が登録されていません");
+      const event = new KeyboardEvent("keydown", { key: "c", metaKey: true });
+
+      handler(event);
+      await flushAsync();
+
+      expect(restoreFocusSpy).toHaveBeenCalled();
+      document.body.removeChild(hiddenXtermTextarea);
+    });
+
+    it("navigator.clipboard が undefined の場合も document.execCommand('copy') フォールバックでコピーし、xterm への通常キー処理を止める", async () => {
+      vi.stubGlobal("navigator", {});
+      const execCommand = vi.fn().mockReturnValue(true);
+      stubExecCommand(execCommand);
+      mockHasSelection = true;
+      mockSelectionText = "selected text";
+
+      const { createXtermInstance } = await import("./xterm-adapter.ts");
+      createXtermInstance(document.createElement("div"));
+
+      const handler = customKeyEventHandlers[0];
+      if (!handler)
+        throw new Error("attachCustomKeyEventHandler が登録されていません");
+      const event = new KeyboardEvent("keydown", { key: "c", metaKey: true });
+
+      const result = handler(event);
+      await flushAsync();
+
+      expect(result).toBe(false);
+      expect(execCommand).toHaveBeenCalledWith("copy");
+    });
+
+    it("writeText・execCommand フォールバックの双方が失敗しても例外を投げない（コピー失敗はターミナルの他の動作に影響させない）", async () => {
+      const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+      const execCommand = vi.fn().mockReturnValue(false);
+      stubExecCommand(execCommand);
+      mockHasSelection = true;
+      mockSelectionText = "selected text";
+
+      const { createXtermInstance } = await import("./xterm-adapter.ts");
+      createXtermInstance(document.createElement("div"));
+
+      const handler = customKeyEventHandlers[0];
+      if (!handler)
+        throw new Error("attachCustomKeyEventHandler が登録されていません");
+      const event = new KeyboardEvent("keydown", { key: "c", metaKey: true });
+
+      expect(() => handler(event)).not.toThrow();
+      await flushAsync();
+    });
   });
 });

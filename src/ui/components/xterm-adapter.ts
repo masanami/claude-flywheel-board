@@ -1,3 +1,7 @@
+import {
+  ClipboardAddon,
+  type IClipboardProvider,
+} from "@xterm/addon-clipboard";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 
@@ -27,6 +31,88 @@ const MONOSPACE_FONT_FAMILY =
   'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace';
 const FONT_SIZE_PX = 14;
 
+/**
+ * `navigator.clipboard.writeText` の同期フォールバック（Issue #116）。
+ *
+ * 実ブラウザでは Clipboard 非同期 API がフォーカス喪失・権限拒否等のエッジ
+ * ケースで reject しうる（ユニットテストの常時 resolve するモックでは
+ * 再現しない）。off-screen の一時 `<textarea>` を使う `document.execCommand`
+ * 経由の同期コピーは非推奨 API だが、ユーザージェスチャー起因の呼び出し
+ * スタック内で同期的に呼ばれる限り機能する defense-in-depth として許容する。
+ */
+function copyUsingExecCommandFallback(text: string): boolean {
+  // execCommand("copy") はフォーカス中の選択範囲に対して働くため、一時
+  // textarea へ明示的にフォーカスを移す必要がある。この間 xterm.js が
+  // 内部で保持する隠し textarea（ユーザーの入力フォーカス先）からフォーカス
+  // が奪われるため、後始末で必ず元のフォーカス先へ戻す（code-reviewer
+  // 指摘: 戻し忘れるとコピーのたびにターミナルへの入力が止まって見える）。
+  const previouslyFocused =
+    document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  // 画面上に一切見えないようにする（off-screen 配置）。
+  textarea.style.position = "fixed";
+  textarea.style.top = "-9999px";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  let succeeded = false;
+  try {
+    succeeded = document.execCommand("copy");
+  } catch {
+    // execCommand 自体が未実装（一部環境）または拒否された場合も、
+    // コピー失敗として扱うだけで例外は外へ伝播させない。
+    succeeded = false;
+  } finally {
+    document.body.removeChild(textarea);
+    previouslyFocused?.focus();
+  }
+  return succeeded;
+}
+
+/**
+ * クリップボードへの書き込みを試み、`navigator.clipboard` が無い場合・
+ * `writeText` が reject した場合は同期フォールバック（execCommand）へ
+ * 委ねる（Issue #116。#44/#73 で導入した各コピー経路の共通ヘルパー）。
+ * 双方とも失敗した場合は reject する。
+ */
+function copyToClipboard(text: string): Promise<void> {
+  if (!navigator.clipboard) {
+    return copyUsingExecCommandFallback(text)
+      ? Promise.resolve()
+      : Promise.reject(new Error("clipboard write failed"));
+  }
+  return navigator.clipboard.writeText(text).catch(() => {
+    if (!copyUsingExecCommandFallback(text)) {
+      throw new Error("clipboard write failed");
+    }
+  });
+}
+
+/**
+ * `ClipboardAddon`（OSC 52 ブリッジ）に渡すカスタム `IClipboardProvider`。
+ *
+ * 既定の `BrowserClipboardProvider` は OSC 52 の読み取り要求（`?`）に対し
+ * `navigator.clipboard.readText()` の結果を `terminal.input()` 経由で pty
+ * への入力として送り返す。pty 内で任意のプログラムが動く以上、これは
+ * クリップボード内容（パスワード等の機密を含みうる）が pty 入力ストリームへ
+ * 流出しうる経路になる（PR #138 レビュー指摘対応）。
+ *
+ * `readText` を常に空文字列で応答させることでこの経路を遮断する
+ * （`navigator.clipboard.readText()` 自体を呼ばないため、ブラウザの
+ * clipboard-read 権限プロンプトも発生しない）。書き込み方向（OSC 52 の
+ * write 要求）は正当な用途のため許可し、`copyToClipboard`（writeText 失敗時
+ * の execCommand フォールバックを含む共通経路）へ委譲する。
+ */
+const readDisabledClipboardProvider: IClipboardProvider = {
+  readText: () => "",
+  writeText: (_selection, data) => copyToClipboard(data).catch(() => {}),
+};
+
 export const createXtermInstance: CreateXtermInstance = (container) => {
   const terminal = new Terminal({
     // ターミナル領域はライト/ダームテーマに関わらずダーク固定（要件どおり）。
@@ -44,6 +130,13 @@ export const createXtermInstance: CreateXtermInstance = (container) => {
     convertEol: true,
     fontFamily: MONOSPACE_FONT_FAMILY,
     fontSize: FONT_SIZE_PX,
+    // tmux の `mouse on`（ユーザーの ~/.tmux.conf 由来。board 専用ソケットにも
+    // 読み込まれる）環境では、tmux がマウストラッキングを要求するため
+    // xterm.js 側のネイティブ選択（copy-on-select・Cmd+C の前提）が発生
+    // しなくなる（Issue #116 調査結果）。既定 false のこのオプションを
+    // true にすると、Option (⌥) + ドラッグでマウストラッキングを無視して
+    // xterm.js のネイティブ選択を強制できる「逃げ道」が有効になる。
+    macOptionClickForcesSelection: true,
   });
 
   // ターミナル上の選択範囲を Cmd+C で OS クリップボードへコピーできるように
@@ -72,16 +165,11 @@ export const createXtermInstance: CreateXtermInstance = (container) => {
       event.metaKey &&
       event.key.toLowerCase() === "c";
     if (isCopyShortcut && terminal.hasSelection()) {
-      // Clipboard API 非対応環境（navigator.clipboard が undefined）では、
-      // .writeText へのプロパティアクセスで同期例外になるのを避けるため、
-      // コピーを諦めて通常キー処理へ委ねる（true を返す）。127.0.0.1 固定
-      // バインド＝secure context のため現実の到達性は限定的だが防御的に扱う。
-      if (!navigator.clipboard) {
-        return true;
-      }
-      // クリップボード書き込みの失敗（フォーカス喪失・権限拒否等）はコピー
-      // 操作自体の失敗に留め、ターミナルの他の動作には影響させない。
-      navigator.clipboard.writeText(terminal.getSelection()).catch(() => {});
+      // クリップボード書き込みの失敗（Clipboard API 非対応・フォーカス喪失・
+      // 権限拒否等）は copyToClipboard 内の execCommand フォールバックに
+      // 委ね、それも失敗した場合のみコピー操作自体の失敗として握り潰す
+      // （ターミナルの他の動作には影響させない。Issue #116）。
+      copyToClipboard(terminal.getSelection()).catch(() => {});
       return false;
     }
     return true;
@@ -116,18 +204,37 @@ export const createXtermInstance: CreateXtermInstance = (container) => {
     if (selection === lastCopiedSelection) {
       return;
     }
-    if (!navigator.clipboard) {
-      return;
-    }
     // 呼び出し直後（Promise 解決前）に来る同一内容の再通知も抑制したいため、
-    // 呼び出し前に同期的に記録する（write 失敗時は catch で握り潰すのみで、
-    // 失敗を理由に再送を許可する必要はない設計）。
+    // 呼び出し前に同期的に「試行中」として記録する（ドラッグ中の高頻度発火の
+    // 抑制。KISS を保ち複雑なデバウンス機構は導入しない）。
+    //
+    // ただし copyToClipboard（writeText と execCommand フォールバックの
+    // 両方）が最終的に失敗した場合は、この記録を取り消して次の選択変化で
+    // 再試行できるようにする（Issue #116: 失敗時も「コピー済み」として
+    // 記録してしまい、以後同じ内容が二度と再送されなくなっていたバグの
+    // 修正。「同一内容の再通知はスキップする」抑制効果は成功時のみ維持する）。
     lastCopiedSelection = selection;
-    navigator.clipboard.writeText(selection).catch(() => {});
+    copyToClipboard(selection).catch(() => {
+      if (lastCopiedSelection === selection) {
+        lastCopiedSelection = null;
+      }
+    });
   });
 
   const fitAddon = new FitAddon();
   terminal.loadAddon(fitAddon);
+
+  // pty 内で動くプログラム（Claude Code 自身・tmux copy-mode・vim 等）が
+  // OSC 52 エスケープシーケンスでクリップボード書き込みを要求した場合に、
+  // xterm.js から navigator.clipboard.writeText へ橋渡しする（Issue #116。
+  // #118 が指摘した「macOS 依存の経路」を board 側で明示的に持つための
+  // 対応）。読み取り要求は空応答で無効化し、クリップボード内容が pty 入力
+  // へ流れる経路を遮断する（PR #138 レビュー指摘対応。詳細は
+  // readDisabledClipboardProvider のコメントを参照）。
+  terminal.loadAddon(
+    new ClipboardAddon(undefined, readDisabledClipboardProvider),
+  );
+
   terminal.open(container);
 
   return {

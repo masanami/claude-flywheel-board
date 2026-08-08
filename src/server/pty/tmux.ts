@@ -53,6 +53,41 @@ function defaultRunHasSessionCheck(
 }
 
 /**
+ * `set-option -s <name> <value>` をベストエフォートで実行する（escape-time
+ * #45・set-clipboard #116 で共通のパターン。DRY）。
+ *
+ * `-s` はサーバオプション（同一 tmux サーバを共有する全セッションに適用
+ * されるオプション）を対象とすることを明示する正式なスコープフラグ（tmux
+ * man page / options-table.c で escape-time・set-clipboard は共に
+ * OPTIONS_TABLE_SERVER）。これを、board 専用ソケット（TMUX_SOCKET）上の
+ * サーバへ設定する用途を想定する。失敗しても newSession 全体を失敗させず、
+ * 警告ログのみに留める（呼び出し元ごとに独立した try/catch を持つため、
+ * あるオプションの設定失敗が他のオプションの設定を妨げない）。
+ */
+async function setServerOptionBestEffort(
+  runCommand: CommandRunner,
+  sessionName: string,
+  optionName: string,
+  optionValue: string,
+): Promise<void> {
+  try {
+    await runCommand("tmux", [
+      "-L",
+      TMUX_SOCKET,
+      "set-option",
+      "-s",
+      optionName,
+      optionValue,
+    ]);
+  } catch (error) {
+    console.warn(
+      `tmux ${optionName} の設定に失敗しました（セッション "${sessionName}" 自体は作成済み）:`,
+      error,
+    );
+  }
+}
+
+/**
  * 改行 (\r\n) をスペースに正規化する。
  *
  * クリティカル設計決定（親 Issue #2 / #14・書き込み境界）: prefill は
@@ -98,14 +133,17 @@ export function createTmuxClient(deps: TmuxClientDeps = {}): TmuxClient {
       // 全画面 alt-screen UI（例: `/plugin`）で単独 Esc が tmux の既定 escape-time
       // （500ms）分だけ遅延・取りこぼしになる問題への対処（Issue #45）。
       //
-      // escape-time は tmux 上「セッションオプション」として set-option -t
-      // <session> で設定を試みても、実機検証の結果、実際にはサーバ全体
-      // （同一 tmux サーバを共有する全セッション）に適用される（tmux の
-      // escape-time 特有の挙動）。ここでは実際の挙動に合わせて -g
-      // （グローバル/サーバスコープ）を明示的に使う。適用範囲は board 専用
-      // ソケット（`-L board`。TMUX_SOCKET。Issue #55）上のサーバに閉じるため、
-      // board が管理する tmux セッション同士にしか影響せず、同一ユーザーが
-      // デフォルトソケットで使う他の tmux セッションへは波及しない。
+      // escape-time と set-clipboard（#116: OSC 52 エスケープシーケンス
+      // 経由のクリップボード書き込み要求を tmux 自身が終端せず、外側
+      // 〔xterm.js の ClipboardAddon。xterm-adapter.ts 参照〕へ転送させる。
+      // #118 が指摘した「クリップボード連携が macOS ホストプロセス依存の
+      // 経路に助けられていた」ギャップへの対応）は、いずれも tmux の
+      // options-table.c 上 OPTIONS_TABLE_SERVER に分類されるサーバ
+      // オプションであり、`set-option -s` が正式なスコープフラグ（man
+      // page 準拠）。適用範囲は board 専用ソケット（`-L board`。
+      // TMUX_SOCKET。Issue #55）上のサーバに閉じるため、board が管理する
+      // tmux セッション同士にしか影響せず、同一ユーザーがデフォルト
+      // ソケットで使う他の tmux セッションへは波及しない。
       //
       // set-option 自体の失敗（万一 tmux サーバが直後に落ちた等）は
       // ベストエフォートとして扱い、newSession 全体を失敗させない。
@@ -115,22 +153,20 @@ export function createTmuxClient(deps: TmuxClientDeps = {}): TmuxClient {
       // 握り潰してしまう（本来は duplicate-session エラー用の回復パス）。
       // set-option 失敗をここで明示的に吸収することで、その紛らわしい
       // 経路に依存せず、newSession の成否をセッション作成の成否だけに
-      // 一致させる。
-      try {
-        await runCommand("tmux", [
-          "-L",
-          TMUX_SOCKET,
-          "set-option",
-          "-g",
-          "escape-time",
-          "0",
-        ]);
-      } catch (error) {
-        console.warn(
-          `tmux escape-time の設定に失敗しました（セッション "${sessionName}" 自体は作成済み）:`,
-          error,
-        );
-      }
+      // 一致させる。それぞれ独立した try/catch（setServerOptionBestEffort
+      // 内）を持つため、一方の失敗が他方の実行を妨げない。
+      await setServerOptionBestEffort(
+        runCommand,
+        sessionName,
+        "escape-time",
+        "0",
+      );
+      await setServerOptionBestEffort(
+        runCommand,
+        sessionName,
+        "set-clipboard",
+        "on",
+      );
     },
     sendKeysLiteral(sessionName, command) {
       // -l（literal）フラグのみを付与し、Enter に相当する追加キー送信は行わない。

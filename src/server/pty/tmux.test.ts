@@ -66,7 +66,7 @@ describe("createTmuxClient", () => {
     ]);
   });
 
-  it("newSession は escape-time を 0 に設定する set-option -g を実行する（Issue #45: 全画面UIで単独 Esc が既定 500ms 待たされる問題への対処。escape-time はサーバスコープのオプションのため -g を使う）", async () => {
+  it("newSession は escape-time を 0 に設定する set-option -s を実行する（Issue #45: 全画面UIで単独 Esc が既定 500ms 待たされる問題への対処。escape-time はサーバオプションのため -s を使う）", async () => {
     const runCommand = vi.fn().mockResolvedValue(undefined);
     const tmux = createTmuxClient({ runCommand });
 
@@ -76,13 +76,13 @@ describe("createTmuxClient", () => {
       "-L",
       TMUX_SOCKET,
       "set-option",
-      "-g",
+      "-s",
       "escape-time",
       "0",
     ]);
   });
 
-  it("newSession は new-session の後に escape-time の set-option を実行する（set-option -g はサーバの起動を前提とするため、先に new-session でサーバ・セッションを立ち上げてから呼ぶ）", async () => {
+  it("newSession は new-session の後に escape-time の set-option を実行する（set-option -s はサーバの起動を前提とするため、先に new-session でサーバ・セッションを立ち上げてから呼ぶ）", async () => {
     const calls: string[][] = [];
     const runCommand = vi.fn().mockImplementation((_command, args) => {
       calls.push(args);
@@ -143,6 +143,109 @@ describe("createTmuxClient", () => {
       "flywheel-medical",
       "-c",
       "/repos/medical-agent",
+    ]);
+  });
+
+  it("newSession は set-clipboard を on に設定する set-option -s を実行する（Issue #116: OSC 52 経由のクリップボード書き込み要求を tmux に転送させる。escape-time と同様サーバオプションのため -s を使う）", async () => {
+    const runCommand = vi.fn().mockResolvedValue(undefined);
+    const tmux = createTmuxClient({ runCommand });
+
+    await tmux.newSession("flywheel-medical", "/repos/medical-agent");
+
+    expect(runCommand).toHaveBeenCalledWith("tmux", [
+      "-L",
+      TMUX_SOCKET,
+      "set-option",
+      "-s",
+      "set-clipboard",
+      "on",
+    ]);
+  });
+
+  it("newSession は new-session の後に set-clipboard の set-option を実行する（set-option -s はサーバの起動を前提とするため、先に new-session でサーバ・セッションを立ち上げてから呼ぶ）", async () => {
+    const calls: string[][] = [];
+    const runCommand = vi.fn().mockImplementation((_command, args) => {
+      calls.push(args);
+      return Promise.resolve(undefined);
+    });
+    const tmux = createTmuxClient({ runCommand });
+
+    await tmux.newSession("flywheel-medical", "/repos/medical-agent");
+
+    const newSessionIndex = calls.findIndex((args) =>
+      args.includes("new-session"),
+    );
+    const setClipboardIndex = calls.findIndex(
+      (args) => args.includes("set-option") && args.includes("set-clipboard"),
+    );
+    expect(newSessionIndex).toBeGreaterThanOrEqual(0);
+    expect(setClipboardIndex).toBeGreaterThan(newSessionIndex);
+  });
+
+  it("newSession は set-clipboard の set-option が失敗しても、セッション自体は作成済みとして成功扱いにする（ベストエフォート。escape-time 用の try/catch とは独立させる）", async () => {
+    const runCommand = vi.fn().mockImplementation((_command, args) => {
+      if (args.includes("set-option") && args.includes("set-clipboard")) {
+        return Promise.reject(new Error("no server running"));
+      }
+      return Promise.resolve(undefined);
+    });
+    const tmux = createTmuxClient({ runCommand });
+
+    await expect(
+      tmux.newSession("flywheel-medical", "/repos/medical-agent"),
+    ).resolves.toBeUndefined();
+
+    expect(runCommand).toHaveBeenCalledWith("tmux", [
+      "-L",
+      TMUX_SOCKET,
+      "new-session",
+      "-d",
+      "-s",
+      "flywheel-medical",
+      "-c",
+      "/repos/medical-agent",
+    ]);
+  });
+
+  it("newSession は escape-time の set-option が失敗しても set-clipboard の set-option は独立して実行する（一方の失敗が他方を妨げない）", async () => {
+    const runCommand = vi.fn().mockImplementation((_command, args) => {
+      if (args.includes("set-option") && args.includes("escape-time")) {
+        return Promise.reject(new Error("escape-time failed"));
+      }
+      return Promise.resolve(undefined);
+    });
+    const tmux = createTmuxClient({ runCommand });
+
+    await tmux.newSession("flywheel-medical", "/repos/medical-agent");
+
+    expect(runCommand).toHaveBeenCalledWith("tmux", [
+      "-L",
+      TMUX_SOCKET,
+      "set-option",
+      "-s",
+      "set-clipboard",
+      "on",
+    ]);
+  });
+
+  it("newSession は set-clipboard の set-option が失敗しても escape-time の set-option は独立して実行する（一方の失敗が他方を妨げない）", async () => {
+    const runCommand = vi.fn().mockImplementation((_command, args) => {
+      if (args.includes("set-option") && args.includes("set-clipboard")) {
+        return Promise.reject(new Error("set-clipboard failed"));
+      }
+      return Promise.resolve(undefined);
+    });
+    const tmux = createTmuxClient({ runCommand });
+
+    await tmux.newSession("flywheel-medical", "/repos/medical-agent");
+
+    expect(runCommand).toHaveBeenCalledWith("tmux", [
+      "-L",
+      TMUX_SOCKET,
+      "set-option",
+      "-s",
+      "escape-time",
+      "0",
     ]);
   });
 
