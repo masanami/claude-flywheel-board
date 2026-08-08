@@ -282,9 +282,34 @@ const markdownComponents: Components = {
   },
 };
 
+export type PreviewPanelOpenRequest = {
+  repo: string;
+  path: string;
+  /**
+   * 再発火のトリガー（セルフレビュー指摘対応）。呼び出し元はクリック等の
+   * 要求のたびにこの値を単調増加させること。「毎回新しいオブジェクトを
+   * 渡す」という参照同一性（Object.is）頼みの暗黙の呼び出し規約ではなく、
+   * この数値フィールドの変化を明示的な契約にする（呼び出し元が将来
+   * openRequest オブジェクト自体をメモ化しても、requestId さえ増分すれば
+   * 確実に再発火する）。
+   */
+  requestId: number;
+};
+
 export function PreviewPanel({
   mdLive: mdLiveProp,
-}: { mdLive?: MdLiveChannel } = {}) {
+  openRequest,
+}: {
+  mdLive?: MdLiveChannel;
+  /**
+   * Issue #135: AgentColumn の優先度方針バッジ等、パネル外部から特定ファイルを
+   * 開かせたい呼び出し元（Board.tsx）向けの制御プロパティ。requestId が
+   * 変わるたびに、パネルを開いた上で該当ファイルを選択する（FileTree での
+   * クリック選択と同じ効果）。null/undefined は「外部オープン要求なし」を表す
+   * （既存のパネル開閉・FileTree からの手動選択には一切影響しない）。
+   */
+  openRequest?: PreviewPanelOpenRequest | null;
+} = {}) {
   // Board.tsx 経由で唯一の WS 接続と橋渡しする（#70）。Board.tsx を介さず
   // 単体でレンダリングする既存テストのため、prop 未指定時は何もしない
   // チャネルを既定値として使う。
@@ -336,6 +361,24 @@ export function PreviewPanel({
   // loading 表示に落とす。サイレントリフレッシュでは直前の内容を保持した
   // まま裏で取得し、成功/失敗時にのみ置き換える。
   const lastFetchedFileRef = useRef<SelectedFile | null>(null);
+
+  // Issue #135: 外部（AgentColumn の優先度方針バッジ）からの openRequest を
+  // FileTree でのクリック選択と同じ経路へ合流させる。openRequest.requestId
+  // が変わるたびにパネルを開き、選択ファイルを差し替える（セルフレビュー
+  // 指摘対応: 依存配列を requestId に限定し、「requestId が増分されない限り
+  // 再発火しない」という契約を effect の実装でも明示する）。FileTree 自身の
+  // selectedKey ハイライトは更新されない（FileTree はマウント時に自分の
+  // 一覧取得を経由してしか選択状態を持たない設計のため）が、「既存の md
+  // プレビューパネルに方針ファイルを開くだけでも可」という要件は満たす
+  // （YAGNI: ツリー側のハイライト同期までは行わない）。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: openRequest 全体ではなく requestId の変化のみを再発火のトリガーとする意図的な依存配列（上記コメント参照）。effect 本体では openRequest.repo/path を読むが、それらは同一 requestId 内では不変という契約のため問題ない
+  useEffect(() => {
+    if (!openRequest) {
+      return;
+    }
+    setOpen(true);
+    setSelectedFile({ repo: openRequest.repo, path: openRequest.path });
+  }, [openRequest?.requestId]);
 
   // 選択ファイルが変わるたびに md_subscribe を送信する（#70）。プレビュー
   // 対象の切替時にクライアントから明示的な md_unsubscribe は送らない

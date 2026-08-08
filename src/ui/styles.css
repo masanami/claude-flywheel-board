@@ -258,6 +258,12 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  /* セルフレビュー指摘対応（2周目）: エージェント名・サイクル状態・優先度
+   * 方針バッジ・「＋ 差し込み」ボタンが同一行に並ぶため、狭いカラム幅
+   * （280px〜）では折り返しを許容する（.filter-bar の既存対策と同じ方針）。
+   * wrap しないと、縮小可能な要素（バッジ）だけが際限なく潰れて読めなく
+   * なるか、他要素がクリップされるかの二択になってしまう。 */
+  flex-wrap: wrap;
   gap: 0.5rem;
   padding: 0.6rem 0.8rem;
   border-bottom: 1px solid var(--board-border);
@@ -295,6 +301,39 @@ body {
 }
 
 .agent-column-cycle-status[data-cycle-status="stale"] {
+  color: var(--cycle-status-stale-fg);
+  font-weight: 600;
+}
+
+.agent-column-priority-policy-badge {
+  /* セルフレビュー指摘対応: 長いモード名（例: domain-bootstrap:<domain>）で
+     ヘッダが溢れ、右端の「＋ 差し込み」ボタンが押せなくなるのを防ぐため、
+     カラム幅（280px〜）に収まるよう縮小・省略を許可する。狭幅では省略表示
+     になるが、フルテキストは title 属性（クリック時のツールチップ）で
+     読める。
+     セルフレビュー指摘対応（2周目）: min-width: 0 のみだと、他の兄弟要素
+     （エージェント名・サイクル状態・「＋ 差し込み」ボタン）が縮小しない
+     ため、狭幅ではこのバッジだけが際限なく潰れて文字が1文字も見えない
+     空のピルになりうる。上の .agent-column-header 側で flex-wrap: wrap を
+     許容しつつ、ここでは最低限の可読幅（min-width）を設けることで、
+     「折り返して2行になる」か「最低限の省略表示を保つ」のどちらかに
+     倒し、空ピル化を避ける。 */
+  flex-shrink: 1;
+  min-width: 3.5em;
+  max-width: 12ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border: 1px solid var(--board-border);
+  background: var(--board-chip-bg);
+  color: var(--board-fg);
+  border-radius: 999px;
+  padding: 0.15rem 0.55rem;
+  font-size: 0.7rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.agent-column-priority-policy-badge[data-policy-status="undefined-mode"] {
   color: var(--cycle-status-stale-fg);
   font-weight: 600;
 }

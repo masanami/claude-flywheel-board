@@ -10,6 +10,10 @@ export type {
   BoardSnapshot,
 } from "../server/cache.ts";
 export type { Challenge, LedgerStatus } from "../server/parsers/ledger.ts";
+export type {
+  PriorityPolicy,
+  PriorityPolicyStatus,
+} from "../server/parsers/priority-policy.ts";
 export type { ParseError, LogEntry } from "../server/parsers/types.ts";
 export type { Run, RunProvenance } from "../server/parsers/runs.ts";
 export type { MdTreeRepo, MdTreeResponse } from "../server/md/tree.ts";

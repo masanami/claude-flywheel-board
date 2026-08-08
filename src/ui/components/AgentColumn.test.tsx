@@ -627,6 +627,93 @@ describe("AgentColumn", () => {
     });
   });
 
+  describe("カラムヘッダの優先度方針バッジ（Issue #135）", () => {
+    it("priorityPolicy が undefined（priority-policy.md が無いエージェント）のときバッジを表示しない（後方互換）", () => {
+      render(<AgentColumn agent={agentBoard({ priorityPolicy: undefined })} />);
+
+      expect(
+        screen.queryByTestId("agent-column-priority-policy-badge"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("priorityPolicy.status が defined のとき、アクティブモード名をバッジ表示する", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            priorityPolicy: { active: "release-freeze", status: "defined" },
+          })}
+        />,
+      );
+
+      const badge = screen.getByTestId("agent-column-priority-policy-badge");
+      expect(badge).toHaveTextContent("release-freeze");
+      expect(badge).toHaveAttribute("data-policy-status", "defined");
+    });
+
+    it("priorityPolicy.status が undefined-mode のとき、未定義モードであることが分かる表示にする", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            priorityPolicy: { active: "vacation", status: "undefined-mode" },
+          })}
+        />,
+      );
+
+      const badge = screen.getByTestId("agent-column-priority-policy-badge");
+      expect(badge).toHaveTextContent("vacation");
+      expect(badge).toHaveAttribute("data-policy-status", "undefined-mode");
+    });
+
+    it("バッジをクリックすると onOpenPriorityPolicy にエージェント名を渡して呼び出す", () => {
+      const onOpenPriorityPolicy = vi.fn();
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            name: "medical",
+            priorityPolicy: { active: "normal", status: "defined" },
+          })}
+          onOpenPriorityPolicy={onOpenPriorityPolicy}
+        />,
+      );
+
+      fireEvent.click(screen.getByTestId("agent-column-priority-policy-badge"));
+
+      expect(onOpenPriorityPolicy).toHaveBeenCalledTimes(1);
+      expect(onOpenPriorityPolicy).toHaveBeenCalledWith("medical");
+    });
+
+    it("onOpenPriorityPolicy が未指定でもバッジのクリックで例外にならない", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            priorityPolicy: { active: "normal", status: "defined" },
+          })}
+        />,
+      );
+
+      expect(() =>
+        fireEvent.click(
+          screen.getByTestId("agent-column-priority-policy-badge"),
+        ),
+      ).not.toThrow();
+    });
+
+    it("アーカイブビュー（archiveMode）ではバッジを表示しない（既存のミニマル表示を崩さない）", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            priorityPolicy: { active: "normal", status: "defined" },
+          })}
+          archiveMode
+        />,
+      );
+
+      expect(
+        screen.queryByTestId("agent-column-priority-policy-badge"),
+      ).not.toBeInTheDocument();
+    });
+  });
+
   describe("実行中セクション（P3-2）", () => {
     beforeEach(() => {
       vi.setSystemTime(new Date("2026-07-16T09:40:00.000Z"));
