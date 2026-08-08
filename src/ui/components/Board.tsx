@@ -226,15 +226,6 @@ export function Board() {
 
   return (
     <div className="board">
-      <div className="board-header">
-        <button
-          type="button"
-          className="add-agent-button"
-          onClick={() => setAddAgentFormOpen(true)}
-        >
-          ＋ エージェント追加
-        </button>
-      </div>
       <FilterBar
         value={filter}
         onChange={setFilter}
@@ -242,6 +233,7 @@ export function Board() {
         onShowCompletedChange={setShowCompleted}
         archiveMode={archiveMode}
         onArchiveModeChange={setArchiveMode}
+        onAddAgentClick={() => setAddAgentFormOpen(true)}
       />
       {addAgentFormOpen && (
         <AddAgentForm

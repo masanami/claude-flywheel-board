@@ -297,6 +297,24 @@ describe("Board", () => {
   });
 
   describe("「＋ エージェント追加」ボタン（Issue #123）", () => {
+    it("board-header 行は存在せず、ボタンは FilterBar 行（.filter-bar）内に配置される（Issue #136）", async () => {
+      const { Board } = await import("./Board.tsx");
+      render(<Board />);
+
+      act(() => {
+        latestOptions().onSnapshot(snapshot([agentBoard({ name: "medical" })]));
+      });
+
+      expect(document.querySelector(".board-header")).not.toBeInTheDocument();
+      const filterBar = document.querySelector(".filter-bar");
+      expect(filterBar).toBeInTheDocument();
+      expect(
+        filterBar?.contains(
+          screen.getByRole("button", { name: "＋ エージェント追加" }),
+        ),
+      ).toBe(true);
+    });
+
     it("ボタンが表示され、クリックでフォームが開く", async () => {
       const { Board } = await import("./Board.tsx");
       render(<Board />);
