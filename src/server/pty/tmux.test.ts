@@ -66,7 +66,7 @@ describe("createTmuxClient", () => {
     ]);
   });
 
-  it("newSession は escape-time を 0 に設定する set-option -g を実行する（Issue #45: 全画面UIで単独 Esc が既定 500ms 待たされる問題への対処。escape-time はサーバスコープのオプションのため -g を使う）", async () => {
+  it("newSession は escape-time を 0 に設定する set-option -s を実行する（Issue #45: 全画面UIで単独 Esc が既定 500ms 待たされる問題への対処。escape-time はサーバオプションのため -s を使う）", async () => {
     const runCommand = vi.fn().mockResolvedValue(undefined);
     const tmux = createTmuxClient({ runCommand });
 
@@ -76,13 +76,13 @@ describe("createTmuxClient", () => {
       "-L",
       TMUX_SOCKET,
       "set-option",
-      "-g",
+      "-s",
       "escape-time",
       "0",
     ]);
   });
 
-  it("newSession は new-session の後に escape-time の set-option を実行する（set-option -g はサーバの起動を前提とするため、先に new-session でサーバ・セッションを立ち上げてから呼ぶ）", async () => {
+  it("newSession は new-session の後に escape-time の set-option を実行する（set-option -s はサーバの起動を前提とするため、先に new-session でサーバ・セッションを立ち上げてから呼ぶ）", async () => {
     const calls: string[][] = [];
     const runCommand = vi.fn().mockImplementation((_command, args) => {
       calls.push(args);
@@ -146,7 +146,7 @@ describe("createTmuxClient", () => {
     ]);
   });
 
-  it("newSession は set-clipboard を on に設定する set-option -g を実行する（Issue #116: OSC 52 経由のクリップボード書き込み要求を tmux に転送させる。escape-time と同様サーバスコープのため -g を使う）", async () => {
+  it("newSession は set-clipboard を on に設定する set-option -s を実行する（Issue #116: OSC 52 経由のクリップボード書き込み要求を tmux に転送させる。escape-time と同様サーバオプションのため -s を使う）", async () => {
     const runCommand = vi.fn().mockResolvedValue(undefined);
     const tmux = createTmuxClient({ runCommand });
 
@@ -156,13 +156,13 @@ describe("createTmuxClient", () => {
       "-L",
       TMUX_SOCKET,
       "set-option",
-      "-g",
+      "-s",
       "set-clipboard",
       "on",
     ]);
   });
 
-  it("newSession は new-session の後に set-clipboard の set-option を実行する（set-option -g はサーバの起動を前提とするため、先に new-session でサーバ・セッションを立ち上げてから呼ぶ）", async () => {
+  it("newSession は new-session の後に set-clipboard の set-option を実行する（set-option -s はサーバの起動を前提とするため、先に new-session でサーバ・セッションを立ち上げてから呼ぶ）", async () => {
     const calls: string[][] = [];
     const runCommand = vi.fn().mockImplementation((_command, args) => {
       calls.push(args);
@@ -222,7 +222,7 @@ describe("createTmuxClient", () => {
       "-L",
       TMUX_SOCKET,
       "set-option",
-      "-g",
+      "-s",
       "set-clipboard",
       "on",
     ]);
@@ -243,7 +243,7 @@ describe("createTmuxClient", () => {
       "-L",
       TMUX_SOCKET,
       "set-option",
-      "-g",
+      "-s",
       "escape-time",
       "0",
     ]);
