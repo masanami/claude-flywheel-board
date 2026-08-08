@@ -1,4 +1,7 @@
-import { ClipboardAddon } from "@xterm/addon-clipboard";
+import {
+  ClipboardAddon,
+  type IClipboardProvider,
+} from "@xterm/addon-clipboard";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 
@@ -89,6 +92,26 @@ function copyToClipboard(text: string): Promise<void> {
     }
   });
 }
+
+/**
+ * `ClipboardAddon`（OSC 52 ブリッジ）に渡すカスタム `IClipboardProvider`。
+ *
+ * 既定の `BrowserClipboardProvider` は OSC 52 の読み取り要求（`?`）に対し
+ * `navigator.clipboard.readText()` の結果を `terminal.input()` 経由で pty
+ * への入力として送り返す。pty 内で任意のプログラムが動く以上、これは
+ * クリップボード内容（パスワード等の機密を含みうる）が pty 入力ストリームへ
+ * 流出しうる経路になる（PR #138 レビュー指摘対応）。
+ *
+ * `readText` を常に空文字列で応答させることでこの経路を遮断する
+ * （`navigator.clipboard.readText()` 自体を呼ばないため、ブラウザの
+ * clipboard-read 権限プロンプトも発生しない）。書き込み方向（OSC 52 の
+ * write 要求）は正当な用途のため許可し、`copyToClipboard`（writeText 失敗時
+ * の execCommand フォールバックを含む共通経路）へ委譲する。
+ */
+const readDisabledClipboardProvider: IClipboardProvider = {
+  readText: () => "",
+  writeText: (_selection, data) => copyToClipboard(data).catch(() => {}),
+};
 
 export const createXtermInstance: CreateXtermInstance = (container) => {
   const terminal = new Terminal({
@@ -205,21 +228,12 @@ export const createXtermInstance: CreateXtermInstance = (container) => {
   // OSC 52 エスケープシーケンスでクリップボード書き込みを要求した場合に、
   // xterm.js から navigator.clipboard.writeText へ橋渡しする（Issue #116。
   // #118 が指摘した「macOS 依存の経路」を board 側で明示的に持つための
-  // 対応）。カスタム IClipboardProvider は作らず既定の
-  // BrowserClipboardProvider を使う（YAGNI）。
-  //
-  // 既知のトレードオフ（design-reviewer 指摘）: 既定プロバイダは OSC 52 の
-  // 「読み取り要求」にも応答しうる。navigator.clipboard.readText() を呼んで
-  // ブラウザの clipboard-read 権限プロンプトが意図せず出るだけでなく、
-  // 読み取ったクリップボード内容を terminal.input() 経由で pty への入力
-  // として送り返す（アドオンの標準動作）。pty 内で任意のプログラムが動く
-  // 以上、これはクリップボード内容（パスワード等を含みうる）を pty 入力
-  // ストリームへ流し込める経路になり得る。tmux 側は OSC 52 の読み取り
-  // クエリ（`?`）を自身の paste buffer で応答し xterm.js まで到達しにくい
-  // 点で緩和されるが、ゼロではない。xterm.js エコシステムの標準動作であり、
-  // 本チケットでは独自プロバイダによる無効化は行わない（YAGNI。読み取り
-  // 専用の独自 IClipboardProvider 実装はスコープ外）。
-  terminal.loadAddon(new ClipboardAddon());
+  // 対応）。読み取り要求は空応答で無効化し、クリップボード内容が pty 入力
+  // へ流れる経路を遮断する（PR #138 レビュー指摘対応。詳細は
+  // readDisabledClipboardProvider のコメントを参照）。
+  terminal.loadAddon(
+    new ClipboardAddon(undefined, readDisabledClipboardProvider),
+  );
 
   terminal.open(container);
 

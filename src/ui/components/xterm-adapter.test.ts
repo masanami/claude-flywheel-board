@@ -14,7 +14,17 @@ let mockHasSelection = false;
 let mockSelectionText = "";
 // terminal.loadAddon() に渡されたインスタンスを捕捉し、FitAddon/ClipboardAddon
 // の双方がロードされたことを検証できるようにする（OSC 52 パススルー対応）。
-const loadedAddons: Array<{ kind: string }> = [];
+// ClipboardAddon は `provider`（xterm-adapter.ts が渡すカスタム
+// IClipboardProvider）も保持し、読み取り無効化・書き込み委譲の直接検証に使う
+// （PR #138 レビュー指摘対応）。
+type MockClipboardProvider = {
+  readText: (selection?: string) => string | Promise<string>;
+  writeText: (selection: string, data: string) => void | Promise<void>;
+};
+const LOADED_ADDONS: Array<{
+  kind: string;
+  provider?: MockClipboardProvider;
+}> = [];
 
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
@@ -22,7 +32,7 @@ vi.mock("@xterm/xterm", () => ({
       terminalCtor(options);
     }
     loadAddon(addon: { kind: string }) {
-      loadedAddons.push(addon);
+      LOADED_ADDONS.push(addon);
     }
     open() {}
     attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean) {
@@ -48,6 +58,11 @@ vi.mock("@xterm/addon-fit", () => ({
 vi.mock("@xterm/addon-clipboard", () => ({
   ClipboardAddon: class {
     kind = "clipboard";
+    provider?: MockClipboardProvider;
+    // 実物と同じ (base64?, provider?) の引数順で受け取る。
+    constructor(_base64: unknown, provider?: MockClipboardProvider) {
+      this.provider = provider;
+    }
   },
 }));
 
@@ -91,7 +106,7 @@ describe("createXtermInstance", () => {
     terminalCtor.mockClear();
     customKeyEventHandlers.length = 0;
     selectionChangeCallbacks.length = 0;
-    loadedAddons.length = 0;
+    LOADED_ADDONS.length = 0;
     mockHasSelection = false;
     mockSelectionText = "";
   });
@@ -371,13 +386,66 @@ describe("createXtermInstance", () => {
     expect(writeText).toHaveBeenCalledTimes(2);
   });
 
-  it("ClipboardAddon をロードする（OSC 52 経由でクリップボード書き込みを要求するプログラムの橋渡し。既定の BrowserClipboardProvider を使用。Issue #116）", async () => {
+  it("ClipboardAddon をロードする（OSC 52 経由でクリップボード書き込みを要求するプログラムの橋渡し。読み取り無効化のカスタム IClipboardProvider を使用。Issue #116）", async () => {
     const { createXtermInstance } = await import("./xterm-adapter.ts");
     createXtermInstance(document.createElement("div"));
 
-    expect(loadedAddons.some((addon) => addon.kind === "clipboard")).toBe(true);
+    expect(LOADED_ADDONS.some((addon) => addon.kind === "clipboard")).toBe(
+      true,
+    );
     // FitAddon が既存どおりロードされ続けていることも合わせて回帰確認する。
-    expect(loadedAddons.some((addon) => addon.kind === "fit")).toBe(true);
+    expect(LOADED_ADDONS.some((addon) => addon.kind === "fit")).toBe(true);
+  });
+
+  describe("ClipboardAddon に渡すカスタム IClipboardProvider（PR #138 レビュー指摘: OSC 52 の読み取り要求でクリップボード内容が pty 入力へ流出する経路の遮断）", () => {
+    function getLoadedClipboardProvider(): MockClipboardProvider {
+      const clipboardAddon = LOADED_ADDONS.find(
+        (addon) => addon.kind === "clipboard",
+      );
+      if (!clipboardAddon?.provider) {
+        throw new Error("ClipboardAddon に provider が渡されていません");
+      }
+      return clipboardAddon.provider;
+    }
+
+    it("readText は常に空文字列を返し、navigator.clipboard.readText を呼ばない（OSC 52 の読み取り要求 `?` 相当）", async () => {
+      const readText = vi.fn().mockResolvedValue("secret from os clipboard");
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { clipboard: { readText, writeText } });
+
+      const { createXtermInstance } = await import("./xterm-adapter.ts");
+      createXtermInstance(document.createElement("div"));
+
+      const result = getLoadedClipboardProvider().readText("c");
+
+      expect(result).toBe("");
+      expect(readText).not.toHaveBeenCalled();
+    });
+
+    it("writeText は既存のコピー経路（copyToClipboard）へ委譲する（OSC 52 の書き込み要求）", async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+
+      const { createXtermInstance } = await import("./xterm-adapter.ts");
+      createXtermInstance(document.createElement("div"));
+
+      await getLoadedClipboardProvider().writeText("c", "osc52 written text");
+
+      expect(writeText).toHaveBeenCalledWith("osc52 written text");
+    });
+
+    it("writeText の委譲先（copyToClipboard）が失敗しても例外を投げない", async () => {
+      const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+      stubExecCommand(vi.fn().mockReturnValue(false));
+
+      const { createXtermInstance } = await import("./xterm-adapter.ts");
+      createXtermInstance(document.createElement("div"));
+
+      await expect(
+        getLoadedClipboardProvider().writeText("c", "will fail"),
+      ).resolves.toBeUndefined();
+    });
   });
 
   describe("Cmd+C ハンドラの execCommand フォールバック（#116: 実ブラウザでは navigator.clipboard.writeText が非同期APIの拒否等で reject しうる）", () => {
