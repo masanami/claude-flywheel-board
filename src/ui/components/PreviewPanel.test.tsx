@@ -350,6 +350,143 @@ describe("PreviewPanel", () => {
     });
   });
 
+  describe("外部からのファイルオープン要求（Issue #135: 優先度方針バッジ→プレビュー接続）", () => {
+    function stubFetchByRepoPath(contentByPath: Record<string, string>) {
+      const fetchMock = vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith("/api/md/tree")) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({ repos: [] }),
+          });
+        }
+        if (url.startsWith("/api/md/file")) {
+          const parsed = new URL(url, "http://localhost");
+          const path = parsed.searchParams.get("path") ?? "";
+          const content = contentByPath[path];
+          if (content === undefined) {
+            throw new Error(`unexpected path in test: ${path}`);
+          }
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({ content }),
+          });
+        }
+        throw new Error(`unexpected fetch url in test: ${url}`);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      return fetchMock;
+    }
+
+    it("openRequest を指定して初期描画すると、パネルが自動的に開き該当ファイルを取得する", async () => {
+      const fetchMock = stubFetchByRepoPath({
+        "priority-policy.md": "# 方針モード一覧",
+      });
+
+      render(
+        <PreviewPanel
+          openRequest={{
+            repo: "medical",
+            path: "priority-policy.md",
+            requestId: 1,
+          }}
+        />,
+      );
+
+      expect(screen.getByTestId("preview-panel-body")).toBeInTheDocument();
+      await screen.findByText("方針モード一覧");
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/md/file?repo=medical&path=priority-policy.md",
+      );
+    });
+
+    it("openRequest が新しい値に変わると、既に開いた状態でもそのファイルへ切り替わる", async () => {
+      const fetchMock = stubFetchByRepoPath({
+        "docs/note.md": "# 元のファイル",
+        "priority-policy.md": "# 方針モード一覧",
+      });
+
+      const { rerender } = render(
+        <PreviewPanel
+          openRequest={{ repo: "medical", path: "docs/note.md", requestId: 1 }}
+        />,
+      );
+      await screen.findByText("元のファイル");
+
+      rerender(
+        <PreviewPanel
+          openRequest={{
+            repo: "medical",
+            path: "priority-policy.md",
+            requestId: 2,
+          }}
+        />,
+      );
+
+      await screen.findByText("方針モード一覧");
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/md/file?repo=medical&path=priority-policy.md",
+      );
+    });
+
+    it("requestId が変わらない限り、閉じるボタンで手動で閉じたパネルを再度自動で開かない（セルフレビュー指摘対応: requestId を再発火の唯一のトリガーにする契約の確認）", async () => {
+      const fetchMock = stubFetchByRepoPath({
+        "priority-policy.md": "# 方針モード一覧",
+      });
+
+      const { rerender } = render(
+        <PreviewPanel
+          openRequest={{
+            repo: "medical",
+            path: "priority-policy.md",
+            requestId: 1,
+          }}
+        />,
+      );
+      await screen.findByText("方針モード一覧");
+
+      act(() => {
+        screen
+          .getByRole("button", { name: "プレビューパネルを閉じる" })
+          .click();
+      });
+      expect(
+        screen.queryByTestId("preview-panel-body"),
+      ).not.toBeInTheDocument();
+
+      // 同じ requestId のまま親が再レンダーしても（例: 無関係な状態更新）、
+      // 手動で閉じたパネルが勝手に開き直らないことを確認する。
+      rerender(
+        <PreviewPanel
+          openRequest={{
+            repo: "medical",
+            path: "priority-policy.md",
+            requestId: 1,
+          }}
+        />,
+      );
+
+      expect(
+        screen.queryByTestId("preview-panel-body"),
+      ).not.toBeInTheDocument();
+      expect(
+        fetchMock.mock.calls.filter((c) =>
+          String(c[0]).startsWith("/api/md/file"),
+        ),
+      ).toHaveLength(1);
+    });
+
+    it("openRequest が null のままなら自動的に開かない（既存の手動オープン動線に影響しない）", () => {
+      render(<PreviewPanel openRequest={null} />);
+
+      expect(
+        screen.queryByTestId("preview-panel-body"),
+      ).not.toBeInTheDocument();
+    });
+  });
+
   describe("Markdownレンダリング（#69: file API 結線）", () => {
     // ツリー取得（/api/md/tree）と file 取得（/api/md/file）の両方を単一の
     // fetch モックで切り替える。実際の repo/path は "repo-a" /

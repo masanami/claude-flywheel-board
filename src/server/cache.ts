@@ -1,6 +1,7 @@
 import type { JournalEntry } from "./parsers/journal.ts";
 import { deriveLogEntries } from "./parsers/journal.ts";
 import type { Challenge } from "./parsers/ledger.ts";
+import type { PriorityPolicy } from "./parsers/priority-policy.ts";
 import type { AgentCycleStatus, MatchedRun, Run } from "./parsers/runs.ts";
 import {
   deriveCycleStatus,
@@ -45,6 +46,12 @@ export type AgentBoard = {
    * 1つも無い場合は空配列（NFR-05: 独自解釈を持ち込まず、既存台帳パーサに一本化する）。
    */
   archivedChallenges: Challenge[];
+  /**
+   * Issue #135: priority-policy.md（ワークスペース直下、任意の存在）から
+   * 読み取ったアクティブな方針モード。ファイルが無いエージェントは undefined
+   * のまま（後方互換。契約上、方針ファイルは任意のためエラーにはしない）。
+   */
+  priorityPolicy?: PriorityPolicy;
 };
 
 export type BoardSnapshot = {
@@ -58,6 +65,8 @@ export type ReplaceAgentInput = {
   parseErrors: ParseError[];
   /** 省略時は空配列（Issue #50 ①以前の既存呼び出し・テストとの後方互換）。 */
   archivedChallenges?: Challenge[];
+  /** 省略時は undefined（priority-policy.md が無いエージェントの既定状態。Issue #135）。 */
+  priorityPolicy?: PriorityPolicy;
 };
 
 export interface BoardCache {
@@ -145,6 +154,7 @@ export function createMemoryBoardCache(
         challenges: sortChallenges(input.challenges),
         archivedChallenges: sortChallenges(input.archivedChallenges ?? []),
         parseErrors: input.parseErrors,
+        priorityPolicy: input.priorityPolicy,
       });
     },
 

@@ -7,6 +7,8 @@ import type { JournalEntry } from "./parsers/journal.ts";
 import { deriveSummary, parseJournal } from "./parsers/journal.ts";
 import type { Challenge } from "./parsers/ledger.ts";
 import { parseLedgerFile } from "./parsers/ledger.ts";
+import type { PriorityPolicy } from "./parsers/priority-policy.ts";
+import { parsePriorityPolicyFile } from "./parsers/priority-policy.ts";
 import type { MatchedRun } from "./parsers/runs.ts";
 import { matchRuns, parseRuns } from "./parsers/runs.ts";
 import type { ParseError } from "./parsers/types.ts";
@@ -15,6 +17,10 @@ import type { ParseError } from "./parsers/types.ts";
 export const LEDGER_FILE_NAME = "challenge-ledger.md";
 export const JOURNAL_FILE_NAME = path.join("journal", "index.jsonl");
 export const RUNS_FILE_NAME = path.join(".flywheel", "runs.jsonl");
+// Issue #135: エージェントワークスペース直下（Git 追跡・任意の存在）。
+// 正本は claude-flywheel 側 masanami/claude-flywheel#75 / PR #76
+// templates/priority-policy.md（2026-08-09 マージ済み）。
+export const PRIORITY_POLICY_FILE_NAME = "priority-policy.md";
 // Issue #50 ①: 台帳のアーカイブ（完了エントリの移動先）。将来の年次分割
 // （challenge-archive-2026.md 等）に備え、固定ファイル名ではなく glob で扱う
 // （claude-flywheel 側 docs/challenge-ledger-format.md §アーカイブ・
@@ -34,6 +40,10 @@ export function runsPathFor(entry: FleetEntry): string {
   return path.join(entry.path, RUNS_FILE_NAME);
 }
 
+export function priorityPolicyPathFor(entry: FleetEntry): string {
+  return path.join(entry.path, PRIORITY_POLICY_FILE_NAME);
+}
+
 export function archiveGlobFor(entry: FleetEntry): string {
   return path.join(entry.path, ARCHIVE_GLOB_PATTERN);
 }
@@ -44,6 +54,8 @@ export type ScanResult = {
   matchedRuns: MatchedRun[];
   archivedChallenges: Challenge[];
   parseErrors: ParseError[];
+  /** priority-policy.md が無いエージェントは undefined（後方互換・Issue #135）。 */
+  priorityPolicy: PriorityPolicy | undefined;
 };
 
 function toErrorMessage(error: unknown): string {
@@ -174,12 +186,26 @@ export async function scanAgent(entry: FleetEntry): Promise<ScanResult> {
   const archiveResult = scanArchive(entry);
   parseErrors.push(...archiveResult.errors);
 
+  // Issue #135: priority-policy.md はワークスペース直下の任意ファイル。
+  // ledger/journal/runs（parser が非ENOENTエラーを throw し、scanAgent の
+  // try/catch が ParseError 化する）とは異なり、parsePriorityPolicyFile は
+  // 例外を一切 throw しない設計（セルフレビュー指摘対応: 従来コメントは
+  // 「runs.jsonl と同様」としていたが、実際には逆の設計だったため訂正）。
+  // ENOENT・非ENOENT のいずれも関数内部で吸収し、常に { policy, errors }
+  // のタプルを返す。ENOENT は正常状態（policy: undefined。方針ファイルは
+  // 任意のため後方互換）、非ENOENTは errors に ParseError を積んで返すため、
+  // ここでは try/catch を挟まずそのまま呼び出して errors を合流させるだけでよい。
+  const priorityPolicyPath = priorityPolicyPathFor(entry);
+  const priorityPolicyResult = parsePriorityPolicyFile(priorityPolicyPath);
+  parseErrors.push(...priorityPolicyResult.errors);
+
   return {
     challenges,
     journalEntries,
     matchedRuns,
     archivedChallenges: archiveResult.challenges,
     parseErrors,
+    priorityPolicy: priorityPolicyResult.policy,
   };
 }
 
@@ -198,6 +224,7 @@ export async function scanAndUpdateAgent(
     matchedRuns,
     archivedChallenges,
     parseErrors,
+    priorityPolicy,
   } = await scanAgent(entry);
 
   // ホバー要約（FR-08）: journal の該当課題への言及から導出して challenge に載せる。
@@ -215,6 +242,7 @@ export async function scanAndUpdateAgent(
     challenges: challengesWithSummary,
     archivedChallenges,
     parseErrors,
+    priorityPolicy,
   });
   cache.replaceJournal(entry.name, journalEntries);
   cache.replaceRuns(entry.name, matchedRuns);
@@ -330,11 +358,16 @@ export function startFleetWatcher(
     const ledgerPath = ledgerPathFor(entry);
     const journalPath = journalPathFor(entry);
     const runsPath = runsPathFor(entry);
+    const priorityPolicyPath = priorityPolicyPathFor(entry);
     entryByWatchedPath.set(path.resolve(ledgerPath), entry);
     entryByWatchedPath.set(path.resolve(journalPath), entry);
     entryByWatchedPath.set(path.resolve(runsPath), entry);
+    // Issue #135: priority-policy.md はワークスペース直下の任意ファイル
+    // （既定では存在しない repo もある）。存在しなくても watch 対象への
+    // 登録自体は安全（chokidar は未存在パスの add イベントも拾える）。
+    entryByWatchedPath.set(path.resolve(priorityPolicyPath), entry);
     entryByDir.set(path.resolve(entry.path), entry);
-    return [ledgerPath, journalPath, runsPath, entry.path];
+    return [ledgerPath, journalPath, runsPath, priorityPolicyPath, entry.path];
   }
 
   const watchedPaths: string[] = [];

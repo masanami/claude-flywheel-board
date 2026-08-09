@@ -296,6 +296,70 @@ describe("Board", () => {
     );
   });
 
+  describe("優先度方針バッジからのプレビュー接続（Issue #135）", () => {
+    function stubTreeAndFileFetch() {
+      const fetchMock = vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith("/api/md/tree")) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({ repos: [] }),
+          });
+        }
+        if (url.startsWith("/api/md/file")) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({ content: "# 方針モード一覧" }),
+          });
+        }
+        throw new Error(`unexpected fetch url in test: ${url}`);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      return fetchMock;
+    }
+
+    it("バッジをクリックすると PreviewPanel が開き、当該エージェントの priority-policy.md を GET /api/md/file で取得する", async () => {
+      const fetchMock = stubTreeAndFileFetch();
+      const { Board } = await import("./Board.tsx");
+      render(<Board />);
+
+      act(() => {
+        latestOptions().onSnapshot(
+          snapshot([
+            agentBoard({
+              name: "medical",
+              priorityPolicy: { active: "release-freeze", status: "defined" },
+            }),
+          ]),
+        );
+      });
+
+      act(() => {
+        screen.getByTestId("agent-column-priority-policy-badge").click();
+      });
+
+      expect(screen.getByTestId("preview-panel-body")).toBeInTheDocument();
+      await waitFor(() =>
+        expect(fetchMock).toHaveBeenCalledWith(
+          "/api/md/file?repo=medical&path=priority-policy.md",
+        ),
+      );
+    });
+
+    it("Board.tsx の PRIORITY_POLICY_FILE_NAME は server 側 watcher.ts の同名定数とドリフトしない（セルフレビュー指摘対応: UI はブラウザバンドル混入を避けるため server の value export を import できず、ファイル名文字列をローカルに重複させている。テストでのみ両者を突き合わせて drift を検知する）", async () => {
+      const { PRIORITY_POLICY_FILE_NAME: uiFileName } = await import(
+        "./Board.tsx"
+      );
+      const { PRIORITY_POLICY_FILE_NAME: serverFileName } = await import(
+        "../../server/watcher.ts"
+      );
+
+      expect(uiFileName).toBe(serverFileName);
+    });
+  });
+
   describe("「＋ エージェント追加」ボタン（Issue #123）", () => {
     it("board-header 行は存在せず、ボタンは FilterBar 行（.filter-bar）内に配置される（Issue #136）", async () => {
       const { Board } = await import("./Board.tsx");

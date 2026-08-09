@@ -118,6 +118,7 @@ infra	/Users/masami/agents/infra-agent
 | 課題台帳 | `challenge-ledger.md` | `challenge-ledger-format.md`（仕様化済み） | タスクカード・承認待ち（FR-03/04） |
 | 実行イベント | `.flywheel/runs.jsonl` | **仕様化済み: `templates/runtime/README.md`**（claude-flywheel PR #45） | 実行中・応答なし検知（FR-05）、resume 連携（FR-12）、差し込みの可視化（FR-13） |
 | サイクル履歴 | `journal/index.jsonl` | `templates/journal/README.md`（仕様化済み） | カードのホバー要約・作業ログタイムライン（FR-08）、サイクル状態の補完 |
+| 優先度方針 | `priority-policy.md` | **仕様化済み: claude-flywheel `masanami/claude-flywheel#75` / PR #76 `templates/priority-policy.md`**（2026-08-09 マージ済み。フォーマットが変わった場合は board 側パーサ `src/server/parsers/priority-policy.ts` の追従が必要） | カラムヘッダのアクティブモードバッジ（Issue #135）。§4.2 の working tree 限定の注意点を参照 |
 
 ### 4.1 runs.jsonl（正本参照）
 
@@ -128,6 +129,12 @@ infra	/Users/masami/agents/infra-agent
 - **resume 規則**: 別サイクルへ持ち越した resume は同じ `session_id` の新しい `delegate_start` で挟まれる。対応付けは「同一 `session_id` の**最新の未終了 start**」
 - `cycle_end` の `result` は `completed` / `abandoned`（stale ロック回収時の代筆）。**未終了 `adhoc_start` は代筆回収されない**ため、しきい値超過の要確認表示は board（消費者）の責務
 - 破損行は「消費者がパースエラーとして可視化する前提」（FR-07 と整合）。ファイルは gitignore 対象のローカル実行状態（board は working tree を読むため影響なし）
+
+### 4.2 priority-policy.md（working tree 限定であることの注意点）
+
+board（`src/server/parsers/priority-policy.ts`）は `priority-policy.md` の **working tree の内容を無条件に読み** バッジ表示する。一方、claude-flywheel 側 `run-cycle`（正本: `skills/run-cycle/SKILL.md`）は「実際に適用する」優先度モードの決定に **Git コミット状態を条件とする**契約になっている: `git ls-files`（追跡済み確認）・`git diff --quiet`・`git diff --cached --quiet` の3つがすべて成功（未コミット差分が無い）場合に限り、控えた SHA から `git show <SHA>:priority-policy.md` を読んで適用し、いずれか1つでも失敗する（＝追跡外・未コミットの変更がある）場合は適用方針モード＝エージェント裁量にフォールバックする。
+
+このため、**board のバッジは「working tree に書かれている値」を表示するのみで、run-cycle が実際にそのモードを適用しているかどうかまでは保証しない**（未コミットの編集中はバッジの表示と実際の挙動が一致しないことがありうる）。board はこの Git 状態判定を持たない（本チケット #135 のスコープ外。git 実行の board サーバへの追加は YAGNI の観点から見送り、UI 側の表示文言で限定注記するに留めた。AgentColumn.tsx の `PriorityPolicyBadge` の tooltip を参照）。将来この差異が実運用上の混乱を招く場合は、フォローアップ Issue として Git 状態判定の追加を検討する。
 
 ## 5. 主要フロー
 

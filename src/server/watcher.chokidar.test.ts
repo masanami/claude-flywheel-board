@@ -76,10 +76,12 @@ describe("startFleetWatcher", () => {
       path.join(agentA.path, "challenge-ledger.md"),
       path.join(agentA.path, "journal", "index.jsonl"),
       path.join(agentA.path, ".flywheel", "runs.jsonl"),
+      path.join(agentA.path, "priority-policy.md"),
       agentA.path,
       path.join(agentB.path, "challenge-ledger.md"),
       path.join(agentB.path, "journal", "index.jsonl"),
       path.join(agentB.path, ".flywheel", "runs.jsonl"),
+      path.join(agentB.path, "priority-policy.md"),
       agentB.path,
     ]);
     // アーカイブ監視のため repo ディレクトリ自体を watch 対象に含めるが、
@@ -176,6 +178,30 @@ describe("startFleetWatcher", () => {
 
     expect(onAgentUpdate).toHaveBeenCalledTimes(1);
     expect(onAgentUpdate.mock.calls[0]?.[0]?.name).toBe("agent-a");
+
+    await fleetWatcher.close();
+  });
+
+  it("priority-policy.md の change イベント発火後、該当 repo のみ再スキャンし onAgentUpdate を呼ぶ（Issue #135: ライブ反映）", async () => {
+    const fake = mockChokidarWatch();
+    const cache = createMemoryBoardCache();
+    const onAgentUpdate = vi.fn();
+
+    const fleetWatcher = startFleetWatcher([agentA], cache, onAgentUpdate, {
+      debounceMs: 30,
+      fullRescanIntervalMs: 10 * 60 * 1000,
+    });
+
+    fake.emit("change", path.join(agentA.path, "priority-policy.md"));
+
+    await waitUntil(() => onAgentUpdate.mock.calls.length > 0);
+
+    expect(onAgentUpdate).toHaveBeenCalledTimes(1);
+    expect(onAgentUpdate.mock.calls[0]?.[0]?.name).toBe("agent-a");
+    expect(onAgentUpdate.mock.calls[0]?.[0]?.priorityPolicy).toEqual({
+      active: "release-freeze",
+      status: "defined",
+    });
 
     await fleetWatcher.close();
   });
@@ -330,6 +356,7 @@ describe("startFleetWatcher().addAgentWatch（Issue #121: 稼働中の watcher �
       path.join(agentC.path, "challenge-ledger.md"),
       path.join(agentC.path, "journal", "index.jsonl"),
       path.join(agentC.path, ".flywheel", "runs.jsonl"),
+      path.join(agentC.path, "priority-policy.md"),
       agentC.path,
     ]);
 

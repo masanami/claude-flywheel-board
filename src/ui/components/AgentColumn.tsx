@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type {
   AgentBoard,
   AgentCycleStatus,
+  PriorityPolicy,
   Run,
   RunProvenance,
 } from "../board-types.ts";
@@ -46,6 +47,55 @@ function CycleStatusIndicator({
       <span className="agent-column-cycle-status-dot" aria-hidden="true" />
       {CYCLE_STATUS_LABEL[status]}
     </span>
+  );
+}
+
+// アクティブな優先度方針モードのバッジ表示（Issue #135）。priority-policy.md
+// は claude-flywheel 側の任意ファイル（正本: masanami/claude-flywheel#75 /
+// PR #76 templates/priority-policy.md）のため、board は消費者に徹し独自解釈を
+// 持ち込まない（NFR-05）。priorityPolicy が undefined（ファイルが無い・
+// scanAgent が ENOENT を吸収した）エージェントはバッジ自体を表示しない
+// （後方互換。要件の「非表示 or 方針未設定表示」のうち非表示を採用）。
+// status: "undefined-mode"（active がどのモード定義とも一致しない。
+// run-cycle 側でエージェント裁量にフォールバックする状態）は、独自解釈で
+// 補正せず「未定義モードを指している」ことが分かる注意喚起付きの表示にする。
+//
+// working tree 限定の注意（セルフレビュー指摘対応。詳細: docs/architecture.md
+// §4.2）: このバッジは priority-policy.md の working tree の値を表示するのみ。
+// claude-flywheel 側 run-cycle は「Git コミット済み・未コミット差分なし」の
+// 場合に限りその値を実際に適用し、未コミットの変更がある間は適用方針モード＝
+// エージェント裁量にフォールバックする契約のため、バッジの表示と実際に
+// run-cycle が適用する挙動が一致しない期間がありうる。board はこの Git 状態
+// 判定を持たない（#135 のスコープ外）ため、tooltip でその限定を明示する。
+const UNCOMMITTED_CAVEAT =
+  "（working tree の値を表示。コミット・未コミット差分の状態次第で run-cycle が実際に適用するモードと異なる場合があります）";
+
+function PriorityPolicyBadge({
+  policy,
+  onOpen,
+}: {
+  policy: PriorityPolicy | undefined;
+  onOpen: () => void;
+}) {
+  if (!policy) {
+    return null;
+  }
+  const isUndefinedMode = policy.status === "undefined-mode";
+  return (
+    <button
+      type="button"
+      className="agent-column-priority-policy-badge"
+      data-testid="agent-column-priority-policy-badge"
+      data-policy-status={policy.status}
+      title={
+        isUndefinedMode
+          ? `方針モード "${policy.active}" はモード定義に見つかりません。クリックして priority-policy.md を確認 ${UNCOMMITTED_CAVEAT}`
+          : `方針モード: ${policy.active}（クリックして priority-policy.md を確認）${UNCOMMITTED_CAVEAT}`
+      }
+      onClick={onOpen}
+    >
+      {isUndefinedMode ? `⚠ ${policy.active}` : policy.active}
+    </button>
   );
 }
 
@@ -142,6 +192,13 @@ type AgentColumnProps = {
   // agent.archivedChallenges をミニマル表示（既存 TaskCard の流用）し、
   // 実行中セクション・並べ替え・差し込み等のライブ操作導線はすべて隠す。
   archiveMode?: boolean;
+  /**
+   * 優先度方針バッジ（Issue #135）のクリック時に呼ばれる。エージェント名を
+   * 渡すだけに留め、priority-policy.md を既存 md プレビューパネルへ
+   * どう開くかは呼び出し元（Board.tsx）の責務とする（AgentColumn は
+   * ファイルパスの組み立てを知らない）。
+   */
+  onOpenPriorityPolicy?: (agentName: string) => void;
 };
 
 // ゴーストカードのドラッグを識別する dataTransfer キー
@@ -209,7 +266,11 @@ function findNextSlot(
   return current;
 }
 
-export function AgentColumn({ agent, archiveMode }: AgentColumnProps) {
+export function AgentColumn({
+  agent,
+  archiveMode,
+  onOpenPriorityPolicy,
+}: AgentColumnProps) {
   const firstNeedsHumanIndex = agent.challenges.findIndex((c) => c.needsHuman);
   const [isInsertOpen, setIsInsertOpen] = useState(false);
   const [insertContent, setInsertContent] = useState("");
@@ -522,6 +583,10 @@ export function AgentColumn({ agent, archiveMode }: AgentColumnProps) {
       <div className="agent-column-header">
         <h2 className="agent-column-title">{agent.name}</h2>
         <CycleStatusIndicator cycleStatus={agent.cycleStatus} />
+        <PriorityPolicyBadge
+          policy={agent.priorityPolicy}
+          onOpen={() => onOpenPriorityPolicy?.(agent.name)}
+        />
         <button
           ref={insertButtonRef}
           type="button"

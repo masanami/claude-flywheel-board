@@ -15,11 +15,24 @@ import { AddAgentForm } from "./AddAgentForm.tsx";
 import { AgentColumn } from "./AgentColumn.tsx";
 import type { BoardFilter } from "./FilterBar.tsx";
 import { FilterBar } from "./FilterBar.tsx";
+import type { PreviewPanelOpenRequest } from "./PreviewPanel.tsx";
 import { PreviewPanel } from "./PreviewPanel.tsx";
 
 // 完了ステータスのデフォルト非表示（Issue #50 ②）。防波堤としての表示フィルタ
 // であり、台帳の書き込み・パース挙動には一切影響しない（NFR-01）。
 const COMPLETED_STATUS: LedgerStatus = "完了";
+
+// Issue #135: 優先度方針バッジのクリックで、既存の md プレビューパネルへ
+// priority-policy.md を開く。ファイル名はエージェントワークスペース直下
+// 固定（正本: src/server/watcher.ts の PRIORITY_POLICY_FILE_NAME・
+// claude-flywheel 側 masanami/claude-flywheel#75 / PR #76
+// templates/priority-policy.md）。UI 側は server の value export を
+// 直接 import しない（server コード（node:fs 等）がブラウザバンドルへ
+// 混入するのを避けるための既存方針。board-types.ts 冒頭コメント参照）ため、
+// ここにローカル定数として重複させる。ドリフト検知は Board.test.tsx の
+// 専用テスト（server 側の同名定数との一致を確認）に委ねる（セルフレビュー
+// 指摘対応）。
+export const PRIORITY_POLICY_FILE_NAME = "priority-policy.md";
 
 // showCompleted トグルと needsHuman フィルタは互いに独立して適用する
 // （needsHuman 選択時は元々 完了 が除外されているため実質的な効果は
@@ -167,6 +180,25 @@ export function Board() {
   // 「＋ エージェント追加」フォームの開閉状態（Issue #123）。
   const [addAgentFormOpen, setAddAgentFormOpen] = useState(false);
 
+  // 優先度方針バッジ→プレビュー接続（Issue #135）。PreviewPanel 側は
+  // openRequest.requestId の変化のみをトリガーに開閉・選択ファイルを
+  // 切り替える（セルフレビュー指摘対応: 当初はオブジェクト参照の変化
+  // （Object.is 不一致）に依存していたが、それは型で強制できない暗黙の
+  // 呼び出し規約だった。requestId を型に持たせ「クリックのたびに単調増加
+  // させる」という契約を明示することで、将来 openRequest がメモ化されても
+  // requestId さえ増分すれば確実に再発火する）。
+  const policyPreviewRequestIdRef = useRef(0);
+  const [policyPreviewRequest, setPolicyPreviewRequest] =
+    useState<PreviewPanelOpenRequest | null>(null);
+  const handleOpenPriorityPolicy = (agentName: string) => {
+    policyPreviewRequestIdRef.current += 1;
+    setPolicyPreviewRequest({
+      repo: agentName,
+      path: PRIORITY_POLICY_FILE_NAME,
+      requestId: policyPreviewRequestIdRef.current,
+    });
+  };
+
   // Issue #70: PreviewPanel との橋渡し（md-live-channel.ts 参照）。Board が
   // 保有する唯一の WS 接続の subscribeMd/unsubscribeMd をそのまま転送し、
   // WS から届いた md_file_changed/md_subscribe_error は mdLive.handlers の
@@ -249,12 +281,16 @@ export function Board() {
           最上部に残す（#64）。#112 でファイルツリーを IDE の慣例に合わせ
           画面左端へ寄せるため、パネルをボードカラムの前に配置する。 */}
       <div className="board-main-row">
-        <PreviewPanel mdLive={mdLiveRef.current} />
+        <PreviewPanel
+          mdLive={mdLiveRef.current}
+          openRequest={policyPreviewRequest}
+        />
         <div className="board-columns">
           {agents.map((agent) => (
             <AgentColumn
               key={agent.name}
               archiveMode={archiveMode}
+              onOpenPriorityPolicy={handleOpenPriorityPolicy}
               agent={
                 archiveMode
                   ? agent

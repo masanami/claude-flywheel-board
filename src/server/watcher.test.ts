@@ -128,6 +128,39 @@ describe("scanAgent", () => {
     expect(result.archivedChallenges).toEqual([]);
     expect(result.parseErrors).toHaveLength(2);
   });
+
+  it("priority-policy.md がある repo は priorityPolicy が defined 状態で得られる（Issue #135）", async () => {
+    const result = await scanAgent({
+      name: "agent-a",
+      path: `${FIXTURES_ROOT}agent-a`,
+    });
+
+    expect(result.parseErrors).toEqual([]);
+    expect(result.priorityPolicy).toEqual({
+      active: "release-freeze",
+      status: "defined",
+    });
+  });
+
+  it("priority-policy.md が無い repo は priorityPolicy が undefined になり ParseError も増えない（後方互換・Issue #135）", async () => {
+    const result = await scanAgent({
+      name: "agent-b",
+      path: `${FIXTURES_ROOT}agent-b`,
+    });
+
+    expect(result.parseErrors).toEqual([]);
+    expect(result.priorityPolicy).toBeUndefined();
+  });
+
+  it("repo パスが存在しない場合も priorityPolicy は undefined のままで、parseErrors はledger/journal 2つ分のまま増えない（Issue #135）", async () => {
+    const result = await scanAgent({
+      name: "missing-agent",
+      path: `${FIXTURES_ROOT}does-not-exist`,
+    });
+
+    expect(result.priorityPolicy).toBeUndefined();
+    expect(result.parseErrors).toHaveLength(2);
+  });
 });
 
 describe("scanAndUpdateAgent", () => {
@@ -205,6 +238,29 @@ describe("scanAndUpdateAgent", () => {
 
     const log = cache.getLog("agent-d", "C-400");
     expect(log.map((entry) => entry.source)).toEqual(["journal", "runs"]);
+  });
+
+  it("priorityPolicy が cache.replaceAgent 経由で snapshot まで反映される（Issue #135）", async () => {
+    const cache = createMemoryBoardCache();
+    const entry = { name: "agent-a", path: `${FIXTURES_ROOT}agent-a` };
+
+    await scanAndUpdateAgent(entry, cache);
+
+    const agent = cache.getSnapshot().agents.find((a) => a.name === "agent-a");
+    expect(agent?.priorityPolicy).toEqual({
+      active: "release-freeze",
+      status: "defined",
+    });
+  });
+
+  it("priority-policy.md が無いエージェントは snapshot の priorityPolicy が undefined になる（後方互換・Issue #135）", async () => {
+    const cache = createMemoryBoardCache();
+    const entry = { name: "agent-b", path: `${FIXTURES_ROOT}agent-b` };
+
+    await scanAndUpdateAgent(entry, cache);
+
+    const agent = cache.getSnapshot().agents.find((a) => a.name === "agent-b");
+    expect(agent?.priorityPolicy).toBeUndefined();
   });
 });
 
