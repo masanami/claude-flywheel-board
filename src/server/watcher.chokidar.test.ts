@@ -198,6 +198,10 @@ describe("startFleetWatcher", () => {
 
     expect(onAgentUpdate).toHaveBeenCalledTimes(1);
     expect(onAgentUpdate.mock.calls[0]?.[0]?.name).toBe("agent-a");
+    expect(onAgentUpdate.mock.calls[0]?.[0]?.priorityPolicy).toEqual({
+      active: "release-freeze",
+      status: "defined",
+    });
 
     await fleetWatcher.close();
   });
