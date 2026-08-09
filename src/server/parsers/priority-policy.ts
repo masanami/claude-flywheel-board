@@ -50,8 +50,12 @@ const MODE_DEFINITIONS_HEADING_PATTERN = /^## モード定義\s*$/m;
 // 次の `##` 見出し（セクションの終端判定用）。
 const NEXT_H2_HEADING_PATTERN = /^##\s+/m;
 
-// フェンス（```text ... ```）。非 greedy。
-const TEXT_FENCE_PATTERN = /```text\r?\n([\s\S]*?)```/;
+// フェンス（```text ... ```）。非 greedy。開始・終了フェンスともに行頭固定
+// （末尾は空白・タブのみ許容）し、"## 現在のモード" 節内に引用フェンス
+// （`> \`\`\`text` 等）が正規のフェンスより前にあっても誤マッチしないように
+// する（CodeRabbit 指摘対応: 行頭固定が無いと引用フェンスにマッチし、
+// 後続の正規フェンス内の `active:` 行を解析できなくなる）。
+const TEXT_FENCE_PATTERN = /^```text[ \t]*\r?\n([\s\S]*?)^```[ \t]*\r?$/m;
 // フェンス内で `active: <mode>` 行を探す（行頭固定・値は非空白開始）。
 const ACTIVE_LINE_PATTERN = /^active:[ \t]*(\S.*)$/m;
 // `active:` 行自体は存在するが値が空（トリム後空文字含む）というケースを

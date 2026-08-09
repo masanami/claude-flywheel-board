@@ -165,6 +165,35 @@ active: release-freeze
     });
   });
 
+  it("「## 現在のモード」節内で引用フェンス（記入例）が正規のフェンスより前にあっても、後続の正規フェンス内の active: を解析する（CodeRabbit 指摘対応: フェンスの行頭固定漏れ）", () => {
+    const content = `## 現在のモード
+
+> 記入例:
+>
+> \`\`\`text
+> active: <mode名を記載する例>
+> \`\`\`
+
+\`\`\`text
+active: release-freeze
+\`\`\`
+
+## モード定義
+
+### \`release-freeze\`（記入例）
+
+- 省略。
+`;
+
+    const result = parsePriorityPolicy(content, "priority-policy.md");
+
+    expect(result.errors).toEqual([]);
+    expect(result.policy).toEqual({
+      active: "release-freeze",
+      status: "defined",
+    });
+  });
+
   it("「## モード定義」より後続のセクション（例: 「## 運用メモ」）に紛れ込んだ見出し行はモード定義として拾わない（セルフレビュー指摘対応・2周目: 当初のテストは対象行が「###」で始まらず境界の有無で結果が変わらなかったため、実際に境界の有無で判定が変わる入力に差し替え）", () => {
     const content = `## 現在のモード
 
