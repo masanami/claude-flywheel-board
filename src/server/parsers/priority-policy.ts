@@ -3,9 +3,8 @@ import type { ParseError } from "./types.ts";
 
 // priority-policy.md のスキーマ（正本: claude-flywheel 側
 // masanami/claude-flywheel#75 / PR #76 templates/priority-policy.md。
-// 2026-08-09 時点で未マージのため、マージ前にフォーマットが変わった場合は
-// この parser の追従が必要）。board は消費者に徹し、独自解釈を持ち込まない
-// （NFR-05）:
+// 2026-08-09 マージ済み。フォーマットが変わった場合はこの parser の追従が
+// 必要）。board は消費者に徹し、独自解釈を持ち込まない（NFR-05）:
 //
 // - 現在モードの正本は1箇所のみ: "## 現在のモード" 見出し配下の ```text
 //   フェンス内の `active: <mode>` 行
@@ -23,10 +22,9 @@ import type { ParseError } from "./types.ts";
 // 内容を適用し、未コミットの変更がある場合は適用方針モード＝エージェント
 // 裁量にフォールバックする契約のため、board のバッジが表示する値と
 // run-cycle が実際に適用する値が一致しない期間がありうる（未コミット編集中
-// 等）。board はこの Git 状態判定を持たない（#135 のスコープ外。git 実行を
-// board サーバへ追加すると、正本フォーマット自体が未マージ PR（上記）で
-// まだ流動的な段階での実装コストが見合わず、YAGNI の観点から見送り、UI
-// 側の表示文言で限定注記するに留めた）。
+// 等）。board はこの Git 状態判定を持たない（#135 のスコープ外。git 実行の
+// board サーバへの追加は YAGNI の観点から見送り、UI 側の表示文言で限定注記
+// するに留めた）。
 
 export type PriorityPolicyStatus = "defined" | "undefined-mode";
 

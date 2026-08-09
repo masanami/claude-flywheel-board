@@ -19,7 +19,7 @@ export const JOURNAL_FILE_NAME = path.join("journal", "index.jsonl");
 export const RUNS_FILE_NAME = path.join(".flywheel", "runs.jsonl");
 // Issue #135: エージェントワークスペース直下（Git 追跡・任意の存在）。
 // 正本は claude-flywheel 側 masanami/claude-flywheel#75 / PR #76
-// templates/priority-policy.md（2026-08-09 時点で未マージ）。
+// templates/priority-policy.md（2026-08-09 マージ済み）。
 export const PRIORITY_POLICY_FILE_NAME = "priority-policy.md";
 // Issue #50 ①: 台帳のアーカイブ（完了エントリの移動先）。将来の年次分割
 // （challenge-archive-2026.md 等）に備え、固定ファイル名ではなく glob で扱う
