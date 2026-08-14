@@ -36,7 +36,7 @@ flowchart LR
 | 依存 | 必須 | 用途 |
 | --- | --- | --- |
 | Node.js **22.18 以上**（v24 で開発・検証済み） | ✅ | サーバ実行（TypeScript を直接実行するため type stripping が必要） |
-| **tmux** | ✅（ターミナル機能に） | 埋め込みターミナルのバックエンド。`brew install tmux`。**未インストールだとボード表示は動くが、ターミナルタブの接続が失敗する** |
+| **tmux** | ✅（ターミナル機能に） | 埋め込みターミナルのバックエンド。`brew install tmux`（WSL2/Ubuntu は `sudo apt install tmux`）。**未インストールだとボード表示は動くが、ターミナルタブの接続が失敗する** |
 | npm | ✅ | 依存インストール |
 
 > tmux を採用している理由: board やブラウザを閉じても Claude Code セッションが生存し（re-attach 可能）、手元のネイティブターミナルからも同じセッションを併用できるため。board が発行する tmux コマンドは専用ソケット（`-L board`）に隔離されているため、ネイティブターミナルから attach する場合も `tmux -L board attach -t flywheel-<agent>` を使うこと（`-L board` を省略するとデフォルトソケットを見てしまい、セッションが見つからない）。
@@ -67,6 +67,44 @@ npm run start
 - **利用（`npm run start`）**: `vite build` → `node src/server/index.ts` を1コマンドにまとめたもの（`npm run build && node src/server/index.ts` と同義）。ビルド済み UI を Hono が http://127.0.0.1:4317 で単一オリジン配信する
 - ブラウザで開発時は http://127.0.0.1:5173、利用時は http://127.0.0.1:4317 を開く（サーバは常に 127.0.0.1 にのみバインドされます）
 - マニフェストのパスは環境変数 `FLYWHEEL_FLEET_MANIFEST` で上書きできます
+
+## WSL2 での運用（手順・制約・トラブルシュート）
+
+> WSL2（Linux 側で board / Claude Code を実行し、Windows 側ブラウザで閲覧する構成）向けのガイドです。コードリーディングに基づくドラフトであり、**実機検証は未実施**です（Issue #118 の検証チェックリストを参照）。
+
+### セットアップの差分（macOS との違い）
+
+- **tmux**: `sudo apt install tmux`。
+- **ビルドツール**: `node-pty` は Linux 向けのビルド済みバイナリを**同梱していない**（同梱は darwin / win32 のみ）ため、`npm install` 時に必ず node-gyp によるソースビルドが走る。事前に `sudo apt install build-essential python3` が必要（無いと `npm install` が失敗する）。
+- **Node.js 22.18 以上**: Ubuntu の標準 apt では古いことが多い。[NodeSource](https://github.com/nodesource/distributions) か nvm / fnm 等でインストールする。
+- macOS 向けの `postinstall`（`chmod +x .../darwin-*/spawn-helper`）は Linux では対象が無く `|| true` で無害に素通りする。対応不要。
+
+### repo は Linux ファイルシステム側に置く（必須）
+
+fleet.tsv に登録する各エージェント repo は **Linux FS 側（`~/` 配下）に置くこと**。Windows FS 側（`/mnt/c` 等の drvfs マウント）では inotify イベントが発火しない（WSL2 の既知制約）ため、board のライブ反映が成立しない:
+
+- 台帳・runs.jsonl 等のボード反映（`watcher.ts`）: 5 分間隔のフル再スキャンにフォールバックするため**最大 5 分遅延に劣化**する（停止はしない）。
+- md プレビューのライブ反映（`md/watch.ts`）: 再スキャンのフォールバックが無いため**完全に停止**する（開き直せば最新は読める）。
+
+そもそも `/mnt` 配下は 9P 経由でファイル I/O 自体が大幅に遅く、git / npm の性能面でも WSL2 のベストプラクティスは Linux FS 側配置のため、board 固有の追加制約というより前提の明文化である。
+
+### アクセス経路は localhost 経由のみ
+
+Windows 側ブラウザからは **`http://127.0.0.1:4317`**（WSL2 の localhost フォワーディング経由）でアクセスする。WSL の IP 直打ち（`http://172.x.x.x:4317`）は設計上成立しない:
+
+1. サーバは `127.0.0.1` に固定バインドされており（上書き手段は意図的に無い）、WSL の外向きインターフェースでは接続自体が拒否される。
+2. 仮にポートプロキシ等で到達させても、Host / Origin ヘッダ検証（`localhost` / `127.0.0.1` のみ許可）が 403 で拒否する。
+3. 仮にヘッダも偽装しても、secure context でなくなり `navigator.clipboard` が使えずコピー機能が全滅する。
+
+### トラブルシュート
+
+| 症状 | 原因の見込み | 対処 |
+| --- | --- | --- |
+| Windows ブラウザから `http://127.0.0.1:4317` に繋がらない | WSL2 の localhost フォワーディングはスリープ復帰・VPN 接続後に壊れることがある（既知の癖） | PowerShell で `wsl --shutdown` → WSL を再起動 → board を再起動 |
+| ライブ反映されない（手動リロードでは最新が見える） | repo が `/mnt/` 配下にある | repo を Linux FS 側（`~/` 配下）へ移す（上記参照） |
+| スリープ復帰後に ⚠（応答なし）や stale が誤表示される | WSL2 はスリープ復帰後に時計がずれる既知問題があり、実行中 Run の経過時間判定（タイムスタンプ比較）が一時的に狂う | 時計の補正（`wsl --shutdown` または systemd-timesyncd）で自己回復する。判定は毎回再計算のため補正後 1 分以内に表示も直る。board は表示のみで状態ファイルへ書き込まないため実害は無い |
+| `npm install` が node-pty のビルドで失敗する | `build-essential` / `python3` 不足 | `sudo apt install build-essential python3` |
+| chokidar が `ENOSPC: System limit for number of file watchers reached` を出す | ディストリによっては `fs.inotify.max_user_watches` が小さい（board 自体の消費は repo あたり約 5 watch と少なく、通常は他プロセスとの合算で到達する） | `sudo sysctl fs.inotify.max_user_watches=524288`（恒久化は `/etc/sysctl.conf`） |
 
 ## claude-flywheel との関係
 
