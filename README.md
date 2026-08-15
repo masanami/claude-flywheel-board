@@ -83,7 +83,7 @@ npm run start
 
 fleet.tsv に登録する各エージェント repo は **Linux FS 側（`~/` 配下）に置くこと**。Windows FS 側（`/mnt/c` 等の drvfs マウント）では inotify イベントが発火しない（WSL2 の既知制約）ため、board のライブ反映が成立しない:
 
-- 台帳・runs.jsonl 等のボード反映（`watcher.ts`）: 5 分間隔のフル再スキャンにフォールバックするため**最大 5 分遅延に劣化**する（停止はしない）。
+- 台帳・runs.jsonl 等のボード反映（`watcher.ts`）: 5 分間隔でフル再スキャンを起動するフォールバックがあるため、**反映が数分単位（再スキャン間隔 5 分＋スキャン・配信の処理時間）で遅延**する（停止はしない）。
 - md プレビューのライブ反映（`md/watch.ts`）: 再スキャンのフォールバックが無いため**完全に停止**する（開き直せば最新は読める）。
 
 そもそも `/mnt` 配下は 9P 経由でファイル I/O 自体が大幅に遅く、git / npm の性能面でも WSL2 のベストプラクティスは Linux FS 側配置のため、board 固有の追加制約というより前提の明文化である。
@@ -104,7 +104,9 @@ Windows 側ブラウザからは **`http://127.0.0.1:4317`**（WSL2 の localhos
 | ライブ反映されない（手動リロードでは最新が見える） | repo が `/mnt/` 配下にある | repo を Linux FS 側（`~/` 配下）へ移す（上記参照） |
 | スリープ復帰後に ⚠（応答なし）や stale が誤表示される | WSL2 はスリープ復帰後に時計がずれる既知問題があり、実行中 Run の経過時間判定（タイムスタンプ比較）が一時的に狂う | 時計の補正（`wsl --shutdown` または systemd-timesyncd）で自己回復する。判定は毎回再計算のため補正後 1 分以内に表示も直る。board は表示のみで状態ファイルへ書き込まないため実害は無い |
 | `npm install` が node-pty のビルドで失敗する | `build-essential` / `python3` 不足 | `sudo apt install build-essential python3` |
-| chokidar が `ENOSPC: System limit for number of file watchers reached` を出す | ディストリによっては `fs.inotify.max_user_watches` が小さい（board 自体の消費は repo あたり約 5 watch と少なく、通常は他プロセスとの合算で到達する） | `sudo sysctl fs.inotify.max_user_watches=524288`（恒久化は `/etc/sysctl.conf`） |
+| chokidar が `ENOSPC: System limit for number of file watchers reached` を出す | ディストリによっては `fs.inotify.max_user_watches` が小さい（board 自体の消費は repo あたり約 5 watch と少なく、通常は他プロセスとの合算で到達する） | `sudo sysctl fs.inotify.max_user_watches=524288`。恒久化する場合は `/etc/sysctl.d/99-flywheel.conf` に `fs.inotify.max_user_watches=524288` を記載し、`sudo sysctl --system` で反映する |
+
+> **`wsl --shutdown` の注意**: 実行中の**全**ディストリビューションと WSL2 VM を即時終了する（graceful shutdown ではない）。tmux 内の Claude Code セッション・未保存の作業もすべて止まるため、作業を保存し、エージェントの自走サイクルが区切りのよいタイミングで実行すること。
 
 ## claude-flywheel との関係
 
