@@ -34,12 +34,13 @@ describe("validateMdPath", () => {
     expect(result).toEqual({ ok: false });
   });
 
-  it("repo ルート直下の .md ファイルは許可され、解決済み絶対パスを返す", () => {
+  it("repo ルート直下の .md ファイルは許可され、解決済み絶対パスと kind: markdown を返す", () => {
     const result = validateMdPath(fleetEntries, "myrepo", "doc.md");
 
     expect(result).toEqual({
       ok: true,
       resolvedPath: fs.realpathSync(path.join(repoRoot, "doc.md")),
+      kind: "markdown",
     });
   });
 
@@ -49,13 +50,42 @@ describe("validateMdPath", () => {
     expect(result).toEqual({
       ok: true,
       resolvedPath: fs.realpathSync(path.join(repoRoot, "subdir", "nested.md")),
+      kind: "markdown",
     });
   });
 
-  it("拡張子が .md 以外の場合は ok:false を返す", () => {
+  it("アローリスト登録済みのテキスト系拡張子は許可され kind: text を返す（#142 の挙動変更。従来は .md 以外を拒否していた）", () => {
     const result = validateMdPath(fleetEntries, "myrepo", "notes.txt");
 
-    expect(result).toEqual({ ok: false });
+    expect(result).toEqual({
+      ok: true,
+      resolvedPath: fs.realpathSync(path.join(repoRoot, "notes.txt")),
+      kind: "text",
+    });
+  });
+
+  it("アローリスト外の拡張子（鍵系・大文字小文字違い）は ok:false を返す", () => {
+    fs.writeFileSync(path.join(repoRoot, "id_rsa.pem"), "secret key");
+    fs.writeFileSync(path.join(repoRoot, "UPPER.MD"), "# upper");
+
+    expect(validateMdPath(fleetEntries, "myrepo", "id_rsa.pem")).toEqual({
+      ok: false,
+    });
+    expect(validateMdPath(fleetEntries, "myrepo", "UPPER.MD")).toEqual({
+      ok: false,
+    });
+  });
+
+  it("拡張子を持たないファイルは ok:false を返す（設計 §2.1: 秘密情報の構造的な除外）", () => {
+    fs.writeFileSync(path.join(repoRoot, "Makefile"), "all:\n");
+    fs.writeFileSync(path.join(repoRoot, "credentials"), "token");
+
+    expect(validateMdPath(fleetEntries, "myrepo", "Makefile")).toEqual({
+      ok: false,
+    });
+    expect(validateMdPath(fleetEntries, "myrepo", "credentials")).toEqual({
+      ok: false,
+    });
   });
 
   it("ファイルが存在しない場合は ok:false を返す（拒否ケースと同一の戻り値）", () => {
@@ -148,6 +178,7 @@ describe("validateMdPath", () => {
     expect(result).toEqual({
       ok: true,
       resolvedPath: fs.realpathSync(path.join(repoRoot, "doc.md")),
+      kind: "markdown",
     });
   });
 
@@ -159,5 +190,136 @@ describe("validateMdPath", () => {
     const result = validateMdPath(missingRootEntries, "myrepo", "doc.md");
 
     expect(result).toEqual({ ok: false });
+  });
+
+  // 設計 docs/features/file-tree-non-md-support.md §2.2 の受け入れ条件:
+  // (a) 除外セグメントを含む要求（`..` の解決で消えるケースを含む）の拒否
+  // (b) `.` 始まり symlink alias が許可対象ファイルを指すケースの拒否
+  // (c) 許可対象実体を指す通常名 symlink alias の受け入れ
+  describe("セグメント除外判定（設計 §2.2）", () => {
+    it("`.` 始まりディレクトリ配下は ok:false を返す（tree の除外ルールと対称化。従来は読み取りだけ許していた）", () => {
+      fs.mkdirSync(path.join(repoRoot, ".git"));
+      fs.writeFileSync(path.join(repoRoot, ".git", "config.toml"), "secret");
+
+      expect(
+        validateMdPath(fleetEntries, "myrepo", ".git/config.toml"),
+      ).toEqual({ ok: false });
+    });
+
+    it("`.` 始まりファイルは ok:false を返す（設計 §2.2 の `.` 始まり判定の統一。`.hidden.md` は読み取り不可へ挙動変更）", () => {
+      fs.writeFileSync(path.join(repoRoot, ".hidden.md"), "# hidden");
+      fs.writeFileSync(path.join(repoRoot, ".env"), "TOKEN=secret");
+
+      expect(validateMdPath(fleetEntries, "myrepo", ".hidden.md")).toEqual({
+        ok: false,
+      });
+      expect(validateMdPath(fleetEntries, "myrepo", ".env")).toEqual({
+        ok: false,
+      });
+    });
+
+    it("node_modules 配下は ok:false を返す", () => {
+      fs.mkdirSync(path.join(repoRoot, "node_modules", "pkg"), {
+        recursive: true,
+      });
+      fs.writeFileSync(
+        path.join(repoRoot, "node_modules", "pkg", "readme.md"),
+        "# pkg",
+      );
+
+      expect(
+        validateMdPath(fleetEntries, "myrepo", "node_modules/pkg/readme.md"),
+      ).toEqual({ ok: false });
+    });
+
+    it("`..` の解決で除外セグメントが消える要求も拒否する（正規化前の生セグメント列で検査していることの回帰ガード）", () => {
+      fs.mkdirSync(path.join(repoRoot, "node_modules"));
+      fs.mkdirSync(path.join(repoRoot, ".hidden"));
+
+      // いずれも path.join 後は repo ルート直下の doc.md へ解決するため、
+      // 正規化後の検査だけでは除外セグメントを検出できない。
+      expect(
+        validateMdPath(fleetEntries, "myrepo", "node_modules/../doc.md"),
+      ).toEqual({ ok: false });
+      expect(
+        validateMdPath(fleetEntries, "myrepo", ".hidden/../doc.md"),
+      ).toEqual({ ok: false });
+    });
+
+    it("repo 内で完結する `..` を含む要求も拒否する（`..` セグメント自体を要求パスで拒否する）", () => {
+      expect(
+        validateMdPath(fleetEntries, "myrepo", "subdir/../doc.md"),
+      ).toEqual({ ok: false });
+    });
+
+    it("`.` 始まりの symlink alias が許可対象ファイルを指す場合も拒否する（要求パス側の検査で落ちる）", () => {
+      fs.symlinkSync(
+        path.join(repoRoot, "doc.md"),
+        path.join(repoRoot, ".alias.md"),
+      );
+
+      expect(validateMdPath(fleetEntries, "myrepo", ".alias.md")).toEqual({
+        ok: false,
+      });
+    });
+
+    it("通常名の symlink が除外セグメント配下の実体を指す場合は拒否する（解決後パス側の検査）", () => {
+      fs.mkdirSync(path.join(repoRoot, ".hidden"));
+      fs.writeFileSync(path.join(repoRoot, ".hidden", "secret.md"), "# secret");
+      fs.symlinkSync(
+        path.join(repoRoot, ".hidden", "secret.md"),
+        path.join(repoRoot, "alias.md"),
+      );
+      fs.mkdirSync(path.join(repoRoot, "node_modules", "pkg"), {
+        recursive: true,
+      });
+      fs.writeFileSync(
+        path.join(repoRoot, "node_modules", "pkg", "readme.md"),
+        "# pkg",
+      );
+      fs.symlinkSync(
+        path.join(repoRoot, "node_modules", "pkg", "readme.md"),
+        path.join(repoRoot, "pkg-alias.md"),
+      );
+
+      expect(validateMdPath(fleetEntries, "myrepo", "alias.md")).toEqual({
+        ok: false,
+      });
+      expect(validateMdPath(fleetEntries, "myrepo", "pkg-alias.md")).toEqual({
+        ok: false,
+      });
+    });
+
+    it("許可対象の実体を指す通常名の symlink alias は、リンク名の拡張子がアローリスト外でも受け入れる（拡張子判定は解決後の実体のみ・設計 §2.2）", () => {
+      fs.symlinkSync(
+        path.join(repoRoot, "doc.md"),
+        path.join(repoRoot, "alias.bin"),
+      );
+
+      expect(validateMdPath(fleetEntries, "myrepo", "alias.bin")).toEqual({
+        ok: true,
+        resolvedPath: fs.realpathSync(path.join(repoRoot, "doc.md")),
+        kind: "markdown",
+      });
+    });
+
+    it("repo ルート自体が `.` 始まりディレクトリ配下にあっても通常のファイルは許可される（判定は repo ルートからの相対パスで行う）", () => {
+      const dottedParent = path.join(tempRoot, ".flywheel");
+      const nestedRepo = path.join(dottedParent, "repo");
+      fs.mkdirSync(nestedRepo, { recursive: true });
+      fs.writeFileSync(path.join(nestedRepo, "doc.md"), "# doc");
+
+      const result = validateMdPath(
+        [{ name: "nested", path: nestedRepo }],
+        "nested",
+        "doc.md",
+      );
+
+      expect(result).toEqual({
+        ok: true,
+        resolvedPath: fs.realpathSync(path.join(nestedRepo, "doc.md")),
+        kind: "markdown",
+      });
+    });
   });
 });

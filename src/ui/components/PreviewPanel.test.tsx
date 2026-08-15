@@ -919,6 +919,154 @@ describe("PreviewPanel", () => {
     });
   });
 
+  // #142（設計 docs/features/file-tree-non-md-support.md §3 Phase A）:
+  // 表示分岐の入口は file API の kind のみ。kind: "text" は markdown として
+  // 解釈せず `<pre><code>` へ、拡張子が既知なら highlight 用のクラスを付けて
+  // 描画する。
+  describe("テキスト系プレビュー（#142: kind: text）", () => {
+    function stubFetchForFile(
+      treePath: string,
+      fileResponse: () => { kind: string; content: string },
+    ) {
+      const fetchMock = vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith("/api/md/tree")) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () =>
+              Promise.resolve({
+                repos: [{ name: "repo-a", files: [treePath] }],
+              }),
+          });
+        }
+        if (url.startsWith("/api/md/file")) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve(fileResponse()),
+          });
+        }
+        throw new Error(`unexpected fetch url in test: ${url}`);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      return fetchMock;
+    }
+
+    async function openPanelAndSelect(fileName: string) {
+      const utils = render(<PreviewPanel />);
+      act(() => {
+        screen.getByRole("button", { name: "プレビューパネルを開く" }).click();
+      });
+      const fileButton = await screen.findByRole("button", { name: fileName });
+      act(() => {
+        fileButton.click();
+      });
+      return utils;
+    }
+
+    it("kind: text は markdown として解釈されず <pre><code> のコードブロックとして描画される", async () => {
+      stubFetchForFile("notes.txt", () => ({
+        kind: "text",
+        content: "# 見出しではない\n- リストでもない\n",
+      }));
+
+      const { container } = await openPanelAndSelect("notes.txt");
+
+      const code = await waitFor(() => {
+        const element = container.querySelector("pre > code");
+        expect(element).not.toBeNull();
+        return element as HTMLElement;
+      });
+      expect(code.textContent).toContain("# 見出しではない");
+      // markdown として解釈されていれば <h1>・<li> になっている
+      // （<li> はファイルツリー側にも現れるため、プレビュー領域に限定して見る）。
+      expect(container.querySelector("h1")).toBeNull();
+      expect(
+        container.querySelector('[data-testid="preview-panel-text"] li'),
+      ).toBeNull();
+    });
+
+    it("既知の拡張子には highlight.js の言語クラスが付与される", async () => {
+      stubFetchForFile("main.py", () => ({
+        kind: "text",
+        content: "def main():\n    return 1\n",
+      }));
+
+      const { container } = await openPanelAndSelect("main.py");
+
+      await waitFor(() => {
+        expect(container.querySelector("code.language-python")).not.toBeNull();
+      });
+      expect(container.querySelector("code.hljs")).not.toBeNull();
+    });
+
+    it("未対応拡張子はプレーン表示になる（言語クラスは付かないが内容は表示される）", async () => {
+      stubFetchForFile("data.tsv", () => ({
+        kind: "text",
+        content: "a\tb\n1\t2\n",
+      }));
+
+      const { container } = await openPanelAndSelect("data.tsv");
+
+      const code = await waitFor(() => {
+        const element = container.querySelector("pre > code");
+        expect(element).not.toBeNull();
+        return element as HTMLElement;
+      });
+      expect(code.textContent).toContain("a\tb");
+      expect(code.className).not.toMatch(/language-/);
+    });
+
+    it("内容にコードフェンス（```）が含まれていてもブロックを抜け出さず、そのままテキストとして表示される", async () => {
+      stubFetchForFile("fence.txt", () => ({
+        kind: "text",
+        content: "```\n# 抜け出そうとする内容\n```\n",
+      }));
+
+      const { container } = await openPanelAndSelect("fence.txt");
+
+      const code = await waitFor(() => {
+        const element = container.querySelector("pre > code");
+        expect(element).not.toBeNull();
+        return element as HTMLElement;
+      });
+      expect(code.textContent).toContain("```");
+      expect(code.textContent).toContain("# 抜け出そうとする内容");
+      expect(container.querySelector("h1")).toBeNull();
+    });
+
+    it("生 HTML・script タグはテキストとして表示される（DOM へ注入されない）", async () => {
+      stubFetchForFile("evil.html", () => ({
+        kind: "text",
+        content: "<script>alert(1)</script>\n",
+      }));
+
+      const { container } = await openPanelAndSelect("evil.html");
+
+      const code = await waitFor(() => {
+        const element = container.querySelector("pre > code");
+        expect(element).not.toBeNull();
+        return element as HTMLElement;
+      });
+      expect(code.textContent).toContain("<script>alert(1)</script>");
+      expect(container.querySelector("script")).toBeNull();
+    });
+
+    it("kind: markdown は従来どおり react-markdown で描画される", async () => {
+      stubFetchForFile("note.md", () => ({
+        kind: "markdown",
+        content: "# 見出し\n",
+      }));
+
+      const { container } = await openPanelAndSelect("note.md");
+
+      await waitFor(() => {
+        expect(container.querySelector("h1")?.textContent).toBe("見出し");
+      });
+    });
+  });
+
   describe("ライブ更新（#70: WS 結線）", () => {
     // mdLive は Board.tsx が唯一の WS 接続を橋渡しするための最小限の受け口
     // （../md-live-channel.ts）。ここでは PreviewPanel が mdLive.subscribe /

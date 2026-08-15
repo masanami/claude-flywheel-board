@@ -35,9 +35,25 @@ describe("listMdTree", () => {
     expect(result.repos[0]?.files).toEqual([path.join("docs", "nested.md")]);
   });
 
-  it("拡張子が .md 以外（.MD を含む大文字小文字違い）は除外される", () => {
+  it("アローリスト登録済みのテキスト系拡張子も一覧に含まれる（#142 の挙動変更）", () => {
     fs.writeFileSync(path.join(repoRoot, "notes.txt"), "not markdown");
+    fs.writeFileSync(path.join(repoRoot, "config.yaml"), "a: 1");
+    fs.writeFileSync(path.join(repoRoot, "doc.md"), "# doc");
+
+    const result = listMdTree([{ name: "myrepo", path: repoRoot }]);
+
+    expect(result.repos[0]?.files).toEqual([
+      "config.yaml",
+      "doc.md",
+      "notes.txt",
+    ]);
+  });
+
+  it("アローリスト外の拡張子（大文字小文字違い・鍵系）と拡張子なしファイルは除外される", () => {
     fs.writeFileSync(path.join(repoRoot, "upper.MD"), "# upper");
+    fs.writeFileSync(path.join(repoRoot, "id_rsa.pem"), "secret key");
+    fs.writeFileSync(path.join(repoRoot, "Makefile"), "all:\n");
+    fs.writeFileSync(path.join(repoRoot, "image.png"), "binary");
 
     const result = listMdTree([{ name: "myrepo", path: repoRoot }]);
 
@@ -69,14 +85,42 @@ describe("listMdTree", () => {
     expect(result.repos[0]?.files).toEqual([path.join("docs", "visible.md")]);
   });
 
-  it("`.` 始まりであってもディレクトリでなくファイルであれば除外されない", () => {
-    // 完了条件の文言は「`.` 始まりの全ディレクトリ」の除外であり、
-    // 同名のファイルまで対象にする機械的判定の拡大解釈はしない。
+  it("`.` 始まりのファイルも除外される（設計 §2.2「`.` 始まり判定の統一」。#142 の挙動変更）", () => {
+    // #61 時点は「`.` 始まりの全ディレクトリ」のみを除外し `.hidden-note.md` は
+    // 列挙していたが、拡張子アローリスト緩和にあわせてファイル名にも同じ判定を
+    // 適用する（読み取り API と「一覧に出る＝読める」で対称化する）。
     fs.writeFileSync(path.join(repoRoot, ".hidden-note.md"), "# hidden note");
+    fs.writeFileSync(path.join(repoRoot, "visible.md"), "# visible");
 
     const result = listMdTree([{ name: "myrepo", path: repoRoot }]);
 
-    expect(result.repos[0]?.files).toEqual([".hidden-note.md"]);
+    expect(result.repos[0]?.files).toEqual(["visible.md"]);
+  });
+
+  it("`.` 始まりの symlink alias は、許可対象の実体を指していても除外される（実体解決より前にエントリ名で落とす）", () => {
+    fs.writeFileSync(path.join(repoRoot, "doc.md"), "# doc");
+    fs.symlinkSync(
+      path.join(repoRoot, "doc.md"),
+      path.join(repoRoot, ".alias.md"),
+    );
+
+    const result = listMdTree([{ name: "myrepo", path: repoRoot }]);
+
+    expect(result.repos[0]?.files).toEqual(["doc.md"]);
+  });
+
+  it("通常名の symlink が `.` 始まりディレクトリ配下の実体を指す場合は除外される（解決後パス側の検査）", () => {
+    fs.mkdirSync(path.join(repoRoot, ".hidden"));
+    fs.writeFileSync(path.join(repoRoot, ".hidden", "secret.md"), "# secret");
+    fs.symlinkSync(
+      path.join(repoRoot, ".hidden", "secret.md"),
+      path.join(repoRoot, "alias.md"),
+    );
+    fs.writeFileSync(path.join(repoRoot, "visible.md"), "# visible");
+
+    const result = listMdTree([{ name: "myrepo", path: repoRoot }]);
+
+    expect(result.repos[0]?.files).toEqual(["visible.md"]);
   });
 
   it("node_modules 配下は走査から除外される", () => {
@@ -170,22 +214,25 @@ describe("listMdTree", () => {
     expect(result.repos[0]?.files).toEqual(["visible.md"]);
   });
 
-  it("拡張子が .md でないリンク名でも、リンク先の実体が .md ファイルなら一覧に含まれる（判定はリンク名でなく実体パスで行う）", () => {
+  it("リンク名の拡張子がアローリスト外でも、リンク先の実体が対象ファイルなら一覧に含まれる（判定はリンク名でなく実体パスで行う）", () => {
     fs.writeFileSync(path.join(repoRoot, "real.md"), "# real");
     fs.symlinkSync(
       path.join(repoRoot, "real.md"),
-      path.join(repoRoot, "looks-like-text.txt"),
+      path.join(repoRoot, "looks-like-binary.bin"),
     );
 
     const result = listMdTree([{ name: "myrepo", path: repoRoot }]);
 
-    expect(result.repos[0]?.files).toEqual(["looks-like-text.txt", "real.md"]);
+    expect(result.repos[0]?.files).toEqual([
+      "looks-like-binary.bin",
+      "real.md",
+    ]);
   });
 
-  it("リンク名が .md でも、リンク先の実体が .md でなければ一覧に含まれない（判定はリンク名でなく実体パスで行う）", () => {
-    fs.writeFileSync(path.join(repoRoot, "real.txt"), "not markdown");
+  it("リンク名が .md でも、リンク先の実体がアローリスト外なら一覧に含まれない（判定はリンク名でなく実体パスで行う）", () => {
+    fs.writeFileSync(path.join(repoRoot, "real.pem"), "secret key");
     fs.symlinkSync(
-      path.join(repoRoot, "real.txt"),
+      path.join(repoRoot, "real.pem"),
       path.join(repoRoot, "looks-like-md.md"),
     );
 
