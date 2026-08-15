@@ -16,6 +16,8 @@ export type {
 } from "../server/parsers/priority-policy.ts";
 export type { ParseError, LogEntry } from "../server/parsers/types.ts";
 export type { Run, RunProvenance } from "../server/parsers/runs.ts";
+export type { MdFileResponse } from "../server/api.ts";
+export type { PreviewKind } from "../server/md/path-validation.ts";
 export type { MdTreeRepo, MdTreeResponse } from "../server/md/tree.ts";
 export type {
   MdFileChangedMessage,

@@ -44,6 +44,7 @@ describe("createMdWatchRegistry.subscribe", () => {
     vi.mocked(validateMdPath).mockReturnValue({
       ok: true,
       resolvedPath: "/repos/myrepo/doc.md",
+      kind: "markdown",
     });
     mockChokidarWatch();
     const broadcastFileChanged = vi.fn();
@@ -81,6 +82,7 @@ describe("createMdWatchRegistry.subscribe", () => {
     vi.mocked(validateMdPath).mockReturnValue({
       ok: true,
       resolvedPath: "/repos/myrepo/doc.md",
+      kind: "markdown",
     });
     const fake = mockChokidarWatch();
     const broadcastFileChanged = vi.fn();
@@ -101,6 +103,7 @@ describe("createMdWatchRegistry.subscribe", () => {
     vi.mocked(validateMdPath).mockReturnValue({
       ok: true,
       resolvedPath: "/repos/myrepo/doc.md",
+      kind: "markdown",
     });
     const fake = mockChokidarWatch();
     const registry = createMdWatchRegistry(() => [], vi.fn());
@@ -116,6 +119,7 @@ describe("createMdWatchRegistry の refcount", () => {
     vi.mocked(validateMdPath).mockReturnValue({
       ok: true,
       resolvedPath: "/repos/myrepo/doc.md",
+      kind: "markdown",
     });
     const fake = mockChokidarWatch();
     const registry = createMdWatchRegistry(() => [], vi.fn());
@@ -135,6 +139,7 @@ describe("createMdWatchRegistry の refcount", () => {
     vi.mocked(validateMdPath).mockReturnValue({
       ok: true,
       resolvedPath: "/repos/myrepo/doc.md",
+      kind: "markdown",
     });
     const fake = mockChokidarWatch();
     const registry = createMdWatchRegistry(() => [], vi.fn());
@@ -153,6 +158,7 @@ describe("createMdWatchRegistry の refcount", () => {
     vi.mocked(validateMdPath).mockReturnValueOnce({
       ok: true,
       resolvedPath: "/repos/myrepo/a.md",
+      kind: "markdown",
     });
     const fakeA = mockChokidarWatch();
     const registry = createMdWatchRegistry(() => [], vi.fn());
@@ -162,6 +168,7 @@ describe("createMdWatchRegistry の refcount", () => {
     vi.mocked(validateMdPath).mockReturnValueOnce({
       ok: true,
       resolvedPath: "/repos/myrepo/b.md",
+      kind: "markdown",
     });
     const fakeB = mockChokidarWatch();
     registry.subscribe(ws as never, "myrepo", "b.md");
@@ -175,6 +182,7 @@ describe("createMdWatchRegistry の refcount", () => {
     vi.mocked(validateMdPath).mockReturnValue({
       ok: true,
       resolvedPath: "/repos/myrepo/a.md",
+      kind: "markdown",
     });
     const fakeA = mockChokidarWatch();
     const registry = createMdWatchRegistry(() => [], vi.fn());
@@ -186,6 +194,7 @@ describe("createMdWatchRegistry の refcount", () => {
     vi.mocked(validateMdPath).mockReturnValueOnce({
       ok: true,
       resolvedPath: "/repos/myrepo/b.md",
+      kind: "markdown",
     });
     mockChokidarWatch();
     registry.subscribe(ws1 as never, "myrepo", "b.md");
@@ -205,6 +214,7 @@ describe("createMdWatchRegistry の refcount", () => {
     vi.mocked(validateMdPath).mockReturnValue({
       ok: true,
       resolvedPath: "/repos/myrepo/doc.md",
+      kind: "markdown",
     });
     const fake = mockChokidarWatch();
     const registry = createMdWatchRegistry(() => [], vi.fn());
@@ -221,7 +231,11 @@ describe("createMdWatchRegistry の refcount", () => {
     vi.mocked(validateMdPath).mockImplementation((_entries, repo, path) => {
       // symlink 経由の別名パス等、異なる (repo, path) が同一実体
       // （resolvedPath）に解決するケースを模す。
-      return { ok: true, resolvedPath: "/repos/myrepo/real.md" };
+      return {
+        ok: true,
+        resolvedPath: "/repos/myrepo/real.md",
+        kind: "markdown",
+      };
     });
     const fake = mockChokidarWatch();
     const broadcastFileChanged = vi.fn();
@@ -250,6 +264,7 @@ describe("createMdWatchRegistry の refcount", () => {
     vi.mocked(validateMdPath).mockReturnValue({
       ok: true,
       resolvedPath: "/repos/myrepo/doc.md",
+      kind: "markdown",
     });
     const fake = mockChokidarWatch();
     const broadcastFileChanged = vi.fn();
@@ -269,6 +284,7 @@ describe("createMdWatchRegistry の refcount", () => {
     vi.mocked(validateMdPath).mockReturnValue({
       ok: true,
       resolvedPath: "/repos/myrepo/doc.md",
+      kind: "markdown",
     });
     const fake = mockChokidarWatch();
     const broadcastFileChanged = vi.fn();
@@ -291,6 +307,7 @@ describe("createMdWatchRegistry の refcount", () => {
     vi.mocked(validateMdPath).mockReturnValueOnce({
       ok: true,
       resolvedPath: "/repos/myrepo/a.md",
+      kind: "markdown",
     });
     mockChokidarWatch();
     const registry = createMdWatchRegistry(() => [], vi.fn());
@@ -300,6 +317,7 @@ describe("createMdWatchRegistry の refcount", () => {
     vi.mocked(validateMdPath).mockReturnValueOnce({
       ok: true,
       resolvedPath: "/repos/myrepo/b.md",
+      kind: "markdown",
     });
     const fakeB = mockChokidarWatch();
     registry.subscribe(ws as never, "myrepo", "b.md");
@@ -325,6 +343,7 @@ describe("createMdWatchRegistry の refcount", () => {
     vi.mocked(validateMdPath).mockReturnValue({
       ok: true,
       resolvedPath: "/repos/myrepo/doc.md",
+      kind: "markdown",
     });
     vi.mocked(watch).mockImplementationOnce(() => {
       throw new Error("boom");
@@ -358,6 +377,7 @@ describe("createMdWatchRegistry の refcount", () => {
     vi.mocked(validateMdPath).mockReturnValue({
       ok: true,
       resolvedPath: "/repos/myrepo/doc.md",
+      kind: "markdown",
     });
     const fake = mockChokidarWatch();
     const registry = createMdWatchRegistry(() => [], vi.fn());
@@ -378,11 +398,13 @@ describe("createMdWatchRegistry.closeAll", () => {
     vi.mocked(validateMdPath).mockReturnValueOnce({
       ok: true,
       resolvedPath: "/repos/myrepo/a.md",
+      kind: "markdown",
     });
     const fakeA = mockChokidarWatch();
     vi.mocked(validateMdPath).mockReturnValueOnce({
       ok: true,
       resolvedPath: "/repos/myrepo/b.md",
+      kind: "markdown",
     });
     const fakeB = mockChokidarWatch();
     const registry = createMdWatchRegistry(() => [], vi.fn());
@@ -399,6 +421,7 @@ describe("createMdWatchRegistry.closeAll", () => {
     vi.mocked(validateMdPath).mockReturnValue({
       ok: true,
       resolvedPath: "/repos/myrepo/doc.md",
+      kind: "markdown",
     });
     mockChokidarWatch();
     const registry = createMdWatchRegistry(() => [], vi.fn());

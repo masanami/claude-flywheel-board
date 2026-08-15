@@ -4,6 +4,7 @@ import Markdown from "react-markdown";
 import type { Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
+import type { MdFileResponse } from "../board-types.ts";
 import {
   type MdLiveChannel,
   createNoopMdLiveChannel,
@@ -56,23 +57,19 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
-// GET /api/md/file の 200 応答形（src/server/api.ts の `c.json({ content })`）。
-// サーバ側は type を export していないため（server コードの変更は本チケットの
-// スコープ外）、UI 側の契約としてローカルに定義する。
-// セルフレビュー指摘: board-types.ts に置く選択肢も検討したが、同ファイルの
-// 冒頭コメントは「UI 側の型は server 側の型をそのまま再利用し、独自解釈を
-// 持ち込まない」という re-export 専用の不変条件を明言しており
-// （`MdTreeRepo`/`MdTreeResponse` はいずれも server からの re-export）、
-// server が export していない形をそこへ独自定義すると、その不変条件を崩す。
-// 唯一の利用者である本ファイルにローカル定義のまま留める。
-type MdFileResponse = { content: string };
+// GET /api/md/file の 200 応答形は server 側（src/server/api.ts）の
+// `MdFileResponse` を board-types.ts 経由でそのまま再利用する（#142。
+// #69 時点ではサーバが type を export しておらずローカル定義していたが、
+// kind 付き契約〔設計 §3〕の導入でサーバ側が正本の型を export したため、
+// board-types.ts の不変条件「server 側の型をそのまま再利用し独自解釈を
+// 持ち込まない」（NFR-05）に沿った re-export へ寄せた）。
 
 type SelectedFile = { repo: string; path: string };
 
 type FileContentState =
   | { status: "idle" }
   | { status: "loading" }
-  | { status: "success"; content: string }
+  | { status: "success"; kind: MdFileResponse["kind"]; content: string }
   | { status: "error"; message: string };
 
 const GENERIC_FILE_ERROR_MESSAGE = "ファイルの取得に失敗しました";
@@ -282,6 +279,83 @@ const markdownComponents: Components = {
   },
 };
 
+// kind: "text"（設計 §3 Phase A）の表示。
+//
+// 拡張子 → highlight.js の言語名の対応表。ここに無い拡張子はプレーン表示
+// （情報文字列なしのコードブロック）にフォールバックする（設計 §3 Phase A
+// 「未対応拡張子はプレーン表示」）。値は rehype-highlight が既定で読み込む
+// lowlight の common セットに含まれる言語名に限る（`.toml` は highlight.js が
+// ini の別名として扱う／`.html` `.svg` は xml）。
+//
+// サーバのアローリスト（PREVIEWABLE_EXTENSIONS）とは意図的に別物である点に注意:
+// **表示可否の判定はサーバの kind のみが正本**（設計 §3）で、この表は「text と
+// 判定済みのファイルをどの言語として色付けするか」だけを決める。したがって
+// ここに拡張子が無くても表示自体は行われ、二重管理にはならない。
+const TEXT_LANGUAGE_BY_EXTENSION: ReadonlyMap<string, string> = new Map([
+  [".ts", "typescript"],
+  [".tsx", "typescript"],
+  [".js", "javascript"],
+  [".jsx", "javascript"],
+  [".json", "json"],
+  [".jsonc", "json"],
+  [".yaml", "yaml"],
+  [".yml", "yaml"],
+  [".toml", "ini"],
+  [".sh", "bash"],
+  [".py", "python"],
+  [".css", "css"],
+  [".html", "xml"],
+  [".svg", "xml"],
+  [".xml", "xml"],
+]);
+
+function extensionOf(filePath: string): string {
+  const baseName = filePath.slice(filePath.lastIndexOf("/") + 1);
+  const dotIndex = baseName.lastIndexOf(".");
+  return dotIndex <= 0 ? "" : baseName.slice(dotIndex);
+}
+
+/**
+ * テキストファイルの内容を、react-markdown が解釈できる**フェンス付き
+ * コードブロック**へ包む。
+ *
+ * 設計 §3 Phase A は「highlight.js（rehype-highlight 同梱）で `<pre><code>`
+ * 表示」を求めており、実現手段として (a) highlight.js を直接呼んで生成 HTML を
+ * DOM へ流し込む、(b) 既存の react-markdown + rehype-highlight パイプラインへ
+ * コードブロックとして流す、の2択がある。本実装は (b) を採る:
+ * (a) は `dangerouslySetInnerHTML` 相当（ref への innerHTML 代入）が必要で、
+ * 親 Issue #61 のクリティカル設計決定「生 HTML を DOM へ注入しない」に対して
+ * mermaid（mermaid 自身が DOMPurify でサニタイズ済みの SVG を返す）と同格の
+ * 例外をもう1つ増やすことになる。(b) なら描画経路は既存の Markdown と完全に
+ * 同一（React 要素として構築・rehype-raw なし）で、新しい注入経路を作らずに
+ * 同じハイライト結果（同じ highlight.js テーマ CSS）が得られる。
+ *
+ * フェンス長は内容中のバッククォート連続数より必ず 1 以上長くする（CommonMark
+ * では閉じフェンスは開始フェンス以上の長さが必要なため、これで内容側から
+ * コードブロックを抜け出せない）。
+ */
+function toFencedCodeMarkdown(content: string, language: string): string {
+  const longestBacktickRun = Math.max(
+    0,
+    ...Array.from(content.matchAll(/`+/g), (match) => match[0].length),
+  );
+  const fence = "`".repeat(Math.max(3, longestBacktickRun + 1));
+  // 末尾の改行はコードブロックの区切りとして表現されるため、内容側からは
+  // 取り除く（空行が1行余分に描画されるのを防ぐ）。
+  return `${fence}${language}\n${content.replace(/\n$/, "")}\n${fence}`;
+}
+
+function TextPreview({ path, content }: { path: string; content: string }) {
+  const language = TEXT_LANGUAGE_BY_EXTENSION.get(extensionOf(path)) ?? "";
+  return (
+    <div className="preview-panel-text" data-testid="preview-panel-text">
+      <Markdown rehypePlugins={[rehypeHighlight]}>
+        {toFencedCodeMarkdown(content, language)}
+      </Markdown>
+    </div>
+  );
+}
+
 export type PreviewPanelOpenRequest = {
   repo: string;
   path: string;
@@ -490,7 +564,11 @@ export function PreviewPanel({
       })
       .then((data) => {
         if (!cancelled) {
-          setFileContent({ status: "success", content: data.content });
+          setFileContent({
+            status: "success",
+            kind: data.kind,
+            content: data.content,
+          });
         }
       })
       .catch((err) => {
@@ -677,15 +755,25 @@ export function PreviewPanel({
                   {fileContent.message}
                 </div>
               )}
-              {fileContent.status === "success" && (
-                <Markdown
-                  remarkPlugins={[remarkGfm]}
-                  rehypePlugins={[rehypeHighlight]}
-                  components={markdownComponents}
-                >
-                  {fileContent.content}
-                </Markdown>
-              )}
+              {/* 表示分岐の入口は常に file API の kind（設計 §3。UI が拡張子から
+                  種別を推測する分岐は持たない）。既知の kind 以外（将来の
+                  image/binary や壊れた応答）は、サニタイズ済みの markdown 経路へ
+                  倒す安全側の既定とする。 */}
+              {fileContent.status === "success" &&
+                (fileContent.kind === "text" ? (
+                  <TextPreview
+                    path={selectedFile?.path ?? ""}
+                    content={fileContent.content}
+                  />
+                ) : (
+                  <Markdown
+                    remarkPlugins={[remarkGfm]}
+                    rehypePlugins={[rehypeHighlight]}
+                    components={markdownComponents}
+                  >
+                    {fileContent.content}
+                  </Markdown>
+                ))}
             </div>
           </div>
         )}

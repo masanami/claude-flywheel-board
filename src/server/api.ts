@@ -15,6 +15,7 @@ import {
   resolveFleetManifestPath,
   validateFleetEntryFields,
 } from "./manifest.ts";
+import type { PreviewableKind } from "./md/path-validation.ts";
 import { validateMdPath } from "./md/path-validation.ts";
 import { listMdTree } from "./md/tree.ts";
 import type { MdFileChangedMessage } from "./md/watch.ts";
@@ -23,10 +24,26 @@ import type { FleetWatcher } from "./watcher.ts";
 
 /**
  * `GET /api/md/file` が読み取りを許可する上限サイズ（親 Issue #61 のクリティカル
- * 設計決定）。この基準を超えるファイルは `fs.stat` の時点で弾き、本文
- * （`fs.promises.readFile`）を一切読み込まない。
+ * 設計決定。設計 docs/features/file-tree-non-md-support.md §3 により Phase A の
+ * `markdown`/`text` は 1MB 据え置き）。この基準を超えるファイルは `fs.stat` の
+ * 時点で弾き、本文（`fs.promises.readFile`）を一切読み込まない。
+ *
+ * 設計上、サイズ上限は **kind 別**に定義する（Phase B で追加する `image` は
+ * 10MB）。Phase A で返る kind は `markdown`/`text` の 2 値のみのため、判定は
+ * この 1 定数で足りる（kind 別テーブルの導入は Phase B に譲る。YAGNI）。
  */
-const MD_FILE_MAX_BYTES = 1024 * 1024;
+const TEXT_PREVIEW_MAX_BYTES = 1024 * 1024;
+
+/**
+ * `GET /api/md/file` の 200 応答形（設計 §3「API 契約の固定」）。
+ *
+ * `kind` の**正本（プロデューサー）はこのエンドポイントのみ**とし、ツリー応答
+ * （`GET /api/md/tree`）は `kind` を持たない。UI の表示分岐は常にこの応答で行い、
+ * UI 側が拡張子から種別を推測する分岐（サーバのアローリスト定義との二重管理）を
+ * 作らない。Phase A で実際に返るのは `markdown | text` の 2 値
+ * （語彙自体は `PreviewKind` として 4 値を予約済み）。
+ */
+export type MdFileResponse = { kind: PreviewableKind; content: string };
 
 function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -186,12 +203,16 @@ export function registerApiRoutes(
 
   app.get("/api/md/tree", (c) => c.json(listMdTree(getFleetEntries())));
 
-  // クリティカル設計決定（親 Issue #61）: 検証失敗・不存在・.md 以外はすべて同一の
-  // 404 とし、パスの存在有無を漏らさない。理由は問わず validateMdPath の
-  // ok:false をそのまま 404 に変換する（呼び出し側で理由分岐しない）。例外として
-  // 検証をすべて通過したファイルのサイズ超過（1MB 超）のみ 413 で区別する。
-  // サイズ判定は本文読み込み（fs.promises.readFile）より必ず先に fs.promises.stat
-  // で行い、上限超過時は本文を一切読み込まない。
+  // クリティカル設計決定（親 Issue #61）: 検証失敗・不存在・アローリスト外の
+  // 拡張子・除外セグメント（設計 §2.2）はすべて同一の 404 とし、パスの存在有無を
+  // 漏らさない。理由は問わず validateMdPath の ok:false をそのまま 404 に変換する
+  // （呼び出し側で理由分岐しない）。例外として検証をすべて通過したファイルの
+  // サイズ超過（1MB 超）のみ 413 で区別する。サイズ判定は本文読み込み
+  // （fs.promises.readFile）より必ず先に fs.promises.stat で行い、上限超過時は
+  // 本文を一切読み込まない。
+  //
+  // 応答は設計 §3 の契約どおり `{ kind, content }`（kind の語彙は 4 値を予約定義
+  // 済み・Phase A で返るのは markdown|text の 2 値）。
   app.get("/api/md/file", async (c) => {
     const repo = c.req.query("repo") ?? "";
     const repoRelativePath = c.req.query("path") ?? "";
@@ -213,7 +234,7 @@ export function registerApiRoutes(
       // 存在有無を漏らさないため同一の 404 として扱う。
       return c.text("Not Found", 404);
     }
-    if (stat.size > MD_FILE_MAX_BYTES) {
+    if (stat.size > TEXT_PREVIEW_MAX_BYTES) {
       return c.text("Payload Too Large", 413);
     }
 
@@ -223,8 +244,8 @@ export function registerApiRoutes(
     } catch (err) {
       // 権限不足・stat 後の削除レース等も、検証失敗・不存在と同様に
       // クライアントへの応答は同一の 404 とし、存在有無を漏らさない（500 を返さない）。
-      // ただし運用時の切り分け（設定ミス等が「.md が読めない」と見分けが付かなくなる
-      // ことを避ける目的で、tree.ts が repo ルート階層の走査失敗を console.warn で
+      // ただし運用時の切り分け（設定ミス等が「ファイルが読めない」と見分けが付かなく
+      // なることを避ける目的で、tree.ts が repo ルート階層の走査失敗を console.warn で
       // 記録するのと同じ動機）のため、サーバ側ログには残す（クライアント応答は変えない）。
       // 注意: tree.ts は非ルート（個別ファイル/ディレクトリ）の走査失敗は黙殺する方針
       // であり、ここでの記録はその方針を単純に踏襲したものではない（本エンドポイントは
@@ -235,7 +256,8 @@ export function registerApiRoutes(
       );
       return c.text("Not Found", 404);
     }
-    return c.json({ content });
+    const body: MdFileResponse = { kind: validation.kind, content };
+    return c.json(body);
   });
 
   // Issue #122: エージェント追加のオーケストレーション。

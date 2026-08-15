@@ -317,7 +317,10 @@ export function FileTree({ refreshToken, onSelectFile }: FileTreeProps) {
           );
         })
       ) : (
-        <div className="file-tree-empty">.md ファイルが見つかりません</div>
+        // 対象拡張子は `.md` に限らない（サーバ側 PREVIEWABLE_EXTENSIONS。
+        // 設計 docs/features/file-tree-non-md-support.md §3 Phase A）ため、
+        // 拡張子を名指ししない文言にする。
+        <div className="file-tree-empty">表示できるファイルがありません</div>
       )}
     </div>
   );

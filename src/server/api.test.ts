@@ -208,9 +208,9 @@ describe("GET /api/md/tree（Issue #65）", () => {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   });
 
-  it("getFleetEntries から取得した repo 配下の .md 一覧を { repos } で返す", async () => {
+  it("getFleetEntries から取得した repo 配下のプレビュー対象ファイル一覧を { repos } で返す（アローリスト外は含めない）", async () => {
     fs.writeFileSync(path.join(repoRoot, "doc.md"), "# doc");
-    fs.writeFileSync(path.join(repoRoot, "notes.txt"), "not markdown");
+    fs.writeFileSync(path.join(repoRoot, "id_rsa.pem"), "secret key");
 
     const cache = createMemoryBoardCache();
     const app = new Hono();
@@ -265,7 +265,7 @@ describe("GET /api/md/file（Issue #66）", () => {
     return app;
   }
 
-  it("検証通過した .md ファイルの内容を { content } で返す", async () => {
+  it("検証通過した .md ファイルの内容を { kind: markdown, content } で返す", async () => {
     fs.writeFileSync(path.join(repoRoot, "doc.md"), "# doc content");
     const app = buildAppWithRepo();
 
@@ -275,7 +275,20 @@ describe("GET /api/md/file（Issue #66）", () => {
 
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toEqual({ content: "# doc content" });
+    expect(body).toEqual({ kind: "markdown", content: "# doc content" });
+  });
+
+  it("アローリスト登録済みのテキスト系拡張子は { kind: text, content } で返す（#142 の挙動変更）", async () => {
+    fs.writeFileSync(path.join(repoRoot, "config.yaml"), "key: value\n");
+    const app = buildAppWithRepo();
+
+    const res = await app.request("/api/md/file?repo=myrepo&path=config.yaml", {
+      headers: { host: "localhost" },
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toEqual({ kind: "text", content: "key: value\n" });
   });
 
   it("存在しないファイルは 404 を返す", async () => {
@@ -351,15 +364,57 @@ describe("GET /api/md/file（Issue #66）", () => {
     expect(res.status).toBe(404);
   });
 
-  it(".md 以外の拡張子は 404 を返す", async () => {
-    fs.writeFileSync(path.join(repoRoot, "notes.txt"), "not markdown");
+  it("アローリスト外の拡張子・拡張子なしファイルは 404 を返す（Phase C 導入までは kind: binary へ置き換えない）", async () => {
+    fs.writeFileSync(path.join(repoRoot, "id_rsa.pem"), "secret key");
+    fs.writeFileSync(path.join(repoRoot, "Makefile"), "all:\n");
     const app = buildAppWithRepo();
 
-    const res = await app.request("/api/md/file?repo=myrepo&path=notes.txt", {
-      headers: { host: "localhost" },
-    });
+    const resKey = await app.request(
+      "/api/md/file?repo=myrepo&path=id_rsa.pem",
+      {
+        headers: { host: "localhost" },
+      },
+    );
+    const resNoExt = await app.request(
+      "/api/md/file?repo=myrepo&path=Makefile",
+      {
+        headers: { host: "localhost" },
+      },
+    );
 
-    expect(res.status).toBe(404);
+    expect(resKey.status).toBe(404);
+    expect(resNoExt.status).toBe(404);
+  });
+
+  it("除外セグメントを含む要求（`.` 始まりファイル・`.git` 配下・node_modules 配下・`..` の解決で消えるケース）は 404 を返す（設計 §2.2。tree に出ないものは読めない方向へ対称化）", async () => {
+    fs.writeFileSync(path.join(repoRoot, "doc.md"), "# doc");
+    fs.writeFileSync(path.join(repoRoot, ".hidden.md"), "# hidden");
+    fs.mkdirSync(path.join(repoRoot, ".git"));
+    fs.writeFileSync(path.join(repoRoot, ".git", "config.toml"), "secret");
+    fs.mkdirSync(path.join(repoRoot, "node_modules", "pkg"), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      path.join(repoRoot, "node_modules", "pkg", "readme.md"),
+      "# pkg",
+    );
+    const app = buildAppWithRepo();
+
+    const paths = [
+      ".hidden.md",
+      ".git/config.toml",
+      "node_modules/pkg/readme.md",
+      "node_modules/../doc.md",
+      ".git/../doc.md",
+    ];
+    for (const requestPath of paths) {
+      const res = await app.request(
+        `/api/md/file?repo=myrepo&path=${encodeURIComponent(requestPath)}`,
+        { headers: { host: "localhost" } },
+      );
+
+      expect(res.status, `path=${requestPath}`).toBe(404);
+    }
   });
 
   it("../ を含む相対パスで repo 外への脱出を試みると 404 を返す", async () => {
@@ -462,6 +517,20 @@ describe("GET /api/md/file（Issue #66）", () => {
       "/api/md/file?repo=myrepo&path=multibyte.md",
       { headers: { host: "localhost" } },
     );
+
+    expect(res.status).toBe(413);
+  });
+
+  it("kind: text のファイルにも 1MB 上限が適用される（設計 §3: Phase A の markdown/text は 1MB 据え置き）", async () => {
+    fs.writeFileSync(
+      path.join(repoRoot, "huge.log"),
+      "a".repeat(1024 * 1024 + 1),
+    );
+    const app = buildAppWithRepo();
+
+    const res = await app.request("/api/md/file?repo=myrepo&path=huge.log", {
+      headers: { host: "localhost" },
+    });
 
     expect(res.status).toBe(413);
   });
@@ -882,16 +951,34 @@ describe("attachWebSocketServer の md_subscribe / md_unsubscribe（Issue #67）
       });
     });
 
-    it(".md 以外の拡張子は md_subscribe_error を返し watch を開始しない", async () => {
-      const notesPath = path.join(repoRoot, "notes.txt");
-      fs.writeFileSync(notesPath, "not markdown");
+    it("アローリスト外の拡張子は md_subscribe_error を返し watch を開始しない", async () => {
+      const keyPath = path.join(repoRoot, "id_rsa.pem");
+      fs.writeFileSync(keyPath, "secret key");
       const getFleetEntries = (): readonly FleetEntry[] => [
         { name: "myrepo", path: repoRoot },
       ];
 
       await assertSubscribeRejectedAndNoWatch(getFleetEntries, {
         repo: "myrepo",
-        path: "notes.txt",
+        path: "id_rsa.pem",
+      });
+    });
+
+    it("除外セグメントを含む要求（`.` 始まり・node_modules・`..` の解決で消えるケース）は md_subscribe_error を返し watch を開始しない（設計 §2.2 を HTTP と WS で共有していることの回帰ガード）", async () => {
+      fs.writeFileSync(path.join(repoRoot, ".hidden.md"), "# hidden");
+      fs.mkdirSync(path.join(repoRoot, "node_modules"));
+      fs.writeFileSync(path.join(repoRoot, "doc.md"), "# doc");
+      const getFleetEntries = (): readonly FleetEntry[] => [
+        { name: "myrepo", path: repoRoot },
+      ];
+
+      await assertSubscribeRejectedAndNoWatch(getFleetEntries, {
+        repo: "myrepo",
+        path: ".hidden.md",
+      });
+      await assertSubscribeRejectedAndNoWatch(getFleetEntries, {
+        repo: "myrepo",
+        path: "node_modules/../doc.md",
       });
     });
   });

@@ -295,7 +295,7 @@ describe("FileTree", () => {
     expect(buttonB).not.toHaveAttribute("aria-current");
   });
 
-  it("全 repo で .md が0件の場合、空状態メッセージを表示する", async () => {
+  it("全 repo で対象ファイルが0件の場合、空状態メッセージを表示する", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -313,7 +313,7 @@ describe("FileTree", () => {
     render(<FileTree refreshToken={0} onSelectFile={vi.fn()} />);
 
     expect(
-      await screen.findByText(".md ファイルが見つかりません"),
+      await screen.findByText("表示できるファイルがありません"),
     ).toBeInTheDocument();
   });
 
