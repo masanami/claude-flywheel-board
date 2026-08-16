@@ -83,6 +83,7 @@ claude-flywheel の fleet（複数の自律エージェント）を 1 画面で�
 | 機能仕様 P2: 埋め込みターミナル | docs/features/p2-embedded-terminal.md | 整備済み |
 | 機能仕様 P3: 実行中パネル | docs/features/p3-live-runs-panel.md | 整備済み（残依存は P2 のみ） |
 | 機能仕様: マークダウンプレビュー | docs/features/markdown-preview.md | 整備済み（実装未着手） |
+| 機能仕様: ファイルツリー書き込み系 API | docs/features/file-tree-write-api.md | 整備済み（実装未着手・Issue #144） |
 
 ## 品質方針
 
