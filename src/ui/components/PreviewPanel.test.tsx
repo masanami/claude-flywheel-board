@@ -1067,6 +1067,153 @@ describe("PreviewPanel", () => {
     });
   });
 
+  // #143（設計 docs/features/file-tree-non-md-support.md §3 Phase B）:
+  // file API が `{ kind: "image" }`（本文なし）を返したら、本文の fetch はせず
+  // `<img src="/api/md/raw?...">` で表示する。ライブ更新は URL のキャッシュ
+  // バスターを進めて再読み込みさせる。
+  describe("画像プレビュー（#143: kind: image）", () => {
+    function createFakeMdLive(): MdLiveChannel {
+      return { subscribe: vi.fn(), unsubscribe: vi.fn(), handlers: {} };
+    }
+
+    function stubFetchForImage(treePath: string) {
+      const fetchMock = vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith("/api/md/tree")) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () =>
+              Promise.resolve({
+                repos: [{ name: "repo-a", files: [treePath] }],
+              }),
+          });
+        }
+        if (url.startsWith("/api/md/file")) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({ kind: "image" }),
+          });
+        }
+        throw new Error(`unexpected fetch url in test: ${url}`);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      return fetchMock;
+    }
+
+    async function openPanelAndSelect(
+      fileName: string,
+      mdLive?: MdLiveChannel,
+    ) {
+      const utils = render(<PreviewPanel mdLive={mdLive} />);
+      act(() => {
+        screen.getByRole("button", { name: "プレビューパネルを開く" }).click();
+      });
+      const fileButton = await screen.findByRole("button", { name: fileName });
+      act(() => {
+        fileButton.click();
+      });
+      return utils;
+    }
+
+    it('kind: image は <img src="/api/md/raw?..."> で表示し、本文（バイナリ）は fetch しない', async () => {
+      const fetchMock = stubFetchForImage("shot.png");
+
+      await openPanelAndSelect("shot.png");
+
+      const image = await screen.findByRole("img", { name: "shot.png" });
+      expect(image.getAttribute("src")).toBe(
+        "/api/md/raw?repo=repo-a&path=shot.png&t=0",
+      );
+      // 種別判定の入口は file API のみ（設計 §3）。raw は <img> がブラウザ経由で
+      // 取得するため、UI 自身は fetch しない。
+      const fileApiCalls = fetchMock.mock.calls.filter((c) =>
+        String(c[0]).startsWith("/api/md/file"),
+      );
+      expect(fileApiCalls).toHaveLength(1);
+      expect(
+        fetchMock.mock.calls.filter((c) =>
+          String(c[0]).startsWith("/api/md/raw"),
+        ),
+      ).toHaveLength(0);
+    });
+
+    it("パス区切りを含む画像パスは URL エンコードされる", async () => {
+      stubFetchForImage("docs/img/shot.png");
+
+      const utils = render(<PreviewPanel />);
+      act(() => {
+        screen.getByRole("button", { name: "プレビューパネルを開く" }).click();
+      });
+      // ツリーはネスト表示のため、docs → img と展開してから選択する。
+      for (const dirName of ["docs", "img"]) {
+        const dirButton = await screen.findByRole("button", { name: dirName });
+        act(() => {
+          dirButton.click();
+        });
+      }
+      const fileButton = await screen.findByRole("button", {
+        name: "shot.png",
+      });
+      act(() => {
+        fileButton.click();
+      });
+
+      const image = await screen.findByRole("img", {
+        name: "docs/img/shot.png",
+      });
+      expect(image.getAttribute("src")).toBe(
+        "/api/md/raw?repo=repo-a&path=docs%2Fimg%2Fshot.png&t=0",
+      );
+      utils.unmount();
+    });
+
+    it("md_file_changed 受信時は img の URL にキャッシュバスターを付け直して再読み込みさせる", async () => {
+      const mdLive = createFakeMdLive();
+      stubFetchForImage("shot.png");
+
+      await openPanelAndSelect("shot.png", mdLive);
+      const image = await screen.findByRole("img", { name: "shot.png" });
+      const srcBeforeChange = image.getAttribute("src");
+
+      act(() => {
+        mdLive.handlers.onFileChanged?.({
+          type: "md_file_changed",
+          repo: "repo-a",
+          path: "shot.png",
+        });
+      });
+
+      await waitFor(() => {
+        expect(
+          screen.getByRole("img", { name: "shot.png" }).getAttribute("src"),
+        ).not.toBe(srcBeforeChange);
+      });
+      // パス自体は変わらず、キャッシュバスターだけが進む（同じファイルの
+      // 再読み込みであることの担保）。
+      const srcAfterChange = screen
+        .getByRole("img", { name: "shot.png" })
+        .getAttribute("src");
+      expect(srcAfterChange).toContain("path=shot.png");
+      expect(srcAfterChange).toBe("/api/md/raw?repo=repo-a&path=shot.png&t=1");
+    });
+
+    it("kind: image では markdown/テキストの描画経路を使わない", async () => {
+      stubFetchForImage("shot.png");
+
+      const { container } = await openPanelAndSelect("shot.png");
+
+      await screen.findByRole("img", { name: "shot.png" });
+      expect(
+        container.querySelector('[data-testid="preview-panel-text"]'),
+      ).toBeNull();
+      expect(
+        container.querySelector('[data-testid="preview-panel-markdown"] pre'),
+      ).toBeNull();
+    });
+  });
+
   describe("ライブ更新（#70: WS 結線）", () => {
     // mdLive は Board.tsx が唯一の WS 接続を橋渡しするための最小限の受け口
     // （../md-live-channel.ts）。ここでは PreviewPanel が mdLive.subscribe /

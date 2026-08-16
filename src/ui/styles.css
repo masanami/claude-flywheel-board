@@ -1165,6 +1165,14 @@ body {
   height: auto;
 }
 
+/* 画像プレビュー（#143 / 設計 file-tree-non-md-support.md §3 Phase B）。
+ * パネル幅は可変のため、原寸で溢れさせず幅に合わせて縮める（縦横比は維持）。
+ */
+.preview-panel-image img {
+  max-width: 100%;
+  height: auto;
+}
+
 /* ファイルツリー（#68）。repo ごとにファイルパスの一覧を表示するだけの
  * 平坦なリスト（KISS。過度な階層UIコンポーネントは導入しない）。
  */

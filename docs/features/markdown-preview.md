@@ -2,7 +2,7 @@
 
 > 当初は右サイドパネルとして実装（#61〜）。#112 でファイルツリーを IDE の慣例に合わせるため画面左側へ移動した（パネル内の構成・API・WS 契約は不変）。
 >
-> **対象ファイルの範囲は #142（[file-tree-non-md-support.md](file-tree-non-md-support.md) Phase A）で拡張済み**。本ドキュメントで `.md` と書かれている表示・読み取りの対象は、現在はサーバ側の拡張子アローリスト（`src/server/md/path-validation.ts` の `PREVIEWABLE_EXTENSIONS`）に登録されたテキスト系拡張子全体を指す。API ルート名・WS メッセージ種別の `md` プレフィックス（`/api/md/*`・`md_subscribe` 等）は歴史的名称であり改名しない（同設計 §3「段階分けに共通の決定」）。あわせて `.` 始まりのファイル（`.hidden.md` 等）と除外セグメント（`.git/`・`node_modules/` 等）配下は、ツリー列挙・読み取りとも対象外へ変更されている（同設計 §2.2）。
+> **対象ファイルの範囲は #142（[file-tree-non-md-support.md](file-tree-non-md-support.md) Phase A）・#143（同 Phase B）で拡張済み**。本ドキュメントで `.md` と書かれている表示・読み取りの対象は、現在はサーバ側の拡張子アローリスト（`src/server/md/path-validation.ts` の `PREVIEWABLE_EXTENSIONS`）に登録されたテキスト系＋画像の拡張子全体を指す。画像（png/jpg/jpeg/gif/webp）は JSON の UTF-8 文字列契約では返せないため、`GET /api/md/file` は `{ kind: "image" }`（本文なし）を返し、実体は Phase B で新設した `GET /api/md/raw`（`image/*` 固定 + `X-Content-Type-Options: nosniff`）が配信する。サイズ上限は kind 別（テキスト系 1MB・画像 10MB）。API ルート名・WS メッセージ種別の `md` プレフィックス（`/api/md/*`・`md_subscribe` 等）は歴史的名称であり改名しない（同設計 §3「段階分けに共通の決定」）。あわせて `.` 始まりのファイル（`.hidden.md` 等）と除外セグメント（`.git/`・`node_modules/` 等）配下は、ツリー列挙・読み取りとも対象外へ変更されている（同設計 §2.2）。
 
 ## 概要
 

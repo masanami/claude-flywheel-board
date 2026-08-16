@@ -1,6 +1,6 @@
 # ファイルツリーの md 以外対応 — 調査・設計ドラフト
 
-> **状態: 採用決定済み（2026-08-15 人間判断）。Phase A 実装済み（Issue #142）／Phase B・C は未着手**。Issue #117 の検討スコープ 1（表示・プレビュー対応）の実現可能性調査と段階分け設計案、およびスコープ 2（D&D/コピペ配置・削除）の別 Issue 切り出し案をまとめる。本ドキュメントのマージは Issue #117 の完了を意味しない（実装着手・スコープ確定は人間判断）。Refs #117
+> **状態: 採用決定済み（2026-08-15 人間判断）。Phase A 実装済み（Issue #142）・Phase B 実装済み（Issue #143）／Phase C は未着手**。Issue #117 の検討スコープ 1（表示・プレビュー対応）の実現可能性調査と段階分け設計案、およびスコープ 2（D&D/コピペ配置・削除）の別 Issue 切り出し案をまとめる。本ドキュメントのマージは Issue #117 の完了を意味しない（実装着手・スコープ確定は人間判断）。Refs #117
 
 ## 概要
 
@@ -127,7 +127,7 @@ GET /api/md/raw?repo=<name>&path=<repo相対パス>            # Phase B 新設�
   → 413（画像上限 10MB 超過のみ）
 ```
 
-**サイズ上限は kind 別に定義し、file API・raw API で同一の値を適用する**: `markdown`/`text` は 1MB（現行踏襲）、`image` は 10MB。file API のサイズ判定は**拡張子分類（kind 決定）の後**にその kind の上限で行う。したがって 1MB 超 10MB 以下の画像は file API が `{ kind: "image" }` を返し、raw API も 200 で配信する（テキスト系の 1MB を画像に適用して raw 経路へ到達できなくなる分断は生じない）。`binary`（Phase C）は本文を読まないため 413 対象外（メタ情報は `fs.stat` のみで返す）。
+**サイズ上限は kind 別に定義し、file API・raw API で同一の値を適用する**: `markdown`/`text` は 1MB（現行踏襲）、`image` は 10MB（Issue #143 の実装で確定。Retina 解像度のスクリーンショット PNG が数 MB に達するため 1MB では実用にならない一方、上限撤廃はメモリへの全読み込みを青天井にするため、実用域に十分な余裕を持たせた値とした）。file API のサイズ判定は**拡張子分類（kind 決定）の後**にその kind の上限で行う。したがって 1MB 超 10MB 以下の画像は file API が `{ kind: "image" }` を返し、raw API も 200 で配信する（テキスト系の 1MB を画像に適用して raw 経路へ到達できなくなる分断は生じない）。`binary`（Phase C）は本文を読まないため 413 対象外（メタ情報は `fs.stat` のみで返す）。
 
 UI の分岐: `markdown`/`text` は `content` を描画、`image` のときのみ `<img src="/api/md/raw?...">` を使い、`binary` はメタ情報を表示する。画像もクリック時はまず file API を呼び、`{ kind: "image" }` 応答を受けてから raw を参照する（種別判定の入口を file API に一本化）。
 
@@ -138,11 +138,12 @@ UI の分岐: `markdown`/`text` は `content` を描画、`image` のときの�
 - **UI**: `kind === "markdown"` は従来どおり react-markdown。`text` は既存依存の highlight.js（rehype-highlight が同梱）で直接ハイライトし `<pre><code>` 表示。ハイライト言語は拡張子から引き、未対応拡張子はプレーン表示。空状態メッセージを「表示できるファイルがありません」に変更。
 - **ライブ更新**: 変更不要（検証共有により自動で対象拡大）。nvim でコード・設定を編集しながらのライブ確認がそのまま成立する。
 
-### Phase B: 画像インライン表示
+### Phase B: 画像インライン表示（実装済み — Issue #143）
 
-- **対象**: `image/png` `image/jpeg` `image/gif` `image/webp`（SVG は §2.3 により対象外・テキスト扱い）。
-- **サーバ**: バイナリ応答の `GET /api/md/raw`（上記契約）を新設。検証は既存 `validateMdPath` 系を完全共有し、404/413 の応答方針も同一。Content-Type は静的マッピング＋`nosniff`（§2.3）。サイズ上限は画像のみ 10MB（仮置き。スクリーンショットが 1MB を超えるため。確定は実装時）。file API は画像に対し `{ kind: "image" }`（本文なし）を返すよう拡張する。
-- **UI**: file API の `{ kind: "image" }` 応答を受けて `<img src="/api/md/raw?...">` で表示（本文の fetch はしない）。ライブ更新は `md_file_changed` 受信時に img の URL へキャッシュバスター（reload token）を付けて再読み込み。
+- **対象**: `image/png` `image/jpeg` `image/gif` `image/webp`（SVG は §2.3 により対象外・テキスト扱い）。拡張子は `.png` `.jpg` `.jpeg` `.gif` `.webp`（`.jpg` は本文の列挙に明示が無かったが、`image/jpeg` の実運用上の主要拡張子のため実装時に追加。`.jpeg` だけを許可すると大半の JPEG が対象外になるため）。
+- **サーバ**: バイナリ応答の `GET /api/md/raw`（上記契約）を新設。検証は既存 `validateMdPath` 系を完全共有し、404/413 の応答方針も同一。Content-Type は静的マッピング＋`nosniff`（§2.3）。サイズ上限は画像のみ 10MB（実装時に確定）。file API は画像に対し `{ kind: "image" }`（本文なし）を返すよう拡張する。
+- **アローリストと Content-Type の対応**: `PREVIEWABLE_EXTENSIONS` の `image` 項目は `IMAGE_CONTENT_TYPES`（拡張子 → Content-Type）のキーから導出する。二重に列挙すると「アローリストにはあるが Content-Type が無い（raw が 404）」「Content-Type はあるがアローリスト外（raw に到達できない）」という片側だけの追加が起きうるため、対応関係を構造的に保証する。
+- **UI**: file API の `{ kind: "image" }` 応答を受けて `<img src="/api/md/raw?...">` で表示（本文の fetch はしない）。ライブ更新は `md_file_changed` 受信時に img の URL へキャッシュバスター（reload token）を付けて再読み込み。raw 側に明示的なキャッシュ制御ヘッダは付けない（`Last-Modified`/`Expires` を返さないためヒューリスティックキャッシュも働かず、URL の変化だけで再読み込みが担保される）。
 - **tree**: 画像拡張子をアローリストに追加するだけ。
 
 ### Phase C: その他ファイルの情報表示（必要になったら）
@@ -195,7 +196,7 @@ UI の分岐: `markdown`/`text` は `content` を描画、`image` のときの�
 | 4 | SVG はインライン画像対象外（テキスト表示） | board オリジン上のスクリプト実行経路を作らない（§2.3） |
 | 5 | API ルート名・WS 種別は改名しない | 消費者は同一リポジトリのみ・改名は挙動価値なし |
 | 6 | アローリストの設定化はしない（コード内固定） | YAGNI。要望が出てから |
-| 7 | サイズ上限は **kind 別**（markdown/text 1MB 据え置き・image 10MB 仮置き）とし、file API は分類後にその kind の上限で 413 判定・raw API も同一上限 | 画像が file API の 1MB で分断され raw 経路へ到達できない矛盾の排除（§3）。10MB の確定は実装時 |
+| 7 | サイズ上限は **kind 別**（markdown/text 1MB 据え置き・image 10MB）とし、file API は分類後にその kind の上限で 413 判定・raw API も同一上限 | 画像が file API の 1MB で分断され raw 経路へ到達できない矛盾の排除（§3）。10MB は Issue #143 の実装で確定 |
 | 8 | Phase C（全ファイル情報表示）は A/B 運用後に要否判断 | YAGNI |
 | 9 | スコープ 2 は別 Issue 化し、採否自体を人間判断の論点とする | 設計原則 1 の趣旨からの逸脱方向のため |
 | 10 | `kind` の正本は `GET /api/md/file` 応答のみ。語彙 4 値と応答形を Phase A で予約定義。アローリスト外 404 は Phase C で `200 { kind: "binary" }`（本文非公開）へ置き換え、メタ情報用の別 API は作らない | UI とサーバの種別判定の二重管理防止・契約の後戻り防止（§3） |
@@ -205,6 +206,6 @@ UI の分岐: `markdown`/`text` は `content` を描画、`image` のときの�
 ## 6. 未検証事項
 
 - highlight.js の対応言語と拡張子マッピングの網羅性（Phase A 実装時に確定）。
-- 画像 10MB 上限の妥当性・`<img>` キャッシュバスターによるライブ更新の実挙動（Phase B 実装時に検証）。
+- ~~画像 10MB 上限の妥当性・`<img>` キャッシュバスターによるライブ更新の実挙動（Phase B 実装時に検証）~~ → 上限は 10MB で確定（§3）。キャッシュバスターの結線（`md_file_changed` → img の URL 変化）は単体テストで担保。**実ブラウザでの再読み込み挙動自体は未検証**（jsdom は `<img>` を読み込まないため、テストで確認できるのは URL が変わることまで）。
 - 大量ファイル repo（node_modules 除外後も数千ファイル規模）でのツリー描画性能 — Phase C 着手時の論点。
 - 書き込み系 TOCTOU 対策のうち祖先ディレクトリ保護（fd 相対操作＝openat 相当）の Node.js 標準 API での実現可否と代替方式 — 切り出す Issue 側で設計・検証する（§4）。

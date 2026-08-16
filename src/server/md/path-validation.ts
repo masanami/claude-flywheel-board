@@ -15,11 +15,44 @@ export type MdPathValidationResult =
 export type PreviewKind = "markdown" | "text" | "image" | "binary";
 
 /**
- * Phase A のアローリスト（`PREVIEWABLE_EXTENSIONS`）が実際に返す kind。
- * 予約語彙 `PreviewKind` の部分集合として定義し、Phase B/C で拡張する際に
- * 語彙側の定義を触らずに済むようにする。
+ * 現行のアローリスト（`PREVIEWABLE_EXTENSIONS`）が実際に返す kind。
+ * 予約語彙 `PreviewKind` の部分集合として定義し、Phase C で拡張する際に
+ * 語彙側の定義を触らずに済むようにする（Phase B で `image` を追加）。
  */
-export type PreviewableKind = Extract<PreviewKind, "markdown" | "text">;
+export type PreviewableKind = Extract<
+  PreviewKind,
+  "markdown" | "text" | "image"
+>;
+
+/**
+ * `GET /api/md/file` が本文（`content`）を返す kind。`image` はバイナリのため
+ * file API では本文を返さず（`{ kind: "image" }` のみ）、実体は
+ * `GET /api/md/raw` で配信する（設計 §3「API 契約の固定」）。
+ */
+export type PreviewableTextKind = Extract<PreviewableKind, "markdown" | "text">;
+
+/**
+ * インライン画像として配信する拡張子 → Content-Type の**静的マッピング**
+ * （設計 §2.3）。`GET /api/md/raw` はこの表からのみ Content-Type を決定し、
+ * 内容スニッフィングは一切行わない。`image/*` 以外は返さない（`text/html` を
+ * 返す経路を作らない）。
+ *
+ * **SVG は意図的に含めない**（設計 §2.3・§5 決定 4）。`<img>` 経由ならスクリプトは
+ * 実行されないが、raw の URL を直接開くと board オリジン上でスクリプトが実行
+ * されうるため、埋め込みスクリプトを持ちうる SVG は画像経路に載せず
+ * `PREVIEWABLE_EXTENSIONS` 側の `text` のまま扱う。
+ *
+ * `.jpg` は設計本文の列挙（png/jpeg/gif/webp）に明示が無いが、`image/jpeg` の
+ * 実運用上の主要拡張子であり `.jpeg` だけを許可すると大半の JPEG が
+ * 対象外になるため両方を登録する（同一 Content-Type への別名）。
+ */
+export const IMAGE_CONTENT_TYPES: ReadonlyMap<string, string> = new Map([
+  [".png", "image/png"],
+  [".jpg", "image/jpeg"],
+  [".jpeg", "image/jpeg"],
+  [".gif", "image/gif"],
+  [".webp", "image/webp"],
+]);
 
 /**
  * プレビュー対象として許可する拡張子（厳密一致・大文字小文字区別）とその
@@ -38,10 +71,15 @@ export type PreviewableKind = Extract<PreviewKind, "markdown" | "text">;
  *   既存の脅威モデル（ローカル個人利用・127.0.0.1 バインド・Host/Origin 検証）の
  *   下で残余リスクとして受容する（設計 §2.1 の決定）。
  *
- * 収録範囲は設計 §3 Phase A の案どおりとし、独自の追加はしない（YAGNI。
+ * 収録範囲は設計 §3 Phase A/B の案どおりとし、独自の追加はしない（YAGNI。
  * アローリストへの追加は露出面の拡大そのものであり、要望が出てから行う）。
  * `.html` `.svg` `.xml` は**テキストとして表示するだけ**で、ドキュメントとして
- * 解釈させる経路（Content-Type 付きのバイナリ応答）は Phase A では作らない。
+ * 解釈させる経路（Content-Type 付きのバイナリ応答）は作らない。
+ *
+ * 画像（kind: `image`）の項目は `IMAGE_CONTENT_TYPES` のキーから導出する。
+ * 二重に列挙すると「アローリストにはあるが Content-Type が無い（raw が 404）」
+ * 「Content-Type はあるがアローリスト外（raw に到達できない）」という片側だけの
+ * 追加が起きうるため、対応関係を構造的に保証する。
  */
 export const PREVIEWABLE_EXTENSIONS: ReadonlyMap<string, PreviewableKind> =
   new Map<string, PreviewableKind>([
@@ -65,6 +103,10 @@ export const PREVIEWABLE_EXTENSIONS: ReadonlyMap<string, PreviewableKind> =
     [".html", "text"],
     [".svg", "text"],
     [".xml", "text"],
+    ...Array.from(
+      IMAGE_CONTENT_TYPES.keys(),
+      (extension) => [extension, "image"] as const,
+    ),
   ]);
 
 /** 走査・読み取りとも対象外にするディレクトリ名（設計 §2.2）。 */

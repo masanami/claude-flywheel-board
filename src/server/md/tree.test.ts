@@ -49,11 +49,29 @@ describe("listMdTree", () => {
     ]);
   });
 
+  it("画像拡張子も一覧に含まれる（#143 Phase B の挙動変更）", () => {
+    fs.writeFileSync(path.join(repoRoot, "shot.png"), "binary");
+    fs.writeFileSync(path.join(repoRoot, "photo.jpg"), "binary");
+    fs.writeFileSync(path.join(repoRoot, "photo2.jpeg"), "binary");
+    fs.writeFileSync(path.join(repoRoot, "anim.gif"), "binary");
+    fs.writeFileSync(path.join(repoRoot, "modern.webp"), "binary");
+
+    const result = listMdTree([{ name: "myrepo", path: repoRoot }]);
+
+    expect(result.repos[0]?.files).toEqual([
+      "anim.gif",
+      "modern.webp",
+      "photo.jpg",
+      "photo2.jpeg",
+      "shot.png",
+    ]);
+  });
+
   it("アローリスト外の拡張子（大文字小文字違い・鍵系）と拡張子なしファイルは除外される", () => {
     fs.writeFileSync(path.join(repoRoot, "upper.MD"), "# upper");
     fs.writeFileSync(path.join(repoRoot, "id_rsa.pem"), "secret key");
     fs.writeFileSync(path.join(repoRoot, "Makefile"), "all:\n");
-    fs.writeFileSync(path.join(repoRoot, "image.png"), "binary");
+    fs.writeFileSync(path.join(repoRoot, "photo.bmp"), "binary");
 
     const result = listMdTree([{ name: "myrepo", path: repoRoot }]);
 

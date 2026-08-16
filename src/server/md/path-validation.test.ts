@@ -64,6 +64,37 @@ describe("validateMdPath", () => {
     });
   });
 
+  it("画像拡張子は許可され kind: image を返す（#143 Phase B。png/jpg/jpeg/gif/webp）", () => {
+    for (const fileName of [
+      "shot.png",
+      "photo.jpg",
+      "photo2.jpeg",
+      "anim.gif",
+      "modern.webp",
+    ]) {
+      fs.writeFileSync(path.join(repoRoot, fileName), "binary");
+
+      expect(
+        validateMdPath(fleetEntries, "myrepo", fileName),
+        fileName,
+      ).toEqual({
+        ok: true,
+        resolvedPath: fs.realpathSync(path.join(repoRoot, fileName)),
+        kind: "image",
+      });
+    }
+  });
+
+  it("SVG は image ではなく text のまま扱う（設計 §2.3: board オリジン上のスクリプト実行経路を作らない）", () => {
+    fs.writeFileSync(path.join(repoRoot, "icon.svg"), "<svg></svg>");
+
+    expect(validateMdPath(fleetEntries, "myrepo", "icon.svg")).toEqual({
+      ok: true,
+      resolvedPath: fs.realpathSync(path.join(repoRoot, "icon.svg")),
+      kind: "text",
+    });
+  });
+
   it("アローリスト外の拡張子（鍵系・大文字小文字違い）は ok:false を返す", () => {
     fs.writeFileSync(path.join(repoRoot, "id_rsa.pem"), "secret key");
     fs.writeFileSync(path.join(repoRoot, "UPPER.MD"), "# upper");

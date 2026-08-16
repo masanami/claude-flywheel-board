@@ -69,7 +69,14 @@ type SelectedFile = { repo: string; path: string };
 type FileContentState =
   | { status: "idle" }
   | { status: "loading" }
-  | { status: "success"; kind: MdFileResponse["kind"]; content: string }
+  // #143: 応答そのもの（response）に加え、その応答を取得した対象ファイル
+  // （file）も保持する。画像は本文ではなく `<img src="/api/md/raw?...">` の
+  // URL を組み立てて表示するため、URL の repo/path は「いま表示している応答」
+  // と必ず同じ組でなければならない。選択ファイルの切替直後は state 更新
+  // （loading への遷移）が effect 内で行われる都合上、1 レンダーだけ
+  // 「新しい selectedFile ＋ 直前のファイルの success」という組み合わせが
+  // 生じうるため、レンダー側は selectedFile ではなくこの file を使う。
+  | { status: "success"; file: SelectedFile; response: MdFileResponse }
   | { status: "error"; message: string };
 
 const GENERIC_FILE_ERROR_MESSAGE = "ファイルの取得に失敗しました";
@@ -356,6 +363,36 @@ function TextPreview({ path, content }: { path: string; content: string }) {
   );
 }
 
+// kind: "image"（設計 §3 Phase B）の表示。
+//
+// 本文（バイナリ）は fetch せず、file API が `{ kind: "image" }` を返した後に
+// `<img src="/api/md/raw?...">` でブラウザに直接取得させる（設計 §3
+// 「画像もクリック時はまず file API を呼び、`{ kind: "image" }` 応答を受けてから
+// raw を参照する」）。
+//
+// ライブ更新: raw の URL は同じファイルなら不変のため、md_file_changed で
+// 再フェッチしても `<img>` はブラウザキャッシュのまま更新されないことがある。
+// PreviewPanel が md_file_changed のたびに進める mdReloadToken を
+// キャッシュバスターとしてクエリに載せ、URL 自体を変化させて再読み込みさせる
+// （設計 §3 Phase B）。サーバはこのパラメータを解釈しない（余分なクエリは
+// validateMdPath の対象外で、repo/path のみが使われる）。
+function ImagePreview({
+  file,
+  reloadToken,
+}: {
+  file: SelectedFile;
+  reloadToken: number;
+}) {
+  const src = `/api/md/raw?repo=${encodeURIComponent(file.repo)}&path=${encodeURIComponent(file.path)}&t=${reloadToken}`;
+  return (
+    <div className="preview-panel-image" data-testid="preview-panel-image">
+      {/* alt はファイルパス。画像の内容はサーバも UI も解釈しないため、
+          代替テキストとして提示できる情報はパスのみ（KISS）。 */}
+      <img src={src} alt={file.path} />
+    </div>
+  );
+}
+
 export type PreviewPanelOpenRequest = {
   repo: string;
   path: string;
@@ -566,8 +603,8 @@ export function PreviewPanel({
         if (!cancelled) {
           setFileContent({
             status: "success",
-            kind: data.kind,
-            content: data.content,
+            file: selectedFile,
+            response: data,
           });
         }
       })
@@ -757,13 +794,18 @@ export function PreviewPanel({
               )}
               {/* 表示分岐の入口は常に file API の kind（設計 §3。UI が拡張子から
                   種別を推測する分岐は持たない）。既知の kind 以外（将来の
-                  image/binary や壊れた応答）は、サニタイズ済みの markdown 経路へ
-                  倒す安全側の既定とする。 */}
+                  binary や壊れた応答）は、サニタイズ済みの markdown 経路へ
+                  倒す安全側の既定とする（本文が無ければ空文字として扱う）。 */}
               {fileContent.status === "success" &&
-                (fileContent.kind === "text" ? (
+                (fileContent.response.kind === "image" ? (
+                  <ImagePreview
+                    file={fileContent.file}
+                    reloadToken={mdReloadToken}
+                  />
+                ) : fileContent.response.kind === "text" ? (
                   <TextPreview
-                    path={selectedFile?.path ?? ""}
-                    content={fileContent.content}
+                    path={fileContent.file.path}
+                    content={fileContent.response.content}
                   />
                 ) : (
                   <Markdown
@@ -771,7 +813,7 @@ export function PreviewPanel({
                     rehypePlugins={[rehypeHighlight]}
                     components={markdownComponents}
                   >
-                    {fileContent.content}
+                    {fileContent.response.content ?? ""}
                   </Markdown>
                 ))}
             </div>
