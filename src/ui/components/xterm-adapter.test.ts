@@ -138,6 +138,21 @@ describe("createXtermInstance", () => {
     expect(options.fontSize).toBeGreaterThan(0);
   });
 
+  it("convertEol を有効にしない（Issue #148: pty 由来の LF は列を保つ IND でなければならない）", async () => {
+    const { createXtermInstance } = await import("./xterm-adapter.ts");
+
+    createXtermInstance(document.createElement("div"));
+
+    const call = terminalCtor.mock.calls[0];
+    if (!call) throw new Error("Terminal コンストラクタが呼ばれていません");
+    const options = call[0] as { convertEol?: boolean };
+    // 未指定（undefined＝xterm.js の既定 false）でも明示 false でも可。
+    // true だけが禁止（LF のたびにカーソル列が 0 へ戻り、tmux の差分再描画と
+    // 組み合わさって 1 列目に別の行の文字が焼き付く）。実際の挙動側の検証は
+    // xterm-emulation.test.ts が @xterm/headless で行う。
+    expect(options.convertEol ?? false).toBe(false);
+  });
+
   it("macOptionClickForcesSelection を true にする（Issue #116: tmux の mouse on 環境で Option+ドラッグにより xterm.js のネイティブ選択を強制する既定 false の逃げ道を有効化する）", async () => {
     const { createXtermInstance } = await import("./xterm-adapter.ts");
 

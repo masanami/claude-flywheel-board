@@ -113,31 +113,60 @@ const readDisabledClipboardProvider: IClipboardProvider = {
   writeText: (_selection, data) => copyToClipboard(data).catch(() => {}),
 };
 
+/**
+ * Terminal 生成オプション（board の埋め込みターミナルの端末エミュレーション設定）。
+ *
+ * `createXtermInstance` から分離して export しているのは、エミュレーション挙動の
+ * 回帰テスト（xterm-emulation.test.ts）が「本番と同一のオプション」を
+ * `@xterm/headless` に渡して検証できるようにするため（Issue #148）。オプションを
+ * テスト側で書き写すと、本番設定を変えてもテストが追随せず回帰を検出できない。
+ */
+export const TERMINAL_OPTIONS = {
+  // ターミナル領域はライト/ダークテーマに関わらずダーク固定（要件どおり）。
+  theme: {
+    background: "#17181c",
+    foreground: "#e7e7ea",
+    // 補完候補（dim/ゴースト表示）用のグレー。background より明るく
+    // foreground より暗い明度に固定し、通常入力文字とはっきり区別できる
+    // ようにする（#46）。xterm.js の minimumContrastRatio は既定値が
+    // 1（＝補正なし。型定義コメント "1: The default, do nothing." 参照）
+    // のため明示指定はしない。既定のままで dim の明度差が意図せず
+    // 持ち上げられる心配は無いと確認済み。
+    brightBlack: "#6c6f78",
+  },
+  // convertEol は指定しない（＝既定の false のまま）。Issue #148。
+  //
+  // convertEol を true にすると xterm.js は LF を受け取るたびにカーソル列を
+  // 0 へ戻す（InputHandler.lineFeed が `buffer.x = 0` を実行する＝LF を暗黙の
+  // CR+LF として扱う）。これは pty 由来のデータに対しては誤りで、xterm.js の
+  // 型定義自身が「通常は pty の termios が LF→CRLF 変換を担うので、この設定を
+  // 使うべきではない（non-PTY なデータ源のための設定）」と明記している。
+  //
+  // board のデータ源はまさに pty（node-pty → tmux）であり、以下の前提が揃う:
+  //   - `infocmp xterm-256color` の `cud1` / `ind` はいずれも `^J`（＝素の LF）。
+  //     つまり tmux は「列を保ったまま 1 行下げる」ために素の LF を送ってよい。
+  //   - tmux は自身の pty の termios から `OPOST|ONLCR` を落とすため、pty 層が
+  //     CR を足し直すことはない。
+  // したがって convertEol: true のままだと、tmux が cud1/ind を選んだ瞬間に
+  // xterm.js 側だけカーソルが 1 列目へ戻り、以降 tmux が書く文字が「本来とは
+  // 別の列」＝1 列目に着弾する。さらに tmux は差分再描画（自分が把握している
+  // 端末内容と一致するセルは書き直さない。実際の tmux 出力でも 2 スペース
+  // インデント行を `ESC[<row>;3H` と列 3 から描き始め、変化のない区間を
+  // `ESC[<n>C` で読み飛ばす）を行うため、一度ずれたセルは二度と上書きされず
+  // 残骸として焼き付く。これは #148 の症状そのものである。
+  fontFamily: MONOSPACE_FONT_FAMILY,
+  fontSize: FONT_SIZE_PX,
+  // tmux の `mouse on`（ユーザーの ~/.tmux.conf 由来。board 専用ソケットにも
+  // 読み込まれる）環境では、tmux がマウストラッキングを要求するため
+  // xterm.js 側のネイティブ選択（copy-on-select・Cmd+C の前提）が発生
+  // しなくなる（Issue #116 調査結果）。既定 false のこのオプションを
+  // true にすると、Option (⌥) + ドラッグでマウストラッキングを無視して
+  // xterm.js のネイティブ選択を強制できる「逃げ道」が有効になる。
+  macOptionClickForcesSelection: true,
+} as const;
+
 export const createXtermInstance: CreateXtermInstance = (container) => {
-  const terminal = new Terminal({
-    // ターミナル領域はライト/ダームテーマに関わらずダーク固定（要件どおり）。
-    theme: {
-      background: "#17181c",
-      foreground: "#e7e7ea",
-      // 補完候補（dim/ゴースト表示）用のグレー。background より明るく
-      // foreground より暗い明度に固定し、通常入力文字とはっきり区別できる
-      // ようにする（#46）。xterm.js の minimumContrastRatio は既定値が
-      // 1（＝補正なし。型定義コメント "1: The default, do nothing." 参照）
-      // のため明示指定はしない。既定のままで dim の明度差が意図せず
-      // 持ち上げられる心配は無いと確認済み。
-      brightBlack: "#6c6f78",
-    },
-    convertEol: true,
-    fontFamily: MONOSPACE_FONT_FAMILY,
-    fontSize: FONT_SIZE_PX,
-    // tmux の `mouse on`（ユーザーの ~/.tmux.conf 由来。board 専用ソケットにも
-    // 読み込まれる）環境では、tmux がマウストラッキングを要求するため
-    // xterm.js 側のネイティブ選択（copy-on-select・Cmd+C の前提）が発生
-    // しなくなる（Issue #116 調査結果）。既定 false のこのオプションを
-    // true にすると、Option (⌥) + ドラッグでマウストラッキングを無視して
-    // xterm.js のネイティブ選択を強制できる「逃げ道」が有効になる。
-    macOptionClickForcesSelection: true,
-  });
+  const terminal = new Terminal({ ...TERMINAL_OPTIONS });
 
   // ターミナル上の選択範囲を Cmd+C で OS クリップボードへコピーできるように
   // する（#44）。xterm.js は選択→クリップボードの自動コピーを行わないため、
