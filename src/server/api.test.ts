@@ -291,6 +291,36 @@ describe("GET /api/md/file（Issue #66）", () => {
     expect(body).toEqual({ kind: "text", content: "key: value\n" });
   });
 
+  it("画像は本文を読まずに { kind: image } のみを返す（#143 Phase B。バイナリは /api/md/raw が配信する）", async () => {
+    fs.writeFileSync(path.join(repoRoot, "shot.png"), "binary");
+    const app = buildAppWithRepo();
+    const readFileSpy = vi.spyOn(fs.promises, "readFile");
+
+    try {
+      const res = await app.request("/api/md/file?repo=myrepo&path=shot.png", {
+        headers: { host: "localhost" },
+      });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ kind: "image" });
+      expect(readFileSpy).not.toHaveBeenCalled();
+    } finally {
+      readFileSpy.mockRestore();
+    }
+  });
+
+  it("SVG は image ではなく { kind: text, content } を返す（設計 §2.3: SVG はテキスト扱いのまま）", async () => {
+    fs.writeFileSync(path.join(repoRoot, "icon.svg"), "<svg></svg>");
+    const app = buildAppWithRepo();
+
+    const res = await app.request("/api/md/file?repo=myrepo&path=icon.svg", {
+      headers: { host: "localhost" },
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ kind: "text", content: "<svg></svg>" });
+  });
+
   it("存在しないファイルは 404 を返す", async () => {
     const app = buildAppWithRepo();
 
@@ -535,6 +565,38 @@ describe("GET /api/md/file（Issue #66）", () => {
     expect(res.status).toBe(413);
   });
 
+  it("1MB 超 10MB 以下の画像は 413 にならず { kind: image } を返す（設計 §3: kind 別上限。テキストの 1MB で画像が raw 経路へ到達できなくなる分断を作らない）", async () => {
+    fs.writeFileSync(
+      path.join(repoRoot, "big-shot.png"),
+      Buffer.alloc(1024 * 1024 + 1),
+    );
+    const app = buildAppWithRepo();
+
+    const res = await app.request(
+      "/api/md/file?repo=myrepo&path=big-shot.png",
+      {
+        headers: { host: "localhost" },
+      },
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ kind: "image" });
+  });
+
+  it("10MB 超の画像は 413 を返す（設計 §3: image の上限は 10MB）", async () => {
+    fs.writeFileSync(
+      path.join(repoRoot, "huge.png"),
+      Buffer.alloc(10 * 1024 * 1024 + 1),
+    );
+    const app = buildAppWithRepo();
+
+    const res = await app.request("/api/md/file?repo=myrepo&path=huge.png", {
+      headers: { host: "localhost" },
+    });
+
+    expect(res.status).toBe(413);
+  });
+
   it("ファイルサイズが 1MB ちょうどの場合は 200 を返す", async () => {
     const exactPath = path.join(repoRoot, "exact.md");
     fs.writeFileSync(exactPath, "a".repeat(1024 * 1024));
@@ -567,6 +629,270 @@ describe("GET /api/md/file（Issue #66）", () => {
     const app = buildAppWithRepo();
 
     const res = await app.request("/api/md/file?repo=myrepo&path=doc.md", {
+      headers: { host: "evil.example.com" },
+    });
+
+    expect(res.status).toBe(403);
+  });
+});
+
+// Issue #143（設計 docs/features/file-tree-non-md-support.md §3 Phase B）:
+// 画像バイナリ専用の配信経路。パス検証は validateMdPath を完全共有するため、
+// 検証そのものの網羅は path-validation.test.ts と上の file API の describe に
+// 委ね、ここでは raw 固有の契約（Content-Type の静的マッピング・nosniff・
+// 画像以外の 404・画像上限 10MB の 413）と、検証共有が実際に効いていることの
+// 代表ケース（除外セグメント・repo 外 symlink・symlink alias）を固定する。
+describe("GET /api/md/raw（Issue #143 Phase B）", () => {
+  let tempRoot: string;
+  let repoRoot: string;
+
+  beforeEach(() => {
+    tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "api-md-raw-test-"));
+    repoRoot = path.join(tempRoot, "repo");
+    fs.mkdirSync(repoRoot);
+  });
+
+  afterEach(() => {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  });
+
+  function buildAppWithRepo() {
+    const cache = createMemoryBoardCache();
+    const app = new Hono();
+    const getFleetEntries = (): readonly FleetEntry[] => [
+      { name: "myrepo", path: repoRoot },
+    ];
+    registerApiRoutes(app, cache, getFleetEntries);
+    return app;
+  }
+
+  function requestRaw(app: Hono, repoRelativePath: string) {
+    return app.request(
+      `/api/md/raw?repo=myrepo&path=${encodeURIComponent(repoRelativePath)}`,
+      { headers: { host: "localhost" } },
+    );
+  }
+
+  it("画像のバイト列をそのまま返し、Content-Type は拡張子の静的マッピングで決まる", async () => {
+    // 内容スニッフィングをしないことの確認も兼ねて、PNG シグネチャを持たない
+    // バイト列を .png として置く（内容から推測していれば image/png にならない）。
+    const bytes = Buffer.from([0x00, 0x01, 0x02, 0xff]);
+    fs.writeFileSync(path.join(repoRoot, "shot.png"), bytes);
+    const app = buildAppWithRepo();
+
+    const res = await requestRaw(app, "shot.png");
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/png");
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(
+      new Uint8Array(bytes),
+    );
+  });
+
+  it("拡張子ごとに定義済みの Content-Type を返す（jpg/jpeg は同一の image/jpeg）", async () => {
+    const cases: ReadonlyArray<readonly [string, string]> = [
+      ["photo.jpg", "image/jpeg"],
+      ["photo2.jpeg", "image/jpeg"],
+      ["anim.gif", "image/gif"],
+      ["modern.webp", "image/webp"],
+    ];
+    for (const [fileName] of cases) {
+      fs.writeFileSync(path.join(repoRoot, fileName), "binary");
+    }
+    const app = buildAppWithRepo();
+
+    for (const [fileName, expected] of cases) {
+      const res = await requestRaw(app, fileName);
+
+      expect(res.status, fileName).toBe(200);
+      expect(res.headers.get("content-type"), fileName).toBe(expected);
+    }
+  });
+
+  it("X-Content-Type-Options: nosniff を付与する（設計 §2.3）", async () => {
+    fs.writeFileSync(path.join(repoRoot, "shot.png"), "binary");
+    const app = buildAppWithRepo();
+
+    const res = await requestRaw(app, "shot.png");
+
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+  });
+
+  it("SVG は 404 を返す（設計 §2.3: 画像経路に載せずテキスト扱いのまま。file API では kind: text として読める）", async () => {
+    fs.writeFileSync(path.join(repoRoot, "icon.svg"), "<svg></svg>");
+    const app = buildAppWithRepo();
+
+    const res = await requestRaw(app, "icon.svg");
+
+    expect(res.status).toBe(404);
+    // text/html はもちろん image/svg+xml も返さない（本文自体を返さない）。
+    expect(res.headers.get("content-type")).not.toContain("svg");
+  });
+
+  it("画像以外のアローリスト対象（markdown/text）は 404 を返す（raw は画像専用）", async () => {
+    fs.writeFileSync(path.join(repoRoot, "doc.md"), "# doc");
+    fs.writeFileSync(path.join(repoRoot, "page.html"), "<h1>x</h1>");
+    const app = buildAppWithRepo();
+
+    expect((await requestRaw(app, "doc.md")).status).toBe(404);
+    expect((await requestRaw(app, "page.html")).status).toBe(404);
+  });
+
+  it("アローリスト外の拡張子・拡張子なし・存在しないファイル・未知の repo は 404 を返す", async () => {
+    fs.writeFileSync(path.join(repoRoot, "photo.bmp"), "binary");
+    fs.writeFileSync(path.join(repoRoot, "id_rsa.pem"), "secret key");
+    fs.writeFileSync(path.join(repoRoot, "Makefile"), "all:\n");
+    const app = buildAppWithRepo();
+
+    expect((await requestRaw(app, "photo.bmp")).status).toBe(404);
+    expect((await requestRaw(app, "id_rsa.pem")).status).toBe(404);
+    expect((await requestRaw(app, "Makefile")).status).toBe(404);
+    expect((await requestRaw(app, "missing.png")).status).toBe(404);
+
+    const resUnknownRepo = await app.request(
+      "/api/md/raw?repo=unknown&path=shot.png",
+      { headers: { host: "localhost" } },
+    );
+    expect(resUnknownRepo.status).toBe(404);
+  });
+
+  it("repo / path クエリパラメータが欠落している場合は 404 を返す", async () => {
+    fs.writeFileSync(path.join(repoRoot, "shot.png"), "binary");
+    const app = buildAppWithRepo();
+
+    const resNoRepo = await app.request("/api/md/raw?path=shot.png", {
+      headers: { host: "localhost" },
+    });
+    const resNoPath = await app.request("/api/md/raw?repo=myrepo", {
+      headers: { host: "localhost" },
+    });
+    const resNeither = await app.request("/api/md/raw", {
+      headers: { host: "localhost" },
+    });
+
+    expect(resNoRepo.status).toBe(404);
+    expect(resNoPath.status).toBe(404);
+    expect(resNeither.status).toBe(404);
+  });
+
+  it("除外セグメントを含む要求（`.` 始まり・.git 配下・node_modules 配下・`..` の解決で消えるケース）は 404 を返す（設計 §2.2 の検証を file API と共有）", async () => {
+    fs.writeFileSync(path.join(repoRoot, "shot.png"), "binary");
+    fs.writeFileSync(path.join(repoRoot, ".hidden.png"), "binary");
+    fs.mkdirSync(path.join(repoRoot, ".git"));
+    fs.writeFileSync(path.join(repoRoot, ".git", "logo.png"), "binary");
+    fs.mkdirSync(path.join(repoRoot, "node_modules", "pkg"), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      path.join(repoRoot, "node_modules", "pkg", "logo.png"),
+      "binary",
+    );
+    const app = buildAppWithRepo();
+
+    const paths = [
+      ".hidden.png",
+      ".git/logo.png",
+      "node_modules/pkg/logo.png",
+      "node_modules/../shot.png",
+      ".git/../shot.png",
+      "../outside.png",
+    ];
+    for (const requestPath of paths) {
+      const res = await requestRaw(app, requestPath);
+
+      expect(res.status, `path=${requestPath}`).toBe(404);
+    }
+  });
+
+  it("`.` 始まりの symlink alias が許可対象の画像を指す場合も 404 を返す（設計 §2.2 テスト(b)）", async () => {
+    fs.writeFileSync(path.join(repoRoot, "shot.png"), "binary");
+    fs.symlinkSync(
+      path.join(repoRoot, "shot.png"),
+      path.join(repoRoot, ".alias.png"),
+    );
+    const app = buildAppWithRepo();
+
+    const res = await requestRaw(app, ".alias.png");
+
+    expect(res.status).toBe(404);
+  });
+
+  it("許可対象の実体を指す通常名 symlink alias は配信される（設計 §2.2 テスト(c)。Content-Type は解決後の実体パスから引く）", async () => {
+    fs.writeFileSync(path.join(repoRoot, "shot.png"), "binary");
+    fs.symlinkSync(
+      path.join(repoRoot, "shot.png"),
+      path.join(repoRoot, "alias.png"),
+    );
+    const app = buildAppWithRepo();
+
+    const res = await requestRaw(app, "alias.png");
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/png");
+  });
+
+  it("シンボリックリンク経由で repo 外の実体を指す場合は 404 を返す", async () => {
+    const outsideDir = path.join(tempRoot, "outside-dir");
+    fs.mkdirSync(outsideDir);
+    fs.writeFileSync(path.join(outsideDir, "secret.png"), "binary");
+    fs.symlinkSync(
+      path.join(outsideDir, "secret.png"),
+      path.join(repoRoot, "escape.png"),
+    );
+    const app = buildAppWithRepo();
+
+    const res = await requestRaw(app, "escape.png");
+
+    expect(res.status).toBe(404);
+  });
+
+  it("10MB 超の画像は本文を読み込まずに 413 を返す", async () => {
+    fs.writeFileSync(
+      path.join(repoRoot, "huge.png"),
+      Buffer.alloc(10 * 1024 * 1024 + 1),
+    );
+    const app = buildAppWithRepo();
+    const readFileSpy = vi.spyOn(fs.promises, "readFile");
+
+    try {
+      const res = await requestRaw(app, "huge.png");
+
+      expect(res.status).toBe(413);
+      expect(readFileSpy).not.toHaveBeenCalled();
+    } finally {
+      readFileSpy.mockRestore();
+    }
+  });
+
+  it("10MB ちょうどの画像は 200 を返す（上限は「超過のみ」拒否）", async () => {
+    fs.writeFileSync(
+      path.join(repoRoot, "exact.png"),
+      Buffer.alloc(10 * 1024 * 1024),
+    );
+    const app = buildAppWithRepo();
+
+    const res = await requestRaw(app, "exact.png");
+
+    expect(res.status).toBe(200);
+    expect((await res.arrayBuffer()).byteLength).toBe(10 * 1024 * 1024);
+  });
+
+  it("1MB 超 10MB 以下の画像は 200 で配信される（file API の kind: image と同じ上限が適用される）", async () => {
+    const size = 1024 * 1024 + 1;
+    fs.writeFileSync(path.join(repoRoot, "big.png"), Buffer.alloc(size));
+    const app = buildAppWithRepo();
+
+    const res = await requestRaw(app, "big.png");
+
+    expect(res.status).toBe(200);
+    expect((await res.arrayBuffer()).byteLength).toBe(size);
+  });
+
+  it("不正な Host ヘッダの /api/md/raw リクエストは 403 を返す（既存の Host/Origin 検証を継承）", async () => {
+    fs.writeFileSync(path.join(repoRoot, "shot.png"), "binary");
+    const app = buildAppWithRepo();
+
+    const res = await app.request("/api/md/raw?repo=myrepo&path=shot.png", {
       headers: { host: "evil.example.com" },
     });
 

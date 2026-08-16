@@ -15,24 +15,38 @@ import {
   resolveFleetManifestPath,
   validateFleetEntryFields,
 } from "./manifest.ts";
-import type { PreviewableKind } from "./md/path-validation.ts";
-import { validateMdPath } from "./md/path-validation.ts";
+import type {
+  PreviewableKind,
+  PreviewableTextKind,
+} from "./md/path-validation.ts";
+import { IMAGE_CONTENT_TYPES, validateMdPath } from "./md/path-validation.ts";
 import { listMdTree } from "./md/tree.ts";
 import type { MdFileChangedMessage } from "./md/watch.ts";
 import { createMdWatchRegistry, handleMdClientMessage } from "./md/watch.ts";
 import type { FleetWatcher } from "./watcher.ts";
 
 /**
- * `GET /api/md/file` が読み取りを許可する上限サイズ（親 Issue #61 のクリティカル
- * 設計決定。設計 docs/features/file-tree-non-md-support.md §3 により Phase A の
- * `markdown`/`text` は 1MB 据え置き）。この基準を超えるファイルは `fs.stat` の
- * 時点で弾き、本文（`fs.promises.readFile`）を一切読み込まない。
+ * 読み取りを許可する上限サイズの **kind 別テーブル**（親 Issue #61 のクリティカル
+ * 設計決定＋設計 docs/features/file-tree-non-md-support.md §3「サイズ上限」）。
+ * この基準を超えるファイルは `fs.stat` の時点で弾き、本文
+ * （`fs.promises.readFile`）を一切読み込まない。
  *
- * 設計上、サイズ上限は **kind 別**に定義する（Phase B で追加する `image` は
- * 10MB）。Phase A で返る kind は `markdown`/`text` の 2 値のみのため、判定は
- * この 1 定数で足りる（kind 別テーブルの導入は Phase B に譲る。YAGNI）。
+ * - `markdown`/`text`: 1MB（#61 からの据え置き）
+ * - `image`: 10MB。Retina 解像度のスクリーンショット PNG が数 MB に達するため
+ *   1MB では実用にならない一方、上限撤廃はローカルとはいえメモリへの全読み込みを
+ *   青天井にするため、実用域に十分な余裕を持たせた値としてここで確定する
+ *   （設計 §3 で「仮置き・確定は実装時」とされていた値。Issue #143 受け入れ基準）。
+ *
+ * **file API・raw API で同一の値を適用する**こと。file API の 413 判定は拡張子
+ * 分類（kind 決定）の**後**にその kind の上限で行う。テキスト系の 1MB を画像へ
+ * 適用すると、1MB 超 10MB 以下の画像が file API の 413 で弾かれて raw 経路
+ * （`{ kind: "image" }` を受けてから参照する動線）へ到達できない分断が生じるため。
  */
-const TEXT_PREVIEW_MAX_BYTES = 1024 * 1024;
+const PREVIEW_MAX_BYTES_BY_KIND: Readonly<Record<PreviewableKind, number>> = {
+  markdown: 1024 * 1024,
+  text: 1024 * 1024,
+  image: 10 * 1024 * 1024,
+};
 
 /**
  * `GET /api/md/file` の 200 応答形（設計 §3「API 契約の固定」）。
@@ -40,10 +54,15 @@ const TEXT_PREVIEW_MAX_BYTES = 1024 * 1024;
  * `kind` の**正本（プロデューサー）はこのエンドポイントのみ**とし、ツリー応答
  * （`GET /api/md/tree`）は `kind` を持たない。UI の表示分岐は常にこの応答で行い、
  * UI 側が拡張子から種別を推測する分岐（サーバのアローリスト定義との二重管理）を
- * 作らない。Phase A で実際に返るのは `markdown | text` の 2 値
- * （語彙自体は `PreviewKind` として 4 値を予約済み）。
+ * 作らない。現在返るのは `markdown | text | image` の 3 値
+ * （語彙自体は `PreviewKind` として 4 値を予約済み。`binary` は Phase C）。
+ *
+ * `image` は**本文を含まない**。バイナリは JSON の UTF-8 文字列契約では返せず、
+ * 実体は `GET /api/md/raw` が配信する（設計 §1.4/§3）。
  */
-export type MdFileResponse = { kind: PreviewableKind; content: string };
+export type MdFileResponse =
+  | { kind: PreviewableTextKind; content: string }
+  | { kind: "image" };
 
 function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -207,12 +226,14 @@ export function registerApiRoutes(
   // 拡張子・除外セグメント（設計 §2.2）はすべて同一の 404 とし、パスの存在有無を
   // 漏らさない。理由は問わず validateMdPath の ok:false をそのまま 404 に変換する
   // （呼び出し側で理由分岐しない）。例外として検証をすべて通過したファイルの
-  // サイズ超過（1MB 超）のみ 413 で区別する。サイズ判定は本文読み込み
+  // サイズ超過のみ 413 で区別する。サイズ判定は本文読み込み
   // （fs.promises.readFile）より必ず先に fs.promises.stat で行い、上限超過時は
-  // 本文を一切読み込まない。
+  // 本文を一切読み込まない。上限は kind 別（PREVIEW_MAX_BYTES_BY_KIND）で、
+  // 判定は拡張子分類（kind 決定 = validateMdPath）の後に行う（設計 §3）。
   //
   // 応答は設計 §3 の契約どおり `{ kind, content }`（kind の語彙は 4 値を予約定義
-  // 済み・Phase A で返るのは markdown|text の 2 値）。
+  // 済み・現在返るのは markdown|text|image の 3 値）。画像は本文を持たず
+  // `{ kind: "image" }` のみを返し、実体は GET /api/md/raw が配信する。
   app.get("/api/md/file", async (c) => {
     const repo = c.req.query("repo") ?? "";
     const repoRelativePath = c.req.query("path") ?? "";
@@ -234,8 +255,15 @@ export function registerApiRoutes(
       // 存在有無を漏らさないため同一の 404 として扱う。
       return c.text("Not Found", 404);
     }
-    if (stat.size > TEXT_PREVIEW_MAX_BYTES) {
+    if (stat.size > PREVIEW_MAX_BYTES_BY_KIND[validation.kind]) {
       return c.text("Payload Too Large", 413);
+    }
+
+    if (validation.kind === "image") {
+      // 種別判定の入口を file API に一本化するための応答（設計 §3）。
+      // バイナリ本文はここでは読まない（raw API が配信する）。
+      const imageBody: MdFileResponse = { kind: "image" };
+      return c.json(imageBody);
     }
 
     let content: string;
@@ -258,6 +286,93 @@ export function registerApiRoutes(
     }
     const body: MdFileResponse = { kind: validation.kind, content };
     return c.json(body);
+  });
+
+  // Issue #143（設計 §3 Phase B）: 画像バイナリ専用の配信経路。
+  //
+  // パス検証は file API・WS md_subscribe と同じ validateMdPath を**完全共有**
+  // する（realpath 封じ込め・除外セグメント・アローリスト・通常ファイル判定）。
+  // 応答方針も file API と同一で、検証失敗・不存在・除外セグメント・画像
+  // アローリスト外はすべて同一の 404（存在有無を漏らさない）、検証通過後の
+  // サイズ超過（画像上限 10MB）のみ 413。
+  //
+  // クリティカル設計決定（設計 §2.3。XSS 対策）:
+  // - Content-Type は IMAGE_CONTENT_TYPES（拡張子アローリストからの静的
+  //   マッピング）からのみ決定し、内容スニッフィングは一切しない。
+  // - image/* 以外は返さない（text/html を返す経路を作らない）。kind が
+  //   "image" 以外（markdown/text）の要求はここでは 404 にする。
+  // - SVG は IMAGE_CONTENT_TYPES に無いため必ず 404（テキスト扱いのまま。
+  //   raw の URL 直開きで board オリジン上のスクリプト実行経路を作らない）。
+  // - X-Content-Type-Options: nosniff を必ず付与する。
+  //
+  // 明示的なキャッシュ制御ヘッダは付けない: ライブ更新は UI 側が
+  // md_file_changed 受信時に URL のキャッシュバスターを進めることで担保する
+  // （設計 §3 Phase B）。Last-Modified / Expires を返さないため、ブラウザの
+  // ヒューリスティックキャッシュも働かない（YAGNI）。
+  app.get("/api/md/raw", async (c) => {
+    const repo = c.req.query("repo") ?? "";
+    const repoRelativePath = c.req.query("path") ?? "";
+
+    const validation = validateMdPath(
+      getFleetEntries(),
+      repo,
+      repoRelativePath,
+    );
+    if (!validation.ok || validation.kind !== "image") {
+      return c.text("Not Found", 404);
+    }
+
+    // 拡張子 → Content-Type は解決後の実体パスから引く（拡張子判定を実体側で
+    // 行う validateMdPath と同じ基準にし、symlink alias のリンク名から
+    // Content-Type を決めてしまう食い違いを作らない）。
+    const contentType = IMAGE_CONTENT_TYPES.get(
+      path.extname(validation.resolvedPath),
+    );
+    if (!contentType) {
+      // kind === "image" は IMAGE_CONTENT_TYPES のキーから導出されるため
+      // 構造上ここには到達しない（アローリストの片側追加に対する保険）。
+      return c.text("Not Found", 404);
+    }
+
+    let stat: fs.Stats;
+    try {
+      stat = await fs.promises.stat(validation.resolvedPath);
+    } catch {
+      return c.text("Not Found", 404);
+    }
+    if (stat.size > PREVIEW_MAX_BYTES_BY_KIND.image) {
+      return c.text("Payload Too Large", 413);
+    }
+
+    let data: Buffer;
+    try {
+      data = await fs.promises.readFile(validation.resolvedPath);
+    } catch (err) {
+      // file API と同じ扱い（クライアントには 404・サーバログには記録）。
+      console.warn(
+        `GET /api/md/raw: 検証通過後のファイル読み取りに失敗しました: ${validation.resolvedPath}`,
+        err,
+      );
+      return c.text("Not Found", 404);
+    }
+
+    // c.body() が要求する `Uint8Array<ArrayBuffer>` に対し、
+    // `fs.promises.readFile` の戻り値は `Buffer<ArrayBufferLike>`
+    // （SharedArrayBuffer 由来もありうる型）で型が一致しない。Node の readFile が
+    // SharedArrayBuffer を返すことはないため、最大 10MB のコピーを増やさず
+    // ビューの型だけを合わせる。小さいファイルの Buffer は共有プール上に確保され
+    // （byteOffset != 0・buffer は実ファイルより大きい）うるので、
+    // byteOffset/byteLength を必ず渡して該当区間だけを見る。
+    const body = new Uint8Array(
+      data.buffer,
+      data.byteOffset,
+      data.byteLength,
+    ) as Uint8Array<ArrayBuffer>;
+
+    return c.body(body, 200, {
+      "Content-Type": contentType,
+      "X-Content-Type-Options": "nosniff",
+    });
   });
 
   // Issue #122: エージェント追加のオーケストレーション。
