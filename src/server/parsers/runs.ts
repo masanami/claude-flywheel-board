@@ -727,7 +727,7 @@ function isPositiveFiniteMinutes(value: number): boolean {
 
 /**
  * しきい値（分）の解決順: 引数優先 → 環境変数 FLYWHEEL_BOARD_STALE_MINUTES
- * （数値としてパース。不正値は無視してデフォルトへ fallback） → デフォルト30分
+ * （数値としてパース。不正値は無視してデフォルトへ fallback） → デフォルト60分
  * （manifest.ts の resolveFleetManifestPath と同じパターン）。
  * 引数 override・環境変数のどちらも、正の有限数でなければ「不正値」として無視し
  * 次の優先順位（override 不正 → 環境変数 → デフォルト）へフォールバックする。
