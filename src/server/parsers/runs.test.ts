@@ -759,6 +759,66 @@ describe("deriveRuns", () => {
       expect(result[0]?.stale).toBe(false);
       expect(result[0]?.lastActivityAt).toBeUndefined();
     });
+
+    it("start 行が壊れてペアにならなかった end イベントの ts も heartbeat に数える（cycle を stale にしない）", async () => {
+      // codex 指摘の回帰テスト: heartbeat を matched（start とペアになった end
+      // しか持たない）から求めていた頃は、start 行が壊れて ParseError になった
+      // 委譲の delegate_end が closeLatestOpenRun に閉じる相手を見つけられず、
+      // 直近（08:40）に活動が記録されているのに cycle 開始（07:36）起点で
+      // 判定され stale になっていた。
+      const { events, errors } = await parseRuns(
+        fixture("orphan-end-after-broken-start.jsonl"),
+      );
+
+      // 壊れた行は ParseError として残り、valid な end 行はイベントとして残る
+      // （パーサは「壊れた行だけを積み、正常な行は活かす」設計）。
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.line).toBe(2);
+      expect(events.map((e) => e.event)).toEqual([
+        "cycle_start",
+        "delegate_end",
+      ]);
+
+      const matched = matchRuns(events);
+      // ペアになる start が無いため delegate の MatchedRun は生成されない
+      // （＝matched からは end の ts を復元できない）。
+      expect(matched).toHaveLength(1);
+      expect(matched[0]?.kind).toBe("cycle");
+
+      // cycle 開始から 84 分（しきい値 30 分超過）だが、最終活動（08:40 の
+      // delegate_end）からは 20 分しか経っていない。
+      const now = new Date("2026-08-18T09:00:00+09:00");
+      const result = deriveRuns(matched, now, 30);
+
+      const cycle = result.find((run) => run.kind === "cycle");
+      expect(cycle?.lastActivityAt).toBe("2026-08-18T08:40:00+09:00");
+      expect(cycle?.stale).toBe(false);
+      expect(deriveCycleStatus(result)).toBe("running");
+      expect(deriveCycleLastActivityAt(result)).toBe(
+        "2026-08-18T08:40:00+09:00",
+      );
+    });
+
+    it("ペアにならなかった end からもしきい値を超えていれば cycle は stale になる", async () => {
+      // 取りこぼしを直した結果として「常に非 stale」になるわけではないことの確認
+      // （heartbeat が前へ進むだけで、判定そのものは従来どおり経過で行う）。
+      const { events } = await parseRuns(
+        fixture("orphan-end-after-broken-start.jsonl"),
+      );
+      const matched = matchRuns(events);
+
+      // 最終活動（08:40）から 31 分経過。
+      const result = deriveRuns(
+        matched,
+        new Date("2026-08-18T09:11:00+09:00"),
+        30,
+      );
+
+      const cycle = result.find((run) => run.kind === "cycle");
+      expect(cycle?.lastActivityAt).toBe("2026-08-18T08:40:00+09:00");
+      expect(cycle?.stale).toBe(true);
+      expect(deriveCycleStatus(result)).toBe("stale");
+    });
   });
 });
 

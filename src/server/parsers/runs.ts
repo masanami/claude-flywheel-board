@@ -371,6 +371,21 @@ export type MatchedRun = {
    * 表示を維持する（除外対象外）。
    */
   superseded?: boolean;
+  /**
+   * kind: "cycle" かつ未終了（endedAt 未設定）の Run にのみ付与する「最終活動時刻」
+   * （heartbeat。Issue #154）。cycle の stale 判定はこの時刻からの経過で行う
+   * （開始からの経過ではない）。それ以外の Run では常に undefined。
+   *
+   * 算出は matchRuns の責務（deriveRuns ではない。codex 指摘対応）: heartbeat の
+   * 定義は「サイクル開始以降の最新**イベント** ts」（architecture.md §3.3）であり、
+   * MatchedRun[] は start とペアになった end しか保持しないため素材として不足する
+   * （start 行が壊れて ParseError になった場合、後続の valid な delegate_end /
+   * adhoc_end / cycle_end は closeLatestOpenRun が閉じる相手を見つけられず ts ごと
+   * 落ちる）。イベント列を持つ matchRuns で算出することで、その取りこぼしを無くす。
+   * 時刻非依存の純粋な導出のため matchRuns 側に置いても stale 判定（時刻依存）の
+   * テスト容易性は損なわれない。
+   */
+  lastActivityAt?: string;
 };
 
 // MatchedRun は agent フィールドを持たない（意図的な逸脱）: 既存の Challenge 型が
@@ -450,10 +465,41 @@ function supersedeOpenRuns(bucket: MatchedRun[]): void {
 }
 
 /**
- * start/end のマッチングのみを行う（時刻非依存の純粋関数。stale 判定は
- * deriveRuns の責務）。対応付けキーはイベント種別ごと（cycle→cycle /
- * delegate→session_id / adhoc→id）。resume 規則（同一キーの最新の未終了 start
- * に end を対応付ける）は cycle/adhoc にも同じロジックを一般化して適用する。
+ * 未終了の cycle Run に「最終活動時刻」（heartbeat。MatchedRun.lastActivityAt）を
+ * 付与する。cycle の startedAt 以降に記録された**全イベント**の ts のうち最新の
+ * ものを採り、該当が無ければ cycle 自身の startedAt（＝サイクル開始が最後の活動）
+ * を入れるため、値は常に定義される。
+ *
+ * 素材が MatchedRun[] ではなく RunEvent[] であることが本質（codex 指摘対応）:
+ * matched は start とペアになった end しか保持しないため、start 行が壊れて
+ * ParseError になったケースの end（valid な delegate_end / adhoc_end / cycle_end）は
+ * matched から復元できず、直近に活動があってもサイクルが stale のまま残ってしまう。
+ *
+ * 終了済み cycle には付けない（stale 対象外のため不要。FR 上も表示しない）。
+ */
+function assignCycleHeartbeats(runs: MatchedRun[], events: RunEvent[]): void {
+  for (const run of runs) {
+    if (run.kind !== "cycle" || run.endedAt !== undefined) continue;
+    const cycleStartMs = Date.parse(run.startedAt);
+    let latestAt = run.startedAt;
+    let latestMs = cycleStartMs;
+    for (const event of events) {
+      const tsMs = Date.parse(event.ts);
+      if (tsMs >= cycleStartMs && tsMs > latestMs) {
+        latestAt = event.ts;
+        latestMs = tsMs;
+      }
+    }
+    run.lastActivityAt = latestAt;
+  }
+}
+
+/**
+ * start/end のマッチングと、未終了 cycle の heartbeat 付与を行う（いずれも
+ * 時刻非依存の純粋関数。stale 判定＝時刻との比較は deriveRuns の責務）。
+ * 対応付けキーはイベント種別ごと（cycle→cycle / delegate→session_id / adhoc→id）。
+ * resume 規則（同一キーの最新の未終了 start に end を対応付ける）は cycle/adhoc にも
+ * 同じロジックを一般化して適用する。
  */
 export function matchRuns(events: RunEvent[]): MatchedRun[] {
   const buckets = new Map<string, MatchedRun[]>();
@@ -541,17 +587,18 @@ export function matchRuns(events: RunEvent[]): MatchedRun[] {
     }
   }
 
+  // 全イベントを走査し終えてから付与する（cycle が後続の cycle_end で閉じられる
+  // ケースがあるため、ループ内では「未終了かどうか」が確定しない）。
+  assignCycleHeartbeats(order, events);
+
   return order;
 }
 
+// lastActivityAt（heartbeat）は MatchedRun 側に持つ（matchRuns が付与する）ため、
+// Run は stale を足すだけ。消費側から見た Run の形は従来どおり
+// （kind: "cycle" かつ未終了なら lastActivityAt を持つ）。
 export type Run = MatchedRun & {
   stale: boolean;
-  /**
-   * kind: "cycle" かつ未終了（endedAt 未設定）の Run にのみ付与する「最終活動時刻」
-   * （heartbeat。Issue #154）。cycle の stale 判定はこの時刻からの経過で行う
-   * （開始からの経過ではない）。それ以外の Run では常に undefined。
-   */
-  lastActivityAt?: string;
 };
 
 /**
@@ -565,39 +612,6 @@ export function computeElapsedMs(startedAt: string, nowMs: number): number {
 }
 
 /**
- * 未終了の cycle Run について「最終活動時刻」（heartbeat）を求める（Issue #154）。
- *
- * cycle の startedAt 以降に記録された全イベントの ts（他の Run の startedAt /
- * endedAt。delegate_start/delegate_end/adhoc_start/adhoc_end 由来）のうち最新の
- * ものを返す。該当が無ければ cycle 自身の startedAt（＝サイクル開始が最後の
- * 活動）を返すため、戻り値は常に定義される。
- *
- * MatchedRun[] のみを素材にする（生イベント列を受け取らない）のは、start/end の
- * ts が MatchedRun に保存されており runs.jsonl の全イベントの ts を復元できる
- * ため。deriveRuns の呼び出し側（cache.getSnapshot）へ生イベントを配線する
- * 必要が無く、既存の責務分担（parser は素材・cache は格納）を保てる。
- */
-function computeCycleLastActivityAt(
-  cycle: MatchedRun,
-  matched: MatchedRun[],
-): string {
-  const cycleStartMs = Date.parse(cycle.startedAt);
-  let latestAt = cycle.startedAt;
-  let latestMs = cycleStartMs;
-  for (const run of matched) {
-    for (const ts of [run.startedAt, run.endedAt]) {
-      if (ts === undefined) continue;
-      const tsMs = Date.parse(ts);
-      if (tsMs >= cycleStartMs && tsMs > latestMs) {
-        latestAt = ts;
-        latestMs = tsMs;
-      }
-    }
-  }
-  return latestAt;
-}
-
-/**
  * stale を付与する純粋関数。now を引数で受け取ることでテストが時刻を Mock
  * できるようにする。判定の起点は kind によって異なる（Issue #154）:
  *
@@ -608,6 +622,10 @@ function computeCycleLastActivityAt(
  *   実行中の非 stale な delegate/adhoc が 1 つも無いとき。run-cycle の 1 周は
  *   委譲を含めると数時間に及ぶのが正常であり、開始からの経過で判定すると
  *   正常稼働中のエージェントが恒常的に stale になるため（誤検知の解消）。
+ *
+ * heartbeat 自体の算出は matchRuns の責務（時刻非依存のため。詳細は
+ * MatchedRun.lastActivityAt / assignCycleHeartbeats のコメント）。ここは
+ * 付与済みの値を now と比較するだけに徹する。
  */
 export function deriveRuns(
   matched: MatchedRun[],
@@ -648,7 +666,10 @@ export function deriveRuns(
     if (run.kind !== "cycle") {
       return { ...run, stale: isOpenAndStale(run) };
     }
-    const lastActivityAt = computeCycleLastActivityAt(run, matched);
+    // heartbeat は matchRuns が付与済み（イベント列が素材）。未設定になるのは
+    // matchRuns を経由せず MatchedRun を手組みした場合だけで、その際は
+    // 「サイクル開始が最後の活動」＝従来どおり開始起点の判定にフォールバックする。
+    const lastActivityAt = run.lastActivityAt ?? run.startedAt;
     const stale =
       !hasLiveChildRun && computeElapsedMs(lastActivityAt, nowMs) > thresholdMs;
     return { ...run, stale, lastActivityAt };
