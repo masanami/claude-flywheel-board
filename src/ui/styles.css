@@ -588,6 +588,10 @@ body {
  * ::backdrop 疑似要素で表現する（トップレイヤーに載るため z-index 指定は不要）。
  */
 
+/* カード詳細モーダル（Issue #153）: 説明・完了条件・タスク案・作業ログを
+ * 折り返し少なく読めるだけの幅を取る。ビューポート比を併用しているため、
+ * 狭い画面（幅 < 880px 相当）では 90vw 側が効いて画面からはみ出さない。
+ * 縦は max-height: 80vh + 内部スクロール（.card-detail-modal-content）のまま。 */
 .card-detail-modal {
   position: fixed;
   inset: 0;
@@ -597,7 +601,7 @@ body {
   border-radius: 8px;
   padding: 0;
   width: 100%;
-  max-width: 480px;
+  max-width: min(880px, 90vw);
   max-height: 80vh;
 }
 
@@ -635,6 +639,9 @@ body {
   flex-shrink: 0;
 }
 
+/* ラベル列は内容ぶんだけ（auto）・値列が残りすべて（1fr）。モーダル幅が
+ * 広がってもラベル列は伸びないため、増えた幅はそのまま値の可読域になる
+ * （Issue #153 の確認事項）。ラベルは日本語 2〜6 文字なので折り返さない。 */
 .card-detail-fields {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -645,6 +652,7 @@ body {
 
 .card-detail-fields dt {
   color: var(--board-muted-fg);
+  white-space: nowrap;
 }
 
 .card-detail-fields dd {
