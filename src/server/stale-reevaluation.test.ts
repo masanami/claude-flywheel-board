@@ -151,6 +151,47 @@ describe("startStaleReevaluation", () => {
     timer.close();
   });
 
+  it("stale な cycle のエージェントは実行中 run が無くても分が進むごとに push される（ヘッダの経過時間表示の更新前提。Issue #154）", () => {
+    const lastActivityAt = "2026-07-18T10:00:00+09:00";
+    const cache = fakeCache(() => [
+      agentBoard({
+        name: "medical",
+        cycleStatus: "stale",
+        cycleLastActivityAt: lastActivityAt,
+        runningRuns: [],
+      }),
+      agentBoard({ name: "idle-agent", cycleStatus: "idle" }),
+    ]);
+    const onAgentUpdate = vi.fn();
+
+    let nowMs = Date.parse(lastActivityAt);
+    let scheduled: (() => void) | undefined;
+    const setIntervalFn = vi.fn((handler: () => void) => {
+      scheduled = handler;
+      return 1 as unknown as NodeJS.Timeout;
+    });
+
+    const timer = startStaleReevaluation(cache, onAgentUpdate, {
+      now: () => new Date(nowMs),
+      setIntervalFn,
+      clearIntervalFn: vi.fn(),
+    });
+
+    nowMs += 60_000;
+    scheduled?.();
+    expect(onAgentUpdate).toHaveBeenCalledTimes(1);
+    expect(onAgentUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "medical" }),
+    );
+
+    // 同一分内の再評価では push しない（idle-agent は最後まで push されない）
+    nowMs += 1_000;
+    scheduled?.();
+    expect(onAgentUpdate).toHaveBeenCalledTimes(1);
+
+    timer.close();
+  });
+
   it("close() で clearIntervalFn が呼ばれる", () => {
     const cache = fakeCache(() => [agentBoard()]);
     const onAgentUpdate = vi.fn();

@@ -19,7 +19,7 @@ fleet の管理者として、board 上の実行中・応答なしタスクを�
 ### 取得元（provenance）表示 — Issue #85
 
 - [ ] FR-A1: run 由来のタスク行（`runningRuns`: kind `delegate` / `adhoc`。cycle は対象外 — スコープ外の節を参照）について、カード詳細（CardDetailModal）に取得元を表示する。表示内容は **導出元ファイル＋レコードキー情報**: ファイル（`.flywheel/runs.jsonl`）、イベント種別（`delegate_start` / `adhoc_start`）、`ts`、キー（delegate は `session_id`、adhoc は `id`）
-- [ ] FR-A2: アラート行（`stale: true` の「⚠ 応答なし」表示）には、`AgentColumn` の RunningRunRow 上にも取得元を **1行インライン表示**する（例: `└ 取得元: .flywheel/runs.jsonl — delegate_start ts=2026-07-28T17:31:00+09:00 session_id=cc3535f2-…（対応する delegate_end なし）`）。stale でない実行中行にはインライン表示しない
+- [ ] FR-A2: アラート行（`stale: true` の「⚠ 更新なし」表示。文言は Issue #154 で「応答なし」から変更）には、`AgentColumn` の RunningRunRow 上にも取得元を **1行インライン表示**する（例: `└ 取得元: .flywheel/runs.jsonl — delegate_start ts=2026-07-28T17:31:00+09:00 session_id=cc3535f2-…（対応する delegate_end なし）`）。stale でない実行中行にはインライン表示しない
 - [ ] FR-A3: カード詳細に「元レコード」展開セクション（展開/折りたたみ可能な UI。テストから `data-testid="raw-record"` の安定フックで特定できること）を設け、導出元イベントの **生 JSON 1行**をそのまま表示する
 - [ ] FR-A4: 未終了 start（対応する end イベントが無い）の場合、その旨（例: 「対応する delegate_end なし」）を取得元表示に明示する
 - [ ] FR-A5: 位置情報は**行番号を含めない**（追記型 jsonl では行番号がすぐ古びるため、安定して照合できるレコードキーを正とする。ユーザー決定）
@@ -117,7 +117,7 @@ export type Challenge = {
 > 表示文字列の検証粒度: 取得元表示のアサーションは構成要素（ファイル名・イベント種別・ts・キー・end 有無の注記）が含まれることの検証とし、表示文言全体の完全一致は要求しない（FR-A2 の表示例は書式イメージであり正本文字列ではない）。
 
 - [ ] AC-1: 未終了 `delegate_start` を含む runs.jsonl フィクスチャで、該当タスク行のカード詳細に「`.flywheel/runs.jsonl` — `delegate_start` の `ts`・`session_id`・対応する delegate_end なし」相当の取得元が表示される（FR-A5 により行番号は含まれないこと）
-- [ ] AC-2: 同フィクスチャの stale 行（⚠ 応答なし）で、AgentColumn の行内にも取得元 1 行が表示される。stale でない実行中行には表示されない
+- [ ] AC-2: 同フィクスチャの stale 行（⚠ 更新なし）で、AgentColumn の行内にも取得元 1 行が表示される。stale でない実行中行には表示されない
 - [ ] AC-3: カード詳細の「元レコード」を展開すると、導出元イベントの生 JSON 1 行がそのまま表示される
 - [ ] AC-4: 台帳に存在する課題 ID の実行中 Run 行に台帳タイトルが表示され、カード詳細にタイトル・説明・完了条件・タスク案・優先度・ステータスが表示される
 - [ ] AC-5: 台帳（アーカイブ含む）に存在しない課題 ID の Run 行では「台帳に見つかりません」と表示され、行の他の表示（経過時間・再開ボタン等）は壊れない

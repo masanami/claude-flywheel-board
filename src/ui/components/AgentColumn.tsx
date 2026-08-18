@@ -30,22 +30,45 @@ import {
 
 // カラムヘッダのサイクル状態表示（P3-2）。cycleStatus は cache.ts の
 // getSnapshot が都度算出する値で、board 側は表示するだけ（NFR-01）。
+//
+// 文言（Issue #154）: stale の表示は従来「⚠ 応答なし」だったが、これは死活の
+// 断定に読める一方、実際の判定は「しきい値時間内に記録が無い」でしかなく、
+// 正常な長時間実行でも到達する。断定を避けた事実ベースの文言（「更新なし」）に
+// 改め、最終活動（heartbeat）からの経過時間を併記して人間が自分で
+// 「長すぎるか」を判断できるようにする。
 const CYCLE_STATUS_LABEL: Record<AgentCycleStatus, string> = {
   running: "サイクル実行中",
   idle: "idle",
-  stale: "⚠ 応答なし",
+  stale: "⚠ 更新なし",
 };
+
+const CYCLE_STALE_TITLE =
+  "しきい値を超えて実行イベントの記録がありません（最終活動からの経過時間）。停止したとは限らず、長時間の委譲でも表示されます";
 
 function CycleStatusIndicator({
   cycleStatus,
+  lastActivityAt,
 }: {
   cycleStatus: AgentCycleStatus | undefined;
+  // 実行中 cycle の最終活動時刻（cache.ts が導出）。stale のときだけ経過時間の
+  // 表示に使う。undefined（idle・古いスナップショット）なら経過時間を省く。
+  lastActivityAt?: string;
 }) {
   const status = cycleStatus ?? "idle";
+  const elapsed =
+    status === "stale" && lastActivityAt !== undefined
+      ? formatElapsed(lastActivityAt, new Date())
+      : undefined;
   return (
-    <span className="agent-column-cycle-status" data-cycle-status={status}>
+    <span
+      className="agent-column-cycle-status"
+      data-cycle-status={status}
+      title={status === "stale" ? CYCLE_STALE_TITLE : undefined}
+    >
       <span className="agent-column-cycle-status-dot" aria-hidden="true" />
-      {CYCLE_STATUS_LABEL[status]}
+      {elapsed === undefined
+        ? CYCLE_STATUS_LABEL[status]
+        : `${CYCLE_STATUS_LABEL[status]}（${elapsed}）`}
     </span>
   );
 }
@@ -113,7 +136,7 @@ function describeProvenance(provenance: RunProvenance): string {
 
 // 実行中セクション（P3-2）: runningRuns（kind: delegate | adhoc の実行中 Run
 // のみ。cycle は cycleStatus 側で表現するためサーバ側で除外済み）を表示する。
-// 実行中カードに操作ボタンは基本置かないが、応答なし（stale）の delegate
+// 実行中カードに操作ボタンは基本置かないが、更新なし（stale）の delegate
 // 実行中セッションに限り「再開コマンドを挿入」ボタンを表示する（#31・FR-12）。
 // クリティカル設計決定（親 #28 / #2）: prefill するのみで Enter 送信・自動実行
 // はしない。
@@ -158,9 +181,12 @@ function RunningRunRow({ run, agent }: { run: Run; agent: AgentBoard }) {
         )}
       </div>
       <span className="agent-column-running-run-elapsed">{elapsed}</span>
+      {/* 文言は cycle 側（CycleStatusIndicator）と揃える（Issue #154）。
+       * 経過時間は同じ行の agent-column-running-run-elapsed に既に出ている
+       * ため、ここでは重複表示しない。 */}
       {run.stale && (
         <div className="agent-column-running-run-stale-warning">
-          ⚠ 応答なし（要確認）
+          ⚠ 更新なし（要確認）
         </div>
       )}
       {run.stale && run.provenance && (
@@ -582,7 +608,10 @@ export function AgentColumn({
       </div>
       <div className="agent-column-header">
         <h2 className="agent-column-title">{agent.name}</h2>
-        <CycleStatusIndicator cycleStatus={agent.cycleStatus} />
+        <CycleStatusIndicator
+          cycleStatus={agent.cycleStatus}
+          lastActivityAt={agent.cycleLastActivityAt}
+        />
         <PriorityPolicyBadge
           policy={agent.priorityPolicy}
           onOpen={() => onOpenPriorityPolicy?.(agent.name)}

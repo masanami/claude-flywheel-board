@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { LogEntry } from "./journal.ts";
 import {
   DEFAULT_STALE_MINUTES,
+  deriveCycleLastActivityAt,
+  deriveCycleStatus,
   deriveRunLogEntries,
   deriveRuns,
   logEntrySortKey,
@@ -573,6 +575,253 @@ describe("deriveRuns", () => {
 
     expect(result[0]?.stale).toBe(true);
   });
+
+  describe("cycle の stale 判定は最終活動（heartbeat）起点（Issue #154）", () => {
+    it("開始からしきい値を大きく超えていても、しきい値内に delegate イベントがあれば cycle は stale にならない", async () => {
+      // 実データ由来のフィクスチャ（rupert 2026-08-18: 07:36 cycle_start →
+      // 07:44/08:20 で委譲1件完了 → 08:32 から次の委譲が進行中）。
+      const { events } = await parseRuns(
+        fixture("long-cycle-with-activity.jsonl"),
+      );
+      const matched = matchRuns(events);
+
+      // cycle 開始から 82 分経過（従来の実装なら stale）だが、最終活動
+      // （08:32 の delegate_start）からは 26 分しか経っていない。
+      const now = new Date("2026-08-18T08:58:00+09:00");
+      const result = deriveRuns(matched, now, 30);
+
+      const cycle = result.find((run) => run.kind === "cycle");
+      expect(cycle?.stale).toBe(false);
+      expect(cycle?.lastActivityAt).toBe("2026-08-18T08:32:00+09:00");
+      expect(deriveCycleStatus(result)).toBe("running");
+    });
+
+    it("最終活動からしきい値を超え、実行中の delegate/adhoc も無ければ cycle は stale になる", () => {
+      const matched = matchRuns([
+        {
+          ts: "2026-08-18T07:36:00+09:00",
+          event: "cycle_start" as const,
+          cycle: "2026-08-18-cycle",
+        },
+        {
+          ts: "2026-08-18T07:44:00+09:00",
+          event: "delegate_start" as const,
+          challenge: "C-029",
+          repo: "board",
+          session_id: "s1",
+        },
+        {
+          ts: "2026-08-18T08:20:00+09:00",
+          event: "delegate_end" as const,
+          challenge: "C-029",
+          repo: "board",
+          session_id: "s1",
+          result: "完了",
+        },
+      ]);
+
+      // 最終活動（08:20 の delegate_end）から 31 分経過・実行中の子は無い。
+      const now = new Date("2026-08-18T08:51:00+09:00");
+      const result = deriveRuns(matched, now, 30);
+
+      const cycle = result.find((run) => run.kind === "cycle");
+      expect(cycle?.stale).toBe(true);
+      expect(cycle?.lastActivityAt).toBe("2026-08-18T08:20:00+09:00");
+      expect(deriveCycleStatus(result)).toBe("stale");
+    });
+
+    it("イベントが cycle_start だけなら従来どおり開始からの経過で stale になる", () => {
+      const matched = matchRuns([
+        {
+          ts: "2026-07-16T10:00:00+09:00",
+          event: "cycle_start" as const,
+          cycle: "2026-07-16-cycle",
+        },
+      ]);
+
+      const result = deriveRuns(
+        matched,
+        new Date("2026-07-16T10:31:00+09:00"),
+        30,
+      );
+
+      expect(result[0]?.stale).toBe(true);
+      expect(result[0]?.lastActivityAt).toBe("2026-07-16T10:00:00+09:00");
+    });
+
+    it("実行中の delegate が非 stale の間は cycle も stale にならない（heartbeat は delegate 開始以降にあるため）", () => {
+      const matched = matchRuns([
+        {
+          ts: "2026-07-16T10:00:00+09:00",
+          event: "cycle_start" as const,
+          cycle: "2026-07-16-cycle",
+        },
+        {
+          ts: "2026-07-16T10:25:00+09:00",
+          event: "delegate_start" as const,
+          challenge: "C-044",
+          repo: "net-config",
+          session_id: "s1",
+        },
+      ]);
+
+      // cycle 開始からは 35 分（しきい値 10 分を大きく超過）だが、最終活動
+      // （10:25 の delegate_start）からはちょうど 10 分でしきい値以下。
+      const result = deriveRuns(
+        matched,
+        new Date("2026-07-16T10:35:00+09:00"),
+        10,
+      );
+
+      expect(result.find((run) => run.kind === "delegate")?.stale).toBe(false);
+      expect(result.find((run) => run.kind === "cycle")?.stale).toBe(false);
+    });
+
+    it("実行中の delegate が stale になると cycle も stale になる（活動が途絶えた状態）", () => {
+      const matched = matchRuns([
+        {
+          ts: "2026-07-16T10:00:00+09:00",
+          event: "cycle_start" as const,
+          cycle: "2026-07-16-cycle",
+        },
+        {
+          ts: "2026-07-16T10:25:00+09:00",
+          event: "delegate_start" as const,
+          challenge: "C-044",
+          repo: "net-config",
+          session_id: "s1",
+        },
+      ]);
+
+      const result = deriveRuns(
+        matched,
+        new Date("2026-07-16T10:36:00+09:00"),
+        10,
+      );
+
+      expect(result.find((run) => run.kind === "delegate")?.stale).toBe(true);
+      expect(result.find((run) => run.kind === "cycle")?.stale).toBe(true);
+    });
+
+    it("cycle 開始より前のイベントは最終活動に数えない", () => {
+      const matched = matchRuns([
+        {
+          ts: "2026-07-16T09:00:00+09:00",
+          event: "adhoc_start" as const,
+          id: "adhoc-old",
+          title: "前サイクルの差し込み",
+        },
+        {
+          ts: "2026-07-16T09:10:00+09:00",
+          event: "adhoc_end" as const,
+          id: "adhoc-old",
+          result: "完了",
+        },
+        {
+          ts: "2026-07-16T10:00:00+09:00",
+          event: "cycle_start" as const,
+          cycle: "2026-07-16-cycle",
+        },
+      ]);
+
+      const result = deriveRuns(
+        matched,
+        new Date("2026-07-16T10:31:00+09:00"),
+        30,
+      );
+      const cycle = result.find((run) => run.kind === "cycle");
+
+      expect(cycle?.lastActivityAt).toBe("2026-07-16T10:00:00+09:00");
+      expect(cycle?.stale).toBe(true);
+    });
+
+    it("終了済みの cycle には lastActivityAt を付けない（stale も false のまま）", () => {
+      const matched = matchRuns([
+        {
+          ts: "2026-07-16T10:00:00+09:00",
+          event: "cycle_start" as const,
+          cycle: "2026-07-16-cycle",
+        },
+        {
+          ts: "2026-07-16T10:45:00+09:00",
+          event: "cycle_end" as const,
+          cycle: "2026-07-16-cycle",
+          result: "completed" as const,
+        },
+      ]);
+
+      const result = deriveRuns(
+        matched,
+        new Date("2026-07-16T20:00:00+09:00"),
+        30,
+      );
+
+      expect(result[0]?.stale).toBe(false);
+      expect(result[0]?.lastActivityAt).toBeUndefined();
+    });
+  });
+});
+
+describe("deriveCycleLastActivityAt", () => {
+  it("実行中の cycle が無ければ undefined", () => {
+    const runs = deriveRuns(
+      matchRuns([
+        {
+          ts: "2026-07-16T10:00:00+09:00",
+          event: "adhoc_start" as const,
+          id: "adhoc-1",
+          title: "調査",
+        },
+      ]),
+      new Date("2026-07-16T10:10:00+09:00"),
+      30,
+    );
+
+    expect(deriveCycleLastActivityAt(runs)).toBeUndefined();
+  });
+
+  it("実行中の cycle の最終活動時刻を返す", () => {
+    const runs = deriveRuns(
+      matchRuns([
+        {
+          ts: "2026-07-16T10:00:00+09:00",
+          event: "cycle_start" as const,
+          cycle: "2026-07-16-cycle",
+        },
+        {
+          ts: "2026-07-16T10:20:00+09:00",
+          event: "adhoc_start" as const,
+          id: "adhoc-1",
+          title: "調査",
+        },
+      ]),
+      new Date("2026-07-16T10:30:00+09:00"),
+      30,
+    );
+
+    expect(deriveCycleLastActivityAt(runs)).toBe("2026-07-16T10:20:00+09:00");
+  });
+
+  it("supersede された（新しい cycle_start が来た）古い cycle は対象にしない", () => {
+    const runs = deriveRuns(
+      matchRuns([
+        {
+          ts: "2026-07-16T10:00:00+09:00",
+          event: "cycle_start" as const,
+          cycle: "same-cycle",
+        },
+        {
+          ts: "2026-07-16T11:00:00+09:00",
+          event: "cycle_start" as const,
+          cycle: "same-cycle",
+        },
+      ]),
+      new Date("2026-07-16T11:10:00+09:00"),
+      30,
+    );
+
+    expect(deriveCycleLastActivityAt(runs)).toBe("2026-07-16T11:00:00+09:00");
+  });
 });
 
 describe("DEFAULT_STALE_MINUTES / resolveStaleMinutes", () => {
@@ -587,8 +836,8 @@ describe("DEFAULT_STALE_MINUTES / resolveStaleMinutes", () => {
     }
   });
 
-  it("デフォルトは30分", () => {
-    expect(DEFAULT_STALE_MINUTES).toBe(30);
+  it("デフォルトは60分（Issue #154 で 30 分から延長）", () => {
+    expect(DEFAULT_STALE_MINUTES).toBe(60);
   });
 
   it("引数優先", () => {

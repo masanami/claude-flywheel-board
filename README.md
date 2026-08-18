@@ -102,7 +102,7 @@ Windows 側ブラウザからは **`http://127.0.0.1:4317`**（WSL2 の localhos
 | --- | --- | --- |
 | Windows ブラウザから `http://127.0.0.1:4317` に繋がらない | WSL2 の localhost フォワーディングはスリープ復帰・VPN 接続後に壊れることがある（既知の癖） | PowerShell で `wsl --shutdown` → WSL を再起動 → board を再起動 |
 | ライブ反映されない（手動リロードでは最新が見える） | repo が `/mnt/` 配下にある | repo を Linux FS 側（`~/` 配下）へ移す（上記参照） |
-| スリープ復帰後に ⚠（応答なし）や stale が誤表示される | WSL2 はスリープ復帰後に時計がずれる既知問題があり、実行中 Run の経過時間判定（タイムスタンプ比較）が一時的に狂う | 時計の補正（まず `sudo hwclock -s` で Windows ホスト時刻に即時同期。直らなければ `wsl --shutdown`）で自己回復する。判定は毎回再計算のため補正後 1 分以内に表示も直る。board は表示のみで状態ファイルへ書き込まないため実害は無い |
+| スリープ復帰後に ⚠（更新なし）や stale が誤表示される | WSL2 はスリープ復帰後に時計がずれる既知問題があり、実行中 Run の経過時間判定（タイムスタンプ比較）が一時的に狂う | 時計の補正（まず `sudo hwclock -s` で Windows ホスト時刻に即時同期。直らなければ `wsl --shutdown`）で自己回復する。判定は毎回再計算のため補正後 1 分以内に表示も直る。board は表示のみで状態ファイルへ書き込まないため実害は無い |
 | `npm install` が node-pty のビルドで失敗する | `build-essential` / `python3` 不足 | `sudo apt install build-essential python3` |
 | chokidar が `ENOSPC: System limit for number of file watchers reached` を出す | ディストリによっては `fs.inotify.max_user_watches` が小さい（board 自体の消費は repo あたり約 5 watch と少なく、通常は他プロセスとの合算で到達する） | `sudo sysctl fs.inotify.max_user_watches=524288`。恒久化する場合は `/etc/sysctl.d/99-flywheel.conf` に `fs.inotify.max_user_watches=524288` を記載し、`sudo sysctl --system` で反映する |
 
@@ -119,5 +119,5 @@ Windows 側ブラウザからは **`http://127.0.0.1:4317`**（WSL2 の localhos
 
 - ✅ **P1 fleet ボード（観測）**: カラム表示・承認待ちハイライト・カード詳細/作業ログ・ライブ反映・パースエラー可視化
 - ✅ **P2 常設ターミナル（操縦）**: tmux 永続セッション・タブ切替・D&D/差し込み → 指示プリフィル
-- ✅ **P3 実行中パネル**: runs.jsonl 由来の実行中表示・⚠応答なし警告・再開コマンドの prefill 連携
+- ✅ **P3 実行中パネル**: runs.jsonl 由来の実行中表示・⚠更新なし警告・再開コマンドの prefill 連携
 - 📋 フォローアップ: [open issues](https://github.com/masanami/claude-flywheel-board/issues) を参照（キーボード操作性・バックプレッシャー・表示残骸・cache 責務分離）

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { Challenge, LogEntry, Run } from "../board-types.ts";
+import { formatLogTimestamp } from "../lib/format-log-ts.ts";
 import { END_EVENT_LABEL } from "../lib/provenance-labels.ts";
 import {
   buildResumeCommand,
@@ -12,7 +13,7 @@ type CardDetailModalProps = {
   agentName: string;
   onClose: () => void;
   // 対象エージェントの実行中 Run（AgentColumn → TaskCard → CardDetailModal と
-  // 中継される。#31・FR-12）。応答なし（stale）の delegate run が対象課題に
+  // 中継される。#31・FR-12）。更新なし（stale）の delegate run が対象課題に
   // 見つかった場合のみ、resumebox（再開コマンドの表示＋プリフィル導線）を出す。
   // FR-A1（取得元）の対象 run 特定にも同じ配列を参照する。
   runningRuns?: Run[];
@@ -71,7 +72,7 @@ export function CardDetailModal({
   // resumebox が示す run と異なる run の取得元を提示しうる。#85 の動機＝
   // 「どの記録を閉じれば表示が消えるか」を自明にするため、少なくとも resumebox
   // 表示中はその根拠と一致させる）。
-  // 注意: AgentColumn の「⚠ 応答なし」表示自体は run.stale のみで出るため、
+  // 注意: AgentColumn の「⚠ 更新なし」表示自体は run.stale のみで出るため、
   // repo/session_id が安全な文字集合から外れる等で resumebox が出ない stale
   // run（isResumableDelegateRun 不成立）の場合は、この優先規則の対象外となり
   // 従来どおり findProvenanceRun の先頭一致にフォールバックする。
@@ -232,6 +233,9 @@ export function CardDetailModal({
               <dt>イベント</dt>
               <dd>{provenance.event}</dd>
               <dt>ts</dt>
+              {/* 取得元の ts は runs.jsonl の該当行を人間が突き合わせるための
+               * 照合材料（#85 の動機）なので、作業ログ（#152 で分精度へ整形）
+               * とは違い秒・オフセットまで含めた生の値を表示し続ける。 */}
               <dd>{provenance.ts}</dd>
               <dt>キー</dt>
               <dd>{provenance.key}</dd>
@@ -270,7 +274,7 @@ export function CardDetailModal({
           <div className="resumebox" data-testid="resumebox">
             <p className="resumebox-heading">
               ⚠
-              応答なし（要確認）のセッションがあります。再開コマンドをタブに挿入できます
+              更新なし（要確認）のセッションがあります。再開コマンドをタブに挿入できます
             </p>
             <input
               type="text"
@@ -304,7 +308,11 @@ export function CardDetailModal({
             ) : (
               logState.entries.map((entry, index) => (
                 <div className="log-entry-row" key={`${entry.ts}-${index}`}>
-                  <span className="log-entry-ts">{entry.ts}</span>
+                  {/* 表示は分精度の短い形式（Issue #152）。完全な ts は title で
+                   * 参照できるようにし、データ層の値は無加工のまま保つ。 */}
+                  <span className="log-entry-ts" title={entry.ts}>
+                    {formatLogTimestamp(entry.ts)}
+                  </span>
                   <span className="log-source-badge" data-source={entry.source}>
                     {entry.source}
                   </span>

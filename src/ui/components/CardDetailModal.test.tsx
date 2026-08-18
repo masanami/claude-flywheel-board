@@ -8,12 +8,16 @@ import {
 import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Challenge, LogEntry, Run } from "../board-types.ts";
+import { formatLogTimestamp } from "../lib/format-log-ts.ts";
 import { prefill } from "../terminal-control.ts";
 import { CardDetailModal } from "./CardDetailModal.tsx";
 
 vi.mock("../terminal-control.ts", () => ({
   prefill: vi.fn(),
 }));
+
+// runs.jsonl 由来のフル ISO タイムスタンプ（表示整形の対象。Issue #152）。
+const TS = "2026-07-16T09:00:00Z";
 
 function challenge(overrides: Partial<Challenge> = {}): Challenge {
   return {
@@ -174,9 +178,7 @@ describe("CardDetailModal", () => {
       vi.fn().mockResolvedValue({
         ok: true,
         json: () =>
-          Promise.resolve([
-            logEntry({ ts: "2026-07-16T09:00:00Z", text: "着手中 → 検証中" }),
-          ]),
+          Promise.resolve([logEntry({ ts: TS, text: "着手中 → 検証中" })]),
       }),
     );
 
@@ -189,9 +191,45 @@ describe("CardDetailModal", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("2026-07-16T09:00:00Z")).toBeInTheDocument();
+      expect(screen.getByText(formatLogTimestamp(TS))).toBeInTheDocument();
     });
     expect(screen.getByText("着手中 → 検証中")).toBeInTheDocument();
+  });
+
+  it("作業ログのタイムスタンプは分精度で表示し、完全な ts は title 属性に残す（Issue #152）", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve([
+            logEntry({ ts: TS, text: "着手中 → 検証中" }),
+            // journal 由来の日付のみ ts はそのまま表示される。
+            logEntry({ ts: "2026-07-16", text: "検証中 → 完了" }),
+          ]),
+      }),
+    );
+
+    const { container } = render(
+      <CardDetailModal
+        challenge={challenge()}
+        agentName="medical"
+        onClose={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(container.querySelectorAll(".log-entry-ts")).toHaveLength(2);
+    });
+    const [first, second] = Array.from(
+      container.querySelectorAll(".log-entry-ts"),
+    );
+    // ISO 生文字列（秒・オフセットつき）は表示されない
+    expect(first?.textContent).toBe(formatLogTimestamp(TS));
+    expect(first?.textContent).not.toBe(TS);
+    expect(first?.textContent).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+    expect(first).toHaveAttribute("title", TS);
+    expect(second?.textContent).toBe("2026-07-16");
   });
 
   it("source バッジは data-source 属性で journal / ledger / runs を出し分ける", async () => {
@@ -376,7 +414,7 @@ describe("CardDetailModal", () => {
       ).toBeInTheDocument();
     });
 
-    it("resumebox の見出し文言は「応答なし（要確認）」に統一されている（feature doc の表記統一。stale は data 属性/内部名にのみ残す）", () => {
+    it("resumebox の見出し文言は「更新なし（要確認）」に統一されている（Issue #154 で断定表現「応答なし」から変更。stale は data 属性/内部名にのみ残す）", () => {
       vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
 
       render(
@@ -390,7 +428,7 @@ describe("CardDetailModal", () => {
 
       expect(
         screen.getByText(
-          "⚠ 応答なし（要確認）のセッションがあります。再開コマンドをタブに挿入できます",
+          "⚠ 更新なし（要確認）のセッションがあります。再開コマンドをタブに挿入できます",
         ),
       ).toBeInTheDocument();
     });

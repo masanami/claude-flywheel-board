@@ -1,9 +1,13 @@
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { createMemoryBoardCache, sortChallenges } from "./cache.ts";
 import type { JournalEntry } from "./parsers/journal.ts";
 import type { Challenge } from "./parsers/ledger.ts";
 import type { MatchedRun, RunEvent, SourcedRunEvent } from "./parsers/runs.ts";
-import { matchRuns } from "./parsers/runs.ts";
+import { matchRuns, parseRuns } from "./parsers/runs.ts";
+
+const runsFixture = (name: string) =>
+  fileURLToPath(new URL(`../../tests/fixtures/runs/${name}`, import.meta.url));
 
 function challenge(
   overrides: Partial<Challenge> & Pick<Challenge, "id">,
@@ -569,7 +573,72 @@ describe("createMemoryBoardCache", () => {
       expect(snapshot.agents[0]?.runningRuns).toEqual([]);
     });
 
-    it("createMemoryBoardCache({ staleMinutes }) が既定30分を上書きする", () => {
+    it("長時間サイクルでもサイクル内に活動があれば cycleStatus は running のまま（Issue #154 の誤検知解消・実フィクスチャ）", async () => {
+      const { events, errors } = await parseRuns(
+        runsFixture("long-cycle-with-activity.jsonl"),
+      );
+      expect(errors).toEqual([]);
+
+      const cache = createMemoryBoardCache({ staleMinutes: 30 });
+      cache.replaceAgent({
+        name: "rupert",
+        path: "/agents/rupert",
+        challenges: [],
+        parseErrors: [],
+      });
+      cache.replaceRuns("rupert", matchRuns(events));
+
+      // cycle 開始（07:36）から 82 分経過。従来は cycle_start 起点の判定で
+      // stale になっていたが、最終活動（08:32 の delegate_start）からは 26 分。
+      const snapshot = cache.getSnapshot(new Date("2026-08-18T08:58:00+09:00"));
+      const agent = snapshot.agents[0];
+
+      expect(agent?.cycleStatus).toBe("running");
+      expect(agent?.cycleLastActivityAt).toBe("2026-08-18T08:32:00+09:00");
+      // 実行中の delegate は 1 件（08:32 開始・26 分経過で非 stale）だけ残る。
+      expect(agent?.runningRuns).toHaveLength(1);
+      expect(agent?.runningRuns[0]?.challenge).toBe("C-030");
+      expect(agent?.runningRuns[0]?.stale).toBe(false);
+    });
+
+    it("活動が途絶えたエージェントは引き続き stale と cycleLastActivityAt を返す（Issue #154 の完了条件2・実フィクスチャ）", async () => {
+      const { events } = await parseRuns(
+        runsFixture("long-cycle-with-activity.jsonl"),
+      );
+
+      const cache = createMemoryBoardCache({ staleMinutes: 30 });
+      cache.replaceAgent({
+        name: "rupert",
+        path: "/agents/rupert",
+        challenges: [],
+        parseErrors: [],
+      });
+      cache.replaceRuns("rupert", matchRuns(events));
+
+      // 最終活動（08:32）から 31 分経過。実行中 delegate も stale 化している。
+      const snapshot = cache.getSnapshot(new Date("2026-08-18T09:03:00+09:00"));
+      const agent = snapshot.agents[0];
+
+      expect(agent?.cycleStatus).toBe("stale");
+      expect(agent?.cycleLastActivityAt).toBe("2026-08-18T08:32:00+09:00");
+      expect(agent?.runningRuns[0]?.stale).toBe(true);
+    });
+
+    it("実行中の cycle が無ければ cycleLastActivityAt は undefined", () => {
+      const cache = createMemoryBoardCache({ staleMinutes: 30 });
+      cache.replaceAgent({
+        name: "medical",
+        path: "/agents/medical-agent",
+        challenges: [],
+        parseErrors: [],
+      });
+
+      const snapshot = cache.getSnapshot(new Date("2026-07-16T10:00:00Z"));
+
+      expect(snapshot.agents[0]?.cycleLastActivityAt).toBeUndefined();
+    });
+
+    it("createMemoryBoardCache({ staleMinutes }) が既定60分を上書きする", () => {
       const cache = createMemoryBoardCache({ staleMinutes: 5 });
       cache.replaceAgent({
         name: "medical",
@@ -585,7 +654,7 @@ describe("createMemoryBoardCache", () => {
         }),
       ]);
 
-      // 10分経過: 既定30分なら running のはずだが staleMinutes: 5 のため stale になる
+      // 10分経過: 既定60分なら running のはずだが staleMinutes: 5 のため stale になる
       const snapshot = cache.getSnapshot(new Date("2026-07-16T10:10:00+09:00"));
 
       expect(snapshot.agents[0]?.cycleStatus).toBe("stale");
@@ -596,7 +665,7 @@ describe("createMemoryBoardCache", () => {
       ["負数", -5],
       ["NaN", Number.NaN],
     ])(
-      "createMemoryBoardCache({ staleMinutes: 不正値（%s） }) は既定30分にフォールバックする",
+      "createMemoryBoardCache({ staleMinutes: 不正値（%s） }) は既定60分にフォールバックする",
       (_label, invalidStaleMinutes) => {
         const cache = createMemoryBoardCache({
           staleMinutes: invalidStaleMinutes,
@@ -615,7 +684,7 @@ describe("createMemoryBoardCache", () => {
           }),
         ]);
 
-        // 10分経過: 不正値は既定30分にフォールバックされるはずなので running のまま
+        // 10分経過: 不正値は既定60分にフォールバックされるはずなので running のまま
         const snapshot = cache.getSnapshot(
           new Date("2026-07-16T10:10:00+09:00"),
         );

@@ -4,6 +4,7 @@ import type { Challenge } from "./parsers/ledger.ts";
 import type { PriorityPolicy } from "./parsers/priority-policy.ts";
 import type { AgentCycleStatus, MatchedRun, Run } from "./parsers/runs.ts";
 import {
+  deriveCycleLastActivityAt,
   deriveCycleStatus,
   deriveRunLogEntries,
   deriveRunningRuns,
@@ -37,6 +38,12 @@ export type AgentBoard = {
   // デフォルト値を追加したため、必須フィールドとして扱えるようになった
   // （実行時は getSnapshot が必ず両方とも埋めて返す。型と実態を一致させる）。
   cycleStatus: AgentCycleStatus;
+  /**
+   * 実行中の cycle の最終活動時刻（heartbeat。Issue #154）。cycleStatus が
+   * "stale" のとき、UI が「最後の記録からどれだけ経ったか」を表示するために使う。
+   * 実行中の cycle が無い（idle）エージェントでは undefined。
+   */
+  cycleLastActivityAt?: string;
   /** kind: "delegate" | "adhoc" の実行中 Run のみ（cycle は cycleStatus 側で表現するため除外）。 */
   runningRuns: Run[];
   /**
@@ -133,7 +140,10 @@ export type MemoryBoardCacheOptions = {
 };
 
 // getSnapshot の内部保持用。cycleStatus/runningRuns は都度算出するため保持しない。
-type StoredAgentBoard = Omit<AgentBoard, "cycleStatus" | "runningRuns">;
+type StoredAgentBoard = Omit<
+  AgentBoard,
+  "cycleStatus" | "cycleLastActivityAt" | "runningRuns"
+>;
 
 export function createMemoryBoardCache(
   options: MemoryBoardCacheOptions = {},
@@ -194,6 +204,7 @@ export function createMemoryBoardCache(
           return {
             ...agent,
             cycleStatus: deriveCycleStatus(derived),
+            cycleLastActivityAt: deriveCycleLastActivityAt(derived),
             runningRuns: deriveRunningRuns(derived),
           };
         }),
