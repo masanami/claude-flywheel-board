@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { Challenge, LogEntry, Run } from "../board-types.ts";
+import { formatLogTimestamp } from "../lib/format-log-ts.ts";
 import { END_EVENT_LABEL } from "../lib/provenance-labels.ts";
 import {
   buildResumeCommand,
@@ -232,6 +233,9 @@ export function CardDetailModal({
               <dt>イベント</dt>
               <dd>{provenance.event}</dd>
               <dt>ts</dt>
+              {/* 取得元の ts は runs.jsonl の該当行を人間が突き合わせるための
+               * 照合材料（#85 の動機）なので、作業ログ（#152 で分精度へ整形）
+               * とは違い秒・オフセットまで含めた生の値を表示し続ける。 */}
               <dd>{provenance.ts}</dd>
               <dt>キー</dt>
               <dd>{provenance.key}</dd>
@@ -304,7 +308,11 @@ export function CardDetailModal({
             ) : (
               logState.entries.map((entry, index) => (
                 <div className="log-entry-row" key={`${entry.ts}-${index}`}>
-                  <span className="log-entry-ts">{entry.ts}</span>
+                  {/* 表示は分精度の短い形式（Issue #152）。完全な ts は title で
+                   * 参照できるようにし、データ層の値は無加工のまま保つ。 */}
+                  <span className="log-entry-ts" title={entry.ts}>
+                    {formatLogTimestamp(entry.ts)}
+                  </span>
                   <span className="log-source-badge" data-source={entry.source}>
                     {entry.source}
                   </span>
