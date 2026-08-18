@@ -12,7 +12,7 @@ type CardDetailModalProps = {
   agentName: string;
   onClose: () => void;
   // 対象エージェントの実行中 Run（AgentColumn → TaskCard → CardDetailModal と
-  // 中継される。#31・FR-12）。応答なし（stale）の delegate run が対象課題に
+  // 中継される。#31・FR-12）。更新なし（stale）の delegate run が対象課題に
   // 見つかった場合のみ、resumebox（再開コマンドの表示＋プリフィル導線）を出す。
   // FR-A1（取得元）の対象 run 特定にも同じ配列を参照する。
   runningRuns?: Run[];
@@ -71,7 +71,7 @@ export function CardDetailModal({
   // resumebox が示す run と異なる run の取得元を提示しうる。#85 の動機＝
   // 「どの記録を閉じれば表示が消えるか」を自明にするため、少なくとも resumebox
   // 表示中はその根拠と一致させる）。
-  // 注意: AgentColumn の「⚠ 応答なし」表示自体は run.stale のみで出るため、
+  // 注意: AgentColumn の「⚠ 更新なし」表示自体は run.stale のみで出るため、
   // repo/session_id が安全な文字集合から外れる等で resumebox が出ない stale
   // run（isResumableDelegateRun 不成立）の場合は、この優先規則の対象外となり
   // 従来どおり findProvenanceRun の先頭一致にフォールバックする。
@@ -270,7 +270,7 @@ export function CardDetailModal({
           <div className="resumebox" data-testid="resumebox">
             <p className="resumebox-heading">
               ⚠
-              応答なし（要確認）のセッションがあります。再開コマンドをタブに挿入できます
+              更新なし（要確認）のセッションがあります。再開コマンドをタブに挿入できます
             </p>
             <input
               type="text"

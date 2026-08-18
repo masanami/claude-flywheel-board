@@ -31,6 +31,15 @@ export type StaleReevaluationOptions = {
 function computeAgentSignature(agent: AgentBoard, nowMs: number): string {
   return JSON.stringify({
     cycleStatus: agent.cycleStatus,
+    // stale な cycle はヘッダに最終活動からの経過時間を出す（Issue #154）ため、
+    // runningRuns と同様に経過分バケットを署名へ含めて分ごとに push させる。
+    // stale でない間は表示に経過時間が出ないので含めない（無駄な push を避ける）。
+    cycleStaleMinutes:
+      agent.cycleStatus === "stale" && agent.cycleLastActivityAt !== undefined
+        ? Math.floor(
+            computeElapsedMs(agent.cycleLastActivityAt, nowMs) / 60_000,
+          )
+        : null,
     runningRuns: (agent.runningRuns ?? []).map((run) => ({
       kind: run.kind,
       key: run.key,

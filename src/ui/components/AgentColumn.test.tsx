@@ -615,15 +615,47 @@ describe("AgentColumn", () => {
       expect(screen.getByText("idle")).toBeInTheDocument();
     });
 
-    it('cycleStatus が stale のとき「⚠ 応答なし」を data-cycle-status="stale" で表示する', () => {
+    it('cycleStatus が stale のとき「⚠ 更新なし」を data-cycle-status="stale" で表示する（Issue #154: 断定表現「応答なし」からの変更）', () => {
       render(<AgentColumn agent={agentBoard({ cycleStatus: "stale" })} />);
 
-      const status = screen.getByText("⚠ 応答なし");
+      const status = screen.getByText("⚠ 更新なし");
       expect(status).toBeInTheDocument();
       expect(status.closest("[data-cycle-status]")).toHaveAttribute(
         "data-cycle-status",
         "stale",
       );
+    });
+
+    it("cycleStatus が stale かつ cycleLastActivityAt があれば最終活動からの経過時間を併記する（Issue #154）", () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date("2026-07-16T11:05:00.000Z"));
+        render(
+          <AgentColumn
+            agent={agentBoard({
+              cycleStatus: "stale",
+              cycleLastActivityAt: "2026-07-16T09:00:00.000Z",
+            })}
+          />,
+        );
+
+        expect(screen.getByText("⚠ 更新なし（2時間5分）")).toBeInTheDocument();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("cycleStatus が stale 以外なら cycleLastActivityAt があっても経過時間を出さない（Issue #154）", () => {
+      render(
+        <AgentColumn
+          agent={agentBoard({
+            cycleStatus: "running",
+            cycleLastActivityAt: "2026-07-16T09:00:00.000Z",
+          })}
+        />,
+      );
+
+      expect(screen.getByText("サイクル実行中")).toBeInTheDocument();
     });
   });
 
@@ -792,7 +824,7 @@ describe("AgentColumn", () => {
       expect(screen.getByText("40分")).toBeInTheDocument();
     });
 
-    it("stale な Run は「応答なし（要確認）」で強調表示する", () => {
+    it("stale な Run は「更新なし（要確認）」で強調表示する（Issue #154: 断定表現「応答なし」からの変更）", () => {
       render(
         <AgentColumn
           agent={agentBoard({
@@ -809,10 +841,10 @@ describe("AgentColumn", () => {
         />,
       );
 
-      expect(screen.getByText(/応答なし（要確認）/)).toBeInTheDocument();
+      expect(screen.getByText(/更新なし（要確認）/)).toBeInTheDocument();
     });
 
-    it("stale ではない Run には「応答なし」の警告が表示されない", () => {
+    it("stale ではない Run には「更新なし」の警告が表示されない", () => {
       render(
         <AgentColumn
           agent={agentBoard({
@@ -829,7 +861,7 @@ describe("AgentColumn", () => {
         />,
       );
 
-      expect(screen.queryByText(/応答なし/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/更新なし/)).not.toBeInTheDocument();
     });
   });
 

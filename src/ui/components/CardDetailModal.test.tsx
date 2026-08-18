@@ -376,7 +376,7 @@ describe("CardDetailModal", () => {
       ).toBeInTheDocument();
     });
 
-    it("resumebox の見出し文言は「応答なし（要確認）」に統一されている（feature doc の表記統一。stale は data 属性/内部名にのみ残す）", () => {
+    it("resumebox の見出し文言は「更新なし（要確認）」に統一されている（Issue #154 で断定表現「応答なし」から変更。stale は data 属性/内部名にのみ残す）", () => {
       vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
 
       render(
@@ -390,7 +390,7 @@ describe("CardDetailModal", () => {
 
       expect(
         screen.getByText(
-          "⚠ 応答なし（要確認）のセッションがあります。再開コマンドをタブに挿入できます",
+          "⚠ 更新なし（要確認）のセッションがあります。再開コマンドをタブに挿入できます",
         ),
       ).toBeInTheDocument();
     });

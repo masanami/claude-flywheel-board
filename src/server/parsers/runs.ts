@@ -544,7 +544,15 @@ export function matchRuns(events: RunEvent[]): MatchedRun[] {
   return order;
 }
 
-export type Run = MatchedRun & { stale: boolean };
+export type Run = MatchedRun & {
+  stale: boolean;
+  /**
+   * kind: "cycle" かつ未終了（endedAt 未設定）の Run にのみ付与する「最終活動時刻」
+   * （heartbeat。Issue #154）。cycle の stale 判定はこの時刻からの経過で行う
+   * （開始からの経過ではない）。それ以外の Run では常に undefined。
+   */
+  lastActivityAt?: string;
+};
 
 /**
  * startedAt（ISO 8601）から nowMs 時点までの経過ミリ秒を計算する共有ヘルパー。
@@ -557,20 +565,93 @@ export function computeElapsedMs(startedAt: string, nowMs: number): number {
 }
 
 /**
+ * 未終了の cycle Run について「最終活動時刻」（heartbeat）を求める（Issue #154）。
+ *
+ * cycle の startedAt 以降に記録された全イベントの ts（他の Run の startedAt /
+ * endedAt。delegate_start/delegate_end/adhoc_start/adhoc_end 由来）のうち最新の
+ * ものを返す。該当が無ければ cycle 自身の startedAt（＝サイクル開始が最後の
+ * 活動）を返すため、戻り値は常に定義される。
+ *
+ * MatchedRun[] のみを素材にする（生イベント列を受け取らない）のは、start/end の
+ * ts が MatchedRun に保存されており runs.jsonl の全イベントの ts を復元できる
+ * ため。deriveRuns の呼び出し側（cache.getSnapshot）へ生イベントを配線する
+ * 必要が無く、既存の責務分担（parser は素材・cache は格納）を保てる。
+ */
+function computeCycleLastActivityAt(
+  cycle: MatchedRun,
+  matched: MatchedRun[],
+): string {
+  const cycleStartMs = Date.parse(cycle.startedAt);
+  let latestAt = cycle.startedAt;
+  let latestMs = cycleStartMs;
+  for (const run of matched) {
+    for (const ts of [run.startedAt, run.endedAt]) {
+      if (ts === undefined) continue;
+      const tsMs = Date.parse(ts);
+      if (tsMs >= cycleStartMs && tsMs > latestMs) {
+        latestAt = ts;
+        latestMs = tsMs;
+      }
+    }
+  }
+  return latestAt;
+}
+
+/**
  * stale を付与する純粋関数。now を引数で受け取ることでテストが時刻を Mock
- * できるようにする（実行中 かつ 経過時間 > しきい値 なら stale）。
+ * できるようにする。判定の起点は kind によって異なる（Issue #154）:
+ *
+ * - delegate / adhoc: 実行中（endedAt 未設定）かつ **開始からの経過** がしきい値超過。
+ *   委譲・差し込みは「開始したまま終了記録が来ない」ことが異常のサインであり、
+ *   従来どおりの判定を維持する。
+ * - cycle: 実行中かつ **最終活動（heartbeat）からの経過** がしきい値超過、かつ
+ *   実行中の非 stale な delegate/adhoc が 1 つも無いとき。run-cycle の 1 周は
+ *   委譲を含めると数時間に及ぶのが正常であり、開始からの経過で判定すると
+ *   正常稼働中のエージェントが恒常的に stale になるため（誤検知の解消）。
  */
 export function deriveRuns(
   matched: MatchedRun[],
   now: Date,
   staleMinutes: number,
 ): Run[] {
+  const nowMs = now.getTime();
+  const thresholdMs = staleMinutes * 60_000;
+
+  const isOpenAndStale = (run: MatchedRun): boolean =>
+    run.endedAt === undefined &&
+    computeElapsedMs(run.startedAt, nowMs) > thresholdMs;
+
+  // 実行中（かつ supersede されていない）非 stale な delegate/adhoc が 1 つでも
+  // あれば、少なくとも子の見込み時間内はエージェントが生きているとみなし、
+  // cycle を stale にしない（Issue #154 の対応方針）。
+  //
+  // 現行のしきい値共有（cycle と delegate/adhoc が同じ staleMinutes）の下では、
+  // このガードは heartbeat 判定に含意されており単独では発火しない
+  // （子の startedAt は heartbeat の候補に入るので heartbeat >= 子の開始 →
+  // 「子が非 stale」なら必ず「heartbeat からの経過もしきい値以下」になる）。
+  // それでも明示的に残すのは、#154 の人間指示で挙がっている「kind 別しきい値の
+  // 分離」（例: delegate だけ 180 分）を入れた瞬間にこの条件が効き始める
+  // ＝長時間の委譲中にサイクルを緑のまま保つ役割を担うため。意図した規則を
+  // コード上に残しておく。
+  const hasLiveChildRun = matched.some(
+    (run) =>
+      run.kind !== "cycle" &&
+      run.endedAt === undefined &&
+      !run.superseded &&
+      !isOpenAndStale(run),
+  );
+
   return matched.map((run) => {
     if (run.endedAt !== undefined) {
       return { ...run, stale: false };
     }
-    const elapsedMs = computeElapsedMs(run.startedAt, now.getTime());
-    return { ...run, stale: elapsedMs > staleMinutes * 60_000 };
+    if (run.kind !== "cycle") {
+      return { ...run, stale: isOpenAndStale(run) };
+    }
+    const lastActivityAt = computeCycleLastActivityAt(run, matched);
+    const stale =
+      !hasLiveChildRun && computeElapsedMs(lastActivityAt, nowMs) > thresholdMs;
+    return { ...run, stale, lastActivityAt };
   });
 }
 
@@ -593,6 +674,29 @@ export function deriveCycleStatus(runs: Run[]): AgentCycleStatus {
 }
 
 /**
+ * 実行中（open）な cycle Run の最終活動時刻（heartbeat。Issue #154）を返す。
+ * cycleStatus が "stale" のときの経過時間表示（UI のカラムヘッダ）に使う。
+ * 実行中の cycle が無ければ undefined。複数ある（通常は supersede されるため
+ * 起きない）場合は最も新しい最終活動時刻を返す。
+ */
+export function deriveCycleLastActivityAt(runs: Run[]): string | undefined {
+  let latestAt: string | undefined;
+  for (const run of runs) {
+    if (run.kind !== "cycle" || run.endedAt !== undefined || run.superseded) {
+      continue;
+    }
+    if (run.lastActivityAt === undefined) continue;
+    if (
+      latestAt === undefined ||
+      Date.parse(run.lastActivityAt) > Date.parse(latestAt)
+    ) {
+      latestAt = run.lastActivityAt;
+    }
+  }
+  return latestAt;
+}
+
+/**
  * runs.jsonl 由来の Run[] から、実行中の delegate/adhoc Run のみを導出する
  * 純粋関数（cache.ts から移設。cycle は cycleStatus 側で表現するため除外）。
  */
@@ -603,7 +707,11 @@ export function deriveRunningRuns(runs: Run[]): Run[] {
   );
 }
 
-export const DEFAULT_STALE_MINUTES = 30;
+// 既定 60 分（Issue #154 の人間指示。従来 30 分）。cycle は heartbeat 起点・
+// delegate/adhoc は開始起点と判定の起点が異なるが、しきい値は 1 つを共有する
+// （kind 別 override は運用実績が出るまで持たない＝YAGNI。必要になったら
+// resolveStaleMinutes に kind 引数を足す形で拡張できる）。
+export const DEFAULT_STALE_MINUTES = 60;
 const STALE_MINUTES_ENV_KEY = "FLYWHEEL_BOARD_STALE_MINUTES";
 
 /**

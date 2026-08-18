@@ -75,7 +75,7 @@ infra	/Users/masami/agents/infra-agent
 - 主なエンティティ: `agents`（マニフェスト由来）/ `challenges`（台帳由来）/ `runs`（runs.jsonl 由来）/ `cycles`（journal 由来）/ `parse_errors`。
 - **複合キーの原則**: 正本はエージェント repo ごとに分散しており、課題 ID（例 `C-044`）は**エージェント内でのみ一意**。キャッシュ・API・UI は常に `(agent, challenge-id)` の複合キーで扱い、fleet 横断の集計でも ID 単独をキーにしない。
 - **SQLite への移行トリガー**: キャッシュはインターフェース分離し（実装は cache モジュールに閉じる）、次のいずれかが現実になったら SQLite（キャッシュ用途・正本は変わらずファイル）へ差し替える — ①journal タイムライン（AO-05/P4）での履歴横断検索・ページング、②エージェント数・履歴増で起動フルスキャンやメモリが問題化、③全文検索の要求。それまではメモリを維持する。
-- 実行中の導出: `runs` のうち start があり対応する end がないもの。経過時間がしきい値（§7 AO-02）を超えたら `stale`（応答なし・要確認）フラグを付ける（FR-05）。
+- 実行中の導出: `runs` のうち start があり対応する end がないもの。経過時間がしきい値（§7 AO-02）を超えたら `stale`（更新なし・要確認）フラグを付ける（FR-05）。**cycle だけは起点が異なり、開始からではなく最終活動（サイクル開始以降の最新イベント ts＝heartbeat）からの経過で判定する**（Issue #154。委譲を含む 1 周は数時間に及ぶのが正常なため）。
 
 ### 3.4 Web UI（ボード）
 
@@ -83,7 +83,7 @@ infra	/Users/masami/agents/infra-agent
 
 | 位置 | 内容 | 出所 |
 | --- | --- | --- |
-| ヘッダ | エージェント名／サイクル状態（実行中・idle・⚠応答なし）／＋差し込み | runs.jsonl（cycle_start/end） |
+| ヘッダ | エージェント名／サイクル状態（実行中・idle・⚠更新なし）／＋差し込み | runs.jsonl（cycle_start/end） |
 | 1 段目 | 実行中: 課題 ID・委譲先 repo・経過時間（stale は ⚠＋再開ボタン） | runs.jsonl（delegate_start/end） |
 | 2 段目 | 🔔 承認待ち: `計画承認待ち` / `完了確認待ち` のカード（ハイライト） | challenge-ledger.md |
 | 3 段目 | スタック: 残りの課題カードを**優先度順**（位置＝優先度） | challenge-ledger.md |
@@ -91,7 +91,7 @@ infra	/Users/masami/agents/infra-agent
 
 - カードは「タイトル＋メタ 1 行（ID・ステータス・ポジション）」の軽量表示。**ホバーで直近の作業要約、クリックで詳細モーダル**（台帳全項目＋作業ログタイムライン。journal / runs を課題 ID で突き合わせ・読み取り専用）（FR-08）。
 - fleet 横断フィルタ（「承認待ちのみ」等）はヘッダ上部のグローバルバーに置く（FR-04）。
-- **カードに状態を変えるボタンは置かない**（NFR-01）。唯一の操作は ⚠応答なしカード（と詳細モーダル）の「再開コマンドを挿入」＝プリフィルのみ（FR-12）。
+- **カードに状態を変えるボタンは置かない**（NFR-01）。唯一の操作は ⚠更新なしカード（と詳細モーダル）の「再開コマンドを挿入」＝プリフィルのみ（FR-12）。
 - スタックのカード D&D 並べ替え・差し込みゴーストの位置指定は、**エージェントへの指示文としてターミナルにプリフィル**される（FR-09。§3.5）。board が台帳を書くことはなく、台帳が実際に更新されれば fs-watch でカードが移動する。
 
 ### 3.5 ターミナルブリッジ
@@ -102,7 +102,7 @@ infra	/Users/masami/agents/infra-agent
 - **ソケット隔離**（#55）: board が発行する全 tmux コマンド（has-session / new-session / set-option / send-keys / attach）は、デフォルトソケットではなく **専用ソケット `-L board`** 上でのみ実行する（`src/server/pty/tmux.ts` の `TMUX_SOCKET` 定数）。board を独立した tmux サーバに閉じ込めることで、`set-option -g escape-time 0` 等の board 側設定がユーザーの他の tmux 利用に波及しないようにする。#57 で追加する `-shell` セッションも同じソケット上に作成すること（1箇所でも付け忘れると has-session がセッションを見失う split-brain になる）。
 - **配置**: 画面下部を占有する**常設領域**。エージェントごとの**タブ**で切り替え、折りたたみ・高さ調整ができる（FR-10）。各タブは**左=エージェント対話 / 右=手動シェルの常時2分割**（スプリッターで比率変更・#57）。「開く」ボタンは置かない — カード・カラム起点の操作はすべて「該当タブをアクティブにしてプリフィル」に翻訳される。
 - **UI 動線**:
-  - ⚠応答なしカード／カード詳細 →「再開コマンドを挿入」: journal / runs.jsonl の session_id から `cd .flywheel/repos/<name> && claude -p --resume <session-id>` を該当タブに**プリフィル**（実行はしない。Enter は人間が押す）（FR-12）。
+  - ⚠更新なしカード／カード詳細 →「再開コマンドを挿入」: journal / runs.jsonl の session_id から `cd .flywheel/repos/<name> && claude -p --resume <session-id>` を該当タブに**プリフィル**（実行はしない。Enter は人間が押す）（FR-12）。
   - カラムの「＋差し込み」: スタック先頭にゴーストカードを置き、内容入力＋ドラッグで挿入位置（＝優先度）を指定 → 「台帳への追加指示」を該当タブにプリフィル（FR-09/13）。
   - スタックのカード D&D 並べ替え → 「優先度変更の指示」を該当タブにプリフィル（FR-09）。
   - 承認: 承認待ちカードで気づき、該当タブの対話で伝える（FR-20。カードに承認操作は置かない）。
@@ -116,7 +116,7 @@ infra	/Users/masami/agents/infra-agent
 | ソース | パス（エージェント repo 相対） | 仕様の正本 | board での用途 |
 | --- | --- | --- | --- |
 | 課題台帳 | `challenge-ledger.md` | `challenge-ledger-format.md`（仕様化済み） | タスクカード・承認待ち（FR-03/04） |
-| 実行イベント | `.flywheel/runs.jsonl` | **仕様化済み: `templates/runtime/README.md`**（claude-flywheel PR #45） | 実行中・応答なし検知（FR-05）、resume 連携（FR-12）、差し込みの可視化（FR-13） |
+| 実行イベント | `.flywheel/runs.jsonl` | **仕様化済み: `templates/runtime/README.md`**（claude-flywheel PR #45） | 実行中・更新なし検知（FR-05）、resume 連携（FR-12）、差し込みの可視化（FR-13） |
 | サイクル履歴 | `journal/index.jsonl` | `templates/journal/README.md`（仕様化済み） | カードのホバー要約・作業ログタイムライン（FR-08）、サイクル状態の補完 |
 | 優先度方針 | `priority-policy.md` | **仕様化済み: claude-flywheel `masanami/claude-flywheel#75` / PR #76 `templates/priority-policy.md`**（2026-08-09 マージ済み。フォーマットが変わった場合は board 側パーサ `src/server/parsers/priority-policy.ts` の追従が必要） | カラムヘッダのアクティブモードバッジ（Issue #135）。§4.2 の working tree 限定の注意点を参照 |
 
@@ -153,7 +153,7 @@ flowchart TD
     ui --> watch
 ```
 
-### 5.2 介入（応答なしセッションへの再開）
+### 5.2 介入（更新なしセッションへの再開）
 
 1. runs.jsonl の `delegate_start` に対応する `delegate_end` がなく、経過がしきい値超過 → カードに ⚠ 表示（FR-05）。
 2. 人間がカードの「再開コマンドを挿入」を押す → 該当エージェントのターミナルタブがアクティブになり、`cd 委譲先クローン && claude -p --resume <session-id>` がプリフィルされる（FR-12）。
@@ -188,7 +188,7 @@ flowchart TD
 ## 7. 未決事項（AO）
 
 - ~~**AO-01**~~ **確定**: fleet マニフェストは `~/.flywheel/fleet.tsv`・`<name>\t<path>` の 2 列＋`#` コメントのみ（§3.1 の通り）。表示名・アイコン等の追加属性は YAGNI で見送り、必要になったら列追加で対応。requirements.md OQ-01。
-- ~~**AO-02**~~ **確定**: 「応答なし」しきい値は既定 30 分・全体一律。起動引数 / 環境変数で変更可能。エージェントごとの個別指定は必要になったらマニフェスト拡張で対応。requirements.md OQ-02。
+- ~~**AO-02**~~ **確定**: 「更新なし」しきい値は既定 60 分・全体一律（kind 別の分離はしない。Issue #154 で 30 分から延長）。起動引数 / 環境変数で変更可能。エージェントごとの個別指定は必要になったらマニフェスト拡張で対応。requirements.md OQ-02。
 - ~~**AO-03**~~ **確定**: 技術スタックは §6 の通り確定。
 - ~~**AO-04**~~ **クローズ**（2026-07-16）: runs.jsonl 仕様は claude-flywheel PR #45 で確定。§4.1 を正本参照に差し替え済み。P3 の残依存は P2 のみ。
 - **AO-05**: journal タイムライン（P4 候補）。requirements.md OQ-03。
