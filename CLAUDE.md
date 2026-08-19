@@ -94,7 +94,9 @@ claude-flywheel の fleet（複数の自律エージェント）を 1 画面で�
   レビュー時は「board のコードに台帳・journal・memory・runs.jsonl への Write/Edit が
   紛れ込んでいないか」を最優先で確認する
 - フォーマットの正本は claude-flywheel 側（NFR-05）。契約物（schemas/fixtures）は
-  tests/fixtures/contracts/ へ vendoring 済みで、npm test が上流とのズレを検査する。
+  tests/fixtures/contracts/ へ vendoring 済み。npm test は**複製の自己検査を常に**行い、
+  **上流とのズレ検査は上流 repo が手元にあるときだけ**行う（無いときは pass ではなく
+  理由つき skip として結果に残る。詳細は tests/fixtures/contracts/VENDORING.md）。
   **落ちたテストの期待値を書き換えて通さない**（board の読み取りが契約とズレているなら board 側の欠陥）
 - コマンドプリフィルの自動実行化は禁止（設計原則 2）
 ```

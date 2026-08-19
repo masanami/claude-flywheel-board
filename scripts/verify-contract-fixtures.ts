@@ -23,6 +23,8 @@
 //
 // 書き込みは --update 指定時の tests/fixtures/contracts/ 配下のみ。
 // **上流リポジトリへは一切書き込まない**（読み取り専用で参照する）。
+// --update は**来歴（上流コミット）を truthful に記録できないときは 1 ファイルも複製しない**
+// （上流が dirty・git 管理外など。偽の来歴は後日の差分検査を誤らせる）。
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -42,14 +44,78 @@ export const VENDOR_ROOT = fileURLToPath(
   new URL("../tests/fixtures/contracts/", import.meta.url),
 );
 
+/** board リポジトリのルート（scripts/ の親）。 */
+const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
+
+/** 上流リポジトリのディレクトリ名（board と横並びに置かれる前提）。 */
+const UPSTREAM_REPO_DIRNAME = "claude-flywheel";
+
+/** git worktree で作業中なら、メインの作業ツリーのルートを返す。 */
+function mainWorktreeRoot(): string | undefined {
+  try {
+    const commonDir = execFileSync(
+      "git",
+      [
+        "-C",
+        REPO_ROOT,
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-common-dir",
+      ],
+      { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] },
+    ).trim();
+    return commonDir === "" ? undefined : path.dirname(commonDir);
+  } catch {
+    return undefined;
+  }
+}
+
 /**
- * 上流 `contracts/` の既定の探索先（隣接 repo）。**絶対パスを直書きしない**ため
- * 本ファイルからの相対で解決する。存在しない環境では「検査不能」に落ちるだけで、
- * テスト・ビルドは成立する。
+ * 上流 `contracts/` の探索先候補（明示指定が無いときの順序）。
+ *
+ * **絶対パスを直書きしない**。すべて board リポジトリの位置からの相対で解決し、
+ * 見つからなければ「検査不能」に落ちるだけで、隣接 repo が無い環境でもテスト・
+ * ビルドは成立する。
+ *
+ * 単純に「本ファイルの 2 つ上の隣接 repo」だけを見ると、**git worktree で作業して
+ * いるときに上流が実在しても見つけられない**（worktree は `<repo>-worktrees/issue-N/`
+ * に作られるため、2 つ上は `<repo>-worktrees/` になる）。検査不能へ落ちること自体は
+ * 安全側だが、標準の実装フローが常に検査不能になるのでは検査が存在しないのと同じ。
+ * そこで通常配置・worktree 配置・git が使えない配置の 3 通りを順に探す。
+ *
+ * @param repoRoot 現在の作業ツリーのルート（テストから配置を差し替えられるようにしてある）
+ * @param mainRoot git worktree のメイン作業ツリーのルート（無ければ undefined）
  */
-export const DEFAULT_UPSTREAM_DIR = fileURLToPath(
-  new URL("../../claude-flywheel/contracts/", import.meta.url),
-);
+export function upstreamSearchPaths(
+  repoRoot: string = REPO_ROOT,
+  mainRoot: string | undefined = mainWorktreeRoot(),
+): string[] {
+  const found: string[] = [];
+  const add = (dir: string): void => {
+    const normalized = path.resolve(dir);
+    if (!found.includes(normalized)) found.push(normalized);
+  };
+
+  // 1. 通常のチェックアウト（<repos>/claude-flywheel-board）。
+  add(path.join(path.dirname(repoRoot), UPSTREAM_REPO_DIRNAME, "contracts"));
+
+  // 2. git worktree（<repos>/claude-flywheel-board-worktrees/issue-N）。
+  //    メインの作業ツリーの位置は --git-common-dir から引ける。
+  if (mainRoot !== undefined) {
+    add(path.join(path.dirname(mainRoot), UPSTREAM_REPO_DIRNAME, "contracts"));
+  }
+
+  // 3. git が使えない配置の保険: 祖先を数段さかのぼって隣接 repo を探す。
+  let ancestor = repoRoot;
+  for (let depth = 0; depth < 4; depth += 1) {
+    const parent = path.dirname(ancestor);
+    if (parent === ancestor) break;
+    ancestor = parent;
+    add(path.join(ancestor, UPSTREAM_REPO_DIRNAME, "contracts"));
+  }
+
+  return found;
+}
 
 /** 上流の複製ではなく board 側で書いたファイル（複製の集合検査から除外する）。 */
 const BOARD_AUTHORED = new Set(["MANIFEST.json", "VENDORING.md"]);
@@ -229,9 +295,12 @@ export function compareWithUpstream(
 export function resolveUpstreamDir(
   explicit?: string,
 ): { ok: true; dir: string } | { ok: false; reason: string } {
-  const candidate =
-    explicit ?? process.env.FLYWHEEL_CONTRACTS_DIR ?? DEFAULT_UPSTREAM_DIR;
-  const candidates = [candidate, path.join(candidate, "contracts")];
+  const override = explicit ?? process.env.FLYWHEEL_CONTRACTS_DIR;
+  // 明示指定は repo ルートを渡されても受ける。指定が無ければ既定の探索順を使う。
+  const candidates =
+    override === undefined
+      ? upstreamSearchPaths()
+      : [override, path.join(override, "contracts")];
   for (const dir of candidates) {
     if (
       existsSync(path.join(dir, "schemas")) &&
@@ -246,8 +315,66 @@ export function resolveUpstreamDir(
   };
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isStringField(value: unknown): value is string {
+  return typeof value === "string";
+}
+
+/**
+ * MANIFEST.json の構造を検証する。構文は正しいが構造が壊れている場合に
+ * 後段で TypeError を投げると、3 値の exit 契約（2 = 検査不能）から漏れて
+ * 「差分あり(1)」として扱われてしまうため、読み取り時点で弾く。
+ */
+function validateManifestShape(value: unknown): string | undefined {
+  if (!isPlainObject(value)) {
+    return "トップレベルが JSON オブジェクトではない";
+  }
+  const upstream = value.upstream;
+  if (!isPlainObject(upstream)) {
+    return "upstream がオブジェクトではない";
+  }
+  for (const key of ["repo", "path", "commit", "retrievedAt"]) {
+    if (!isStringField(upstream[key])) {
+      return `upstream.${key} が文字列ではない`;
+    }
+  }
+  if (!Array.isArray(value.files)) {
+    return "files が配列ではない";
+  }
+  for (const [index, file] of value.files.entries()) {
+    if (
+      !isPlainObject(file) ||
+      !isStringField(file.path) ||
+      !isStringField(file.sha256)
+    ) {
+      return `files[${index}] が { path: string, sha256: string } ではない`;
+    }
+  }
+  if (!Array.isArray(value.excluded)) {
+    return "excluded が配列ではない";
+  }
+  for (const [index, entry] of value.excluded.entries()) {
+    if (
+      !isPlainObject(entry) ||
+      !isStringField(entry.path) ||
+      !isStringField(entry.reason)
+    ) {
+      return `excluded[${index}] が { path: string, reason: string } ではない`;
+    }
+  }
+  return undefined;
+}
+
 export function readManifest(manifestPath = MANIFEST_PATH): Manifest {
-  return JSON.parse(readFileSync(manifestPath, "utf-8")) as Manifest;
+  const parsed: unknown = JSON.parse(readFileSync(manifestPath, "utf-8"));
+  const shapeError = validateManifestShape(parsed);
+  if (shapeError !== undefined) {
+    throw new Error(`MANIFEST.json の構造が不正: ${shapeError}`);
+  }
+  return parsed as Manifest;
 }
 
 export function verifyContracts(options?: {
@@ -311,7 +438,20 @@ export function updateVendoredCopies(options?: {
   const upstream = resolveUpstreamDir(options?.upstreamDir);
   if (!upstream.ok) return { error: upstream.reason };
 
-  const manifest = readManifest(manifestPath);
+  // 来歴（上流コミット）を先に確定する。**取れないなら 1 ファイルも複製しない**——
+  // 「この SHA の内容」と主張できない MANIFEST を書くと、後日の差分検査が
+  // `upstream-changed`（上流が改訂された）と誤報告して原因を取り違えさせる。
+  const provenance = readUpstreamProvenance(upstream.dir);
+  if (!provenance.ok) return { error: provenance.reason };
+
+  let manifest: Manifest;
+  try {
+    manifest = readManifest(manifestPath);
+  } catch (error) {
+    return {
+      error: `MANIFEST.json を読めない: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
   const upstreamFiles = new Set(listFiles(upstream.dir));
   const updated: string[] = [];
   const findings: Finding[] = [];
@@ -348,8 +488,7 @@ export function updateVendoredCopies(options?: {
     });
   }
 
-  const commit = readUpstreamCommit(upstream.dir);
-  manifest.upstream.commit = commit;
+  manifest.upstream.commit = provenance.commit;
   manifest.upstream.retrievedAt =
     options?.today ?? new Date().toISOString().slice(0, 10);
   writeFileSync(
@@ -358,21 +497,56 @@ export function updateVendoredCopies(options?: {
     "utf-8",
   );
 
-  return { updated, findings, commit };
+  return { updated, findings, commit: provenance.commit };
 }
 
-function readUpstreamCommit(upstreamDir: string): string {
+function git(upstreamDir: string, args: string[]): string {
+  return execFileSync("git", ["-C", upstreamDir, ...args], {
+    encoding: "utf-8",
+    // git 自身のエラー出力は握る（失敗は例外で扱う）。
+    stdio: ["ignore", "pipe", "ignore"],
+  }).trim();
+}
+
+/**
+ * 複製の来歴（上流のコミット）を確定する。
+ *
+ * **来歴を truthful に記録できないなら更新しない**（検査不能を正常に丸めない）:
+ * - HEAD が取れない（git 管理外・git 実行不可）→ 「unknown の内容」と記録しても
+ *   後日の差分検査の基準にならない
+ * - 作業ツリーが dirty → 未コミットの内容を複製しながら clean な SHA を記録すると、
+ *   後日その SHA と突き合わせたときに `upstream-changed` と誤報告される
+ */
+function readUpstreamProvenance(
+  upstreamDir: string,
+): { ok: true; commit: string } | { ok: false; reason: string } {
+  let commit: string;
   try {
-    return execFileSync(
-      "git",
-      ["-C", upstreamDir, "rev-parse", "--short", "HEAD"],
-      // git 自身のエラー出力は握る（取得できなければ "unknown" を記録するだけで、
-      // 更新そのものは成立する）。
-      { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] },
-    ).trim();
+    commit = git(upstreamDir, ["rev-parse", "--short", "HEAD"]);
   } catch {
-    return "unknown";
+    return {
+      ok: false,
+      reason: `上流の HEAD コミットを取得できない（git 管理外・git 実行不可）: ${upstreamDir}。来歴を記録できないため更新しない`,
+    };
   }
+
+  let status: string;
+  try {
+    status = git(upstreamDir, ["status", "--porcelain", "--", "."]);
+  } catch {
+    return {
+      ok: false,
+      reason: `上流の作業ツリーの状態を取得できない: ${upstreamDir}。来歴を記録できないため更新しない`,
+    };
+  }
+  if (status !== "") {
+    return {
+      ok: false,
+      reason: `上流の contracts に未コミットの変更がある（HEAD ${commit}）。その内容を "${commit} の複製" として記録できないため更新しない。上流を commit / stash してから再実行する:\n${status}`,
+    };
+  }
+
+  return { ok: true, commit };
 }
 
 function formatFindings(findings: Finding[]): string {

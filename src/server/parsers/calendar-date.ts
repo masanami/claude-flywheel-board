@@ -26,6 +26,13 @@ export function isExistingCalendarDate(value: string): boolean {
     return false;
   }
   const date = new Date(Date.UTC(year, month - 1, day));
+  // Date.UTC は 0〜99 の年を 1900+n として解釈する（`Date.UTC(26, …)` → 1926 年）。
+  // そのままだと 0001〜0099 年の日付が往復検査に落ちて拒否されるが、上流契約の
+  // `format: date` / `date-time` はこれらを受理する（board だけが厳しくなる＝
+  // 契約を board 側で解釈し直すことになる）ため、元の年へ戻してから検査する。
+  if (year < 100) {
+    date.setUTCFullYear(year);
+  }
   return (
     date.getUTCFullYear() === year &&
     date.getUTCMonth() === month - 1 &&

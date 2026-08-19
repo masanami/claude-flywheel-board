@@ -143,6 +143,16 @@ const KNOWN_ORACLE_GAP: Record<string, string> = {
     "seq が 1e999（JSON.parse で Infinity）。上流の ruby バリデータは type: integer 違反として exit 1 にするが、ajv の integer 判定は Infinity を通す。board も受理するため、この行では board と上流の判定が食い違う",
 };
 
+/**
+ * 誤例フィクスチャの中にある**正常な行**の棚卸し。
+ * 上流の誤例はファイル単位で「壊れている」だけで、全行が違反とは限らない
+ * （例: 追記が交錯した状態の再現は、正常な行のあとに壊れた行が続く）。
+ */
+const INTENTIONALLY_VALID_LINES: Record<string, string> = {
+  "journal-index/invalid/not-json.jsonl:1":
+    "追記の交錯・破損の再現。1 行目は正常なレコードで、2 行目が JSON ではない",
+};
+
 describe("上流フォーマット契約（JSONL）", () => {
   describe("受理方向: 契約の正規出力を board が読み落とさない", () => {
     for (const location of [
@@ -229,6 +239,29 @@ describe("上流フォーマット契約（JSONL）", () => {
       expect(observed.sort()).toEqual(Object.keys(KNOWN_LAX).sort());
     });
 
+    // KNOWN_LAX と同じく双方向にする。片側検査（記載を舐めるだけ）だと、
+    // マップを空にしても通る＝新しい判定差が無言で漏れる。
+    it("誤例フィクスチャ中で ajv が受理する行は KNOWN_ORACLE_GAP と INTENTIONALLY_VALID_LINES に尽きる", () => {
+      const observed: string[] = [];
+      for (const location of [
+        ...locationsOf("journal-index", "invalid"),
+        ...locationsOf("runs", "invalid"),
+      ]) {
+        for (const { line, raw } of jsonlLines(fileOf(location))) {
+          if (schemaAccepts(typeOf(location), raw)) {
+            observed.push(`${location}:${line}`);
+          }
+        }
+      }
+
+      expect(observed.sort()).toEqual(
+        [
+          ...Object.keys(KNOWN_ORACLE_GAP),
+          ...Object.keys(INTENTIONALLY_VALID_LINES),
+        ].sort(),
+      );
+    });
+
     it("KNOWN_ORACLE_GAP は ajv が受理し board も受理する行として実在する", async () => {
       for (const location of Object.keys(KNOWN_ORACLE_GAP)) {
         const separator = location.lastIndexOf(":");
@@ -296,6 +329,11 @@ describe("上流フォーマット契約（台帳）", () => {
   // 上流バリデータが書き込み前に止める検査であり、board 側に対応する検出手段は無い
   // （board は台帳へ書き込まない・NFR-01）。board にとって重要なのは
   // 「壊れた台帳を読んだときに何が見えて何が見えないか」なので、それを固定する。
+  //
+  // **既知の観測限界**: 見出しの消失・降格では課題が board から消えるが、`errors` は空＝
+  // 運用者への信号がゼロになる。board 側で検出しない判断の根拠は
+  // tests/fixtures/contracts/VENDORING.md「既知の観測限界」に記録した。
+  // 以下のテストはその限界の**現状の固定**であって、望ましい姿の宣言ではない。
   describe("拒否方向: 書き手側の違反を board がどう観測するか", () => {
     it("double-marker.md: マーカー行は読まないため、両エントリが通常どおり見える", () => {
       const result = parseFixture("invalid", "double-marker.md");
