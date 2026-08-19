@@ -84,6 +84,7 @@ claude-flywheel の fleet（複数の自律エージェント）を 1 画面で�
 | 機能仕様 P3: 実行中パネル | docs/features/p3-live-runs-panel.md | 整備済み（残依存は P2 のみ） |
 | 機能仕様: マークダウンプレビュー | docs/features/markdown-preview.md | 整備済み（実装未着手） |
 | 機能仕様: ファイルツリー書き込み系 API | docs/features/file-tree-write-api.md | 整備済み（実装未着手・Issue #144） |
+| 上流フォーマット契約の vendoring | tests/fixtures/contracts/VENDORING.md | 整備済み（収録範囲・追随手順・上流不在時の扱い） |
 
 ## 品質方針
 
@@ -92,6 +93,9 @@ claude-flywheel の fleet（複数の自律エージェント）を 1 画面で�
 - クリティカル箇所: 状態ファイルへの書き込み経路が存在しないこと（NFR-01）。
   レビュー時は「board のコードに台帳・journal・memory・runs.jsonl への Write/Edit が
   紛れ込んでいないか」を最優先で確認する
+- フォーマットの正本は claude-flywheel 側（NFR-05）。契約物（schemas/fixtures）は
+  tests/fixtures/contracts/ へ vendoring 済みで、npm test が上流とのズレを検査する。
+  **落ちたテストの期待値を書き換えて通さない**（board の読み取りが契約とズレているなら board 側の欠陥）
 - コマンドプリフィルの自動実行化は禁止（設計原則 2）
 ```
 
@@ -103,6 +107,9 @@ npm run build      # 本番ビルド
 npm test           # Vitest
 npm run lint       # Biome チェック（--fix で自動修正）
 npm run typecheck  # tsc --noEmit
+
+npm run contracts:verify  # 上流フォーマット契約（vendoring）とのズレ検査（0=一致 / 1=差分 / 2=検査不能）
+npm run contracts:update  # 収録済み契約物を上流から取り直し MANIFEST を更新
 ```
 
 > プロジェクト土台チケット（P1-1）でセットアップ時にこのスクリプト名で定義すること。

@@ -64,7 +64,7 @@ fleet の管理者として、board 上の実行中・応答なしタスクを�
   - `src/ui/components/AgentColumn.tsx`（RunningRunRow）・`src/ui/components/CardDetailModal.tsx`・`src/ui/styles.css`
   - `src/ui/lib/challenge-lookup.ts` — **新規**。UI 側 join ヘルパー（「機能全体の設計 > IF / API」参照）
   - `src/ui/lib/github-ref-url.ts` — **新規**（#155）。参照フィールド → GitHub URL の組み立て
-  - `tests/fixtures/ledger/contracts/` — **新規**（#151・#155）。claude-flywheel `contracts/fixtures/ledger/` からの逐語コピー（vendoring の範囲・除外理由は同ディレクトリ `README.md`）
+  - `tests/fixtures/contracts/` — **新規**（#151・#155 で `fixtures/ledger/` を導入、#158 で journal-index・runs・schemas へ拡張）。claude-flywheel `contracts/` からの逐語コピー（vendoring の範囲・除外理由・追随手順は同ディレクトリ `VENDORING.md`）
   - `src/ui/board-types.ts` — type re-export の追従
 - 既存コードとの関係: join は **UI 側で実施**する（下記アーキテクチャ決定）。新規 API エンドポイントは追加しない
 

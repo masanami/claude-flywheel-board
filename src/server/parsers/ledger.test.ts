@@ -7,6 +7,13 @@ const FIXTURES_ROOT = fileURLToPath(
   new URL("../../../tests/fixtures/ledger/", import.meta.url),
 );
 
+const CONTRACT_LEDGER_ROOT = fileURLToPath(
+  new URL(
+    "../../../tests/fixtures/contracts/fixtures/ledger/",
+    import.meta.url,
+  ),
+);
+
 function readFixture(name: string): string {
   return fs.readFileSync(`${FIXTURES_ROOT}${name}`, "utf-8");
 }
@@ -342,10 +349,19 @@ describe("parseLedger", () => {
 // 複数行フィールド（#151）と参照フィールド（#155）。フォーマットの正本は
 // claude-flywheel `docs/challenge-ledger-format.md`（§複数行フィールドの記入形式 /
 // §消費側（board 等）の読み取り規則 / §関連リポジトリ・関連Issue・関連PR）で、
-// 入力は上流の契約フィクスチャの逐語コピー（tests/fixtures/ledger/contracts/README.md）。
+// 入力は上流の契約フィクスチャの逐語コピー（tests/fixtures/contracts/VENDORING.md）。
 describe("複数行フィールド・参照フィールド（#151 / #155）", () => {
+  // 上流の contracts/fixtures/ledger/{valid,invalid}/ をそのまま写した vendoring 先
+  // （tests/fixtures/contracts/VENDORING.md）。valid / invalid のどちらに置かれているかは
+  // 上流の分類なので、名前から引けるようにここで吸収する。
   function readContractFixture(name: string): string {
-    return readFixture(`contracts/${name}`);
+    for (const kind of ["valid", "invalid"]) {
+      const file = `${CONTRACT_LEDGER_ROOT}${kind}/${name}`;
+      if (fs.existsSync(file)) {
+        return fs.readFileSync(file, "utf-8");
+      }
+    }
+    throw new Error(`契約フィクスチャが見つかりません: ${name}`);
   }
 
   function parseContractFixture(name: string) {

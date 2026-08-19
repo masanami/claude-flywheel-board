@@ -1,0 +1,2 @@
+{"date":"2026-07-27","seq":1,"touched_issues":[],"delegations":[],"pr_urls":[],"pending_approvals":["FR-13: C-003 のタスク起票承認待ち（独自形式の string で書いた・事故 c）"],"decisions":[]}
+{"date":"2026-07-28","seq":1,"touched_issues":[],"delegations":[],"pr_urls":[],"pending_approvals":[{"gate":"FR-13","issues":["C-003","C-004"],"note":"必須キー欠落＋スキーマ外キー（gate×issue ごとに展開していない）"}],"decisions":[]}

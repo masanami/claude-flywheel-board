@@ -1,0 +1,140 @@
+{
+  "upstream": {
+    "repo": "masanami/claude-flywheel",
+    "path": "contracts/",
+    "commit": "ceb4f46",
+    "retrievedAt": "2026-08-20"
+  },
+  "files": [
+    {
+      "path": "fixtures/journal-index/invalid/date-invalid.jsonl",
+      "sha256": "ab58a9c7b3b1be7b7b7d1b320df182d0e7169fe079400810725380319c505566"
+    },
+    {
+      "path": "fixtures/journal-index/invalid/decisions-string.jsonl",
+      "sha256": "c5d04a1e2e69ac6c5312dcc81aad40024dee663a8756107e255ca965cabb2cbe"
+    },
+    {
+      "path": "fixtures/journal-index/invalid/not-json.jsonl",
+      "sha256": "85fbd44ab96a4634fed8fecbde7fb7b43f8b16367d4a812eab9cbd0c87562d1a"
+    },
+    {
+      "path": "fixtures/journal-index/invalid/pending-approvals-shape.jsonl",
+      "sha256": "fefb44c1429143757a307b0f7953110879e1f76a757921c7923a8e5f228f88b9"
+    },
+    {
+      "path": "fixtures/journal-index/invalid/seq-infinity.jsonl",
+      "sha256": "6df7a38897742d7dd850aa63d66b7401f610acce891d0689e29b618376ed255c"
+    },
+    {
+      "path": "fixtures/journal-index/invalid/touched-to-freetext.jsonl",
+      "sha256": "baa80d88df3692e12c19b97723fb4f90d984ebf3e2d98f0c37923539a001bde0"
+    },
+    {
+      "path": "fixtures/journal-index/valid/readme-sample.jsonl",
+      "sha256": "3a39c4d4ae69456ad1a0a59ae938415f257b37f838d5a879c4b6b29c2be41aa1"
+    },
+    {
+      "path": "fixtures/journal-index/valid/real-shapes.jsonl",
+      "sha256": "99b547c295425f9c5d902844e7a08ecc052747198742e1a153530ef5c70318a5"
+    },
+    {
+      "path": "fixtures/ledger/invalid/continuation-break-variants.md",
+      "sha256": "232011f1182a4ea86df98eec23e0952afa2a6d5576b1bf68fb9b864ac2d8b2e8"
+    },
+    {
+      "path": "fixtures/ledger/invalid/double-marker.md",
+      "sha256": "ccd30220e660499445a284201cceedbf4a00139f832063683d91edb91a8f386a"
+    },
+    {
+      "path": "fixtures/ledger/invalid/heading-deleted.md",
+      "sha256": "39f4dc7b47df740b757166e027181d8697d959662afb281b02baeeff8e8ce08e"
+    },
+    {
+      "path": "fixtures/ledger/invalid/heading-demoted.md",
+      "sha256": "1ef4a748c51bb2c67e06f5568b7d3df37408eae9d598020611fb0fac315b0832"
+    },
+    {
+      "path": "fixtures/ledger/invalid/heading-no-blank-line.md",
+      "sha256": "d756ee305687d7aa504a98df9c89d426fb65a79458a014c86f80d27aad06cb76"
+    },
+    {
+      "path": "fixtures/ledger/invalid/missing-note-field.md",
+      "sha256": "614ab1facff87737a05c8188bc8dae0500c89a1084a7f656e839c9b0eb47be12"
+    },
+    {
+      "path": "fixtures/ledger/invalid/related-refs-freetext.md",
+      "sha256": "0088c303ade81ca37b16766e975309b1e119b5f801b74da688dd8b355beab90b"
+    },
+    {
+      "path": "fixtures/ledger/invalid/task-plan-bold-heading.md",
+      "sha256": "50a9e60a619006959c8c3d663b8ccd4af1c347f9dc2798f2ddd9ef9300dd7e79"
+    },
+    {
+      "path": "fixtures/ledger/invalid/task-plan-dedented.md",
+      "sha256": "f495f64821f7484c5f50857c61e8374d6054a18ead7ee8f8d0d031aab0a24ce7"
+    },
+    {
+      "path": "fixtures/ledger/valid/archive.md",
+      "sha256": "cafe2bb74a19472933b6187215c951e78b86cf0fdd626b1a79f294eac6c48827"
+    },
+    {
+      "path": "fixtures/ledger/valid/audit-entry.md",
+      "sha256": "95f92350652f028de6c44a5452df3093d98cf2dfe75862bd6967afe4e5b4f049"
+    },
+    {
+      "path": "fixtures/ledger/valid/handwritten-and-ingested.md",
+      "sha256": "a1b91d9ef92dad987a8da1163faa09cef361875a096220e3166d825f38d0dad0"
+    },
+    {
+      "path": "fixtures/ledger/valid/multiline-and-refs.md",
+      "sha256": "9cac8d9ff94aefe36c77652c46384e3d409de4a83b66c5e237c4df145899ea70"
+    },
+    {
+      "path": "fixtures/runs/invalid/bad-ts.jsonl",
+      "sha256": "193e5159c53206b6c195766320c7ce6eceb6e6a8a661ec82b60ec32c6d493b25"
+    },
+    {
+      "path": "fixtures/runs/invalid/cycle-end-bad-result.jsonl",
+      "sha256": "ac00cf689949e5bd94ebc0c205507a704fe5d24d9de97e57c06d207fdd79eb89"
+    },
+    {
+      "path": "fixtures/runs/invalid/key-unsafe-chars.jsonl",
+      "sha256": "1e0779513d6f42aa24491c6e53b2d93c49f4f6b236d6f3fd18198de8685ca858"
+    },
+    {
+      "path": "fixtures/runs/invalid/missing-required.jsonl",
+      "sha256": "d42b9b33e375b35d3aae73a90dd802e2cc481c5c9a073725f5b28265f94fd046"
+    },
+    {
+      "path": "fixtures/runs/invalid/unknown-event.jsonl",
+      "sha256": "e497d062b1820fd7c51c491a2337eba4542b7ac7e087cce0dc527e250a1a1faa"
+    },
+    {
+      "path": "fixtures/runs/valid/optional-fields.jsonl",
+      "sha256": "7759946620854ecb2c82a13abacd46ea280d5b5768e197804b2a454ff4b9dccf"
+    },
+    {
+      "path": "fixtures/runs/valid/readme-sample.jsonl",
+      "sha256": "708a4453f2126e14d930f018d14310afd79e191448ecbbf72fffd7cff2334041"
+    },
+    {
+      "path": "schemas/journal-index.schema.json",
+      "sha256": "c120ba3c22e8d0c1640083e77e870b318f8630b702b8d00a1ce3d7973b6ee42f"
+    },
+    {
+      "path": "schemas/runs.schema.json",
+      "sha256": "8fb75f974dd2e3680a5dcb81bc476b7b98bf756abe3ad19125c3e3f71fa94075"
+    }
+  ],
+  "excluded": [
+    {
+      "path": "README.md",
+      "reason": "上流の散文 README（契約の全体像）。board のテストが固定できる対象ではなく、コピーすると散文の二重管理になる。読むときは常に上流の最新を読む（VENDORING.md「散文正本をコピーしない理由」）"
+    },
+    {
+      "path": "fixtures/journal-md/",
+      "reason": "journal/YYYY-MM-DD-cycle.md の定型 5 セクション。board には現時点でこの構造を解釈するパーサが無く（マークダウンプレビューは任意の .md を不透明に描画するだけ）、収録しても固定できる board の挙動が存在しない。P4 journal タイムライン（requirements.md OQ-03）でセクション構造を読むようになった時点で収録する"
+    }
+  ]
+}

@@ -7,7 +7,7 @@
   },
   "files": {
     "ignoreUnknown": true,
-    "ignore": ["dist/**"]
+    "ignore": ["dist/**", "tests/fixtures/contracts/**"]
   },
   "formatter": {
     "enabled": true,

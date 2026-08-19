@@ -1,0 +1,1 @@
+{"date":"2026-08-15","seq":1,"touched_issues":[{"id":"C-001","from":"分類済","to":"計画承認待ち"}],"delegations":[],"pr_urls":[],"pending_approvals":[],"decisions":"decisions を array<string> ではなく string で書いた（事故 b・recurrence 3）"}

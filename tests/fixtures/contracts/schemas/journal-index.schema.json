@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "journal/index.jsonl — 1 行 1 周のサイクルジャーナル（機械可読版）",
+  "description": "意味論の散文正本は templates/journal/README.md「index.jsonl のスキーマ」。全 7 フィールド必須（該当が無い周も空配列で置く）・表に無いフィールドは置かない。検証は scripts/validate-artifact.rb（journal-index）が本ファイルを解釈して行う。",
+  "type": "object",
+  "required": ["date", "seq", "touched_issues", "delegations", "pr_urls", "pending_approvals", "decisions"],
+  "additionalProperties": false,
+  "properties": {
+    "date": { "type": "string", "format": "date", "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$" },
+    "seq": { "type": "integer", "minimum": 1 },
+    "touched_issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "from", "to"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "from": { "type": "string", "minLength": 1 },
+          "to": {
+            "description": "正規のステータス語彙のみ（補足はカッコ書きで付けず decisions 等の別欄へ）",
+            "enum": ["未分類", "分類済", "計画承認待ち", "着手中", "検証中", "完了確認待ち", "完了"]
+          }
+        }
+      }
+    },
+    "delegations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["repo", "skill", "session_id", "result"],
+        "additionalProperties": false,
+        "properties": {
+          "repo": { "type": "string", "minLength": 1 },
+          "skill": { "type": "string", "minLength": 1 },
+          "session_id": { "type": "string", "minLength": 1 },
+          "result": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "pr_urls": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "pending_approvals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["gate", "issue", "summary"],
+        "additionalProperties": false,
+        "properties": {
+          "gate": { "type": "string", "minLength": 1 },
+          "issue": { "type": "string", "minLength": 1 },
+          "summary": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

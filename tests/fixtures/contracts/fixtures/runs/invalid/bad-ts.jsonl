@@ -1,0 +1,8 @@
+{"ts":"2026-08-14 09:00:00","event":"cycle_start","cycle":"2026-08-14-cycle"}
+{"ts":"broken","event":"cycle_end","cycle":"2026-08-14-cycle","result":"completed"}
+{"ts":"2026-99-99T99:99:99+99:99","event":"cycle_start","cycle":"2026-08-14-cycle"}
+{"ts":"2026-02-31T10:00:00+09:00","event":"cycle_end","cycle":"2026-08-14-cycle","result":"completed"}
+{"ts":"2026-13-01T00:00:00+09:00","event":"cycle_start","cycle":"2026-08-14-cycle"}
+{"ts":"2026-02-29T00:00:00+09:00","event":"cycle_end","cycle":"2026-08-14-cycle","result":"completed"}
+{"ts":"2026-01-01T12:00:60+09:00","event":"cycle_start","cycle":"2026-01-01-cycle"}
+

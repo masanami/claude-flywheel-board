@@ -1,0 +1,2 @@
+{"date":"2026-99-99","seq":1,"touched_issues":[],"delegations":[],"pr_urls":[],"pending_approvals":[],"decisions":["形は YYYY-MM-DD だが月日が存在しない（同型: 形は合うが意味が不正）"]}
+{"date":"2026-02-30","seq":1,"touched_issues":[],"delegations":[],"pr_urls":[],"pending_approvals":[],"decisions":["値域は妥当に見えるが暦日として存在しない（format: date の意味検証で拒否）"]}
