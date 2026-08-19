@@ -9,7 +9,11 @@ export type {
   AgentCycleStatus,
   BoardSnapshot,
 } from "../server/cache.ts";
-export type { Challenge, LedgerStatus } from "../server/parsers/ledger.ts";
+export type {
+  Challenge,
+  ChallengeRef,
+  LedgerStatus,
+} from "../server/parsers/ledger.ts";
 export type {
   PriorityPolicy,
   PriorityPolicyStatus,

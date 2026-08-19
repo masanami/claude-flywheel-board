@@ -339,6 +339,299 @@ describe("parseLedger", () => {
   });
 });
 
+// 複数行フィールド（#151）と参照フィールド（#155）。フォーマットの正本は
+// claude-flywheel `docs/challenge-ledger-format.md`（§複数行フィールドの記入形式 /
+// §消費側（board 等）の読み取り規則 / §関連リポジトリ・関連Issue・関連PR）で、
+// 入力は上流の契約フィクスチャの逐語コピー（tests/fixtures/ledger/contracts/README.md）。
+describe("複数行フィールド・参照フィールド（#151 / #155）", () => {
+  function readContractFixture(name: string): string {
+    return readFixture(`contracts/${name}`);
+  }
+
+  function parseContractFixture(name: string) {
+    return parseLedger(readContractFixture(name), name);
+  }
+
+  describe("受理方向: 上流の正例フィクスチャから値を取得できる", () => {
+    it("形 A（複数行）の C-101 は タスク案・完了条件 をネスト項目の並びとして取得する", () => {
+      const result = parseContractFixture("multiline-and-refs.md");
+
+      expect(result.errors).toEqual([]);
+      const c101 = result.challenges.find((c) => c.id === "C-101");
+      expect(c101?.taskPlan).toBe(
+        [
+          "1. docs にフォーマットを規定する",
+          "2. バリデータ・フィクスチャを同期する",
+          "3. ready PR を作成する",
+        ].join("\n"),
+      );
+      expect(c101?.completionCriteria).toBe(
+        [
+          "- 台帳フォーマットに複数行形式が規定されている",
+          "- 既存の 1 行形式が受理され続ける",
+        ].join("\n"),
+      );
+    });
+
+    it("形 B（1 行）の C-102 は従来どおりフィールド行の値を取得する（後方互換）", () => {
+      const result = parseContractFixture("multiline-and-refs.md");
+
+      const c102 = result.challenges.find((c) => c.id === "C-102");
+      expect(c102?.taskPlan).toBe(
+        "(1) 調査する (2) 実装する (3) PR を作成する",
+      );
+      expect(c102?.completionCriteria).toBe(
+        "既存台帳が一括書き換えなしで受理され続けること",
+      );
+    });
+
+    it("形 C（空）の C-103 は タスク案・完了条件 とも undefined（未記入）になる", () => {
+      const result = parseContractFixture("multiline-and-refs.md");
+
+      const c103 = result.challenges.find((c) => c.id === "C-103");
+      expect(c103?.taskPlan).toBeUndefined();
+      expect(c103?.completionCriteria).toBeUndefined();
+    });
+
+    it("形 D（1 行値＋ネスト項目）の C-104 は値とネスト項目を連結して取得する", () => {
+      const result = parseContractFixture("multiline-and-refs.md");
+
+      const c104 = result.challenges.find((c) => c.id === "C-104");
+      expect(c104?.taskPlan).toBe(
+        [
+          "段階的に移行する",
+          "1. 先に規定を確定する",
+          "2. 消費側の追随は別 Issue で行う",
+        ].join("\n"),
+      );
+    });
+
+    it("引用行（行頭 `>`）も継続行として説明に含める（ingest-challenges の原文引用）", () => {
+      const result = parseContractFixture("handwritten-and-ingested.md");
+
+      expect(result.errors).toEqual([]);
+      const c002 = result.challenges.find((c) => c.id === "C-002");
+      expect(c002?.description).toBe(
+        [
+          "（原文引用）",
+          "> ## 背景",
+          ">",
+          "> 外部 Issue の本文をブロック引用で転記した複数行の説明。",
+          "> 1. 番号付きリストを含む",
+          "> 2. `- 備考:` のような行頭パターンも引用内では実フィールドではない",
+        ].join("\n"),
+      );
+      // 引用ブロックの直後に来る通常のフィールド行は値に飲み込まれず、
+      // 独立したフィールドとして読める（終端条件の確認）。
+      expect(c002?.completionCriteria).toBe(
+        "バリデータが本エントリを受理すること",
+      );
+      expect(c002?.taskPlan).toBe(["1. 調査する", "2. 実装する"].join("\n"));
+    });
+
+    it("さらに深い子項目（スペース4個）は相対的な階層を保ったまま値に含める", () => {
+      const content = [
+        "### [C-800] 深いネスト",
+        "",
+        "**分類欄（エージェントが記入）**",
+        "- ステータス: 着手中",
+        "- タスク案:",
+        "  1. 親タスク",
+        "    - 子の補足",
+        "  2. 次の親タスク",
+        "",
+      ].join("\n");
+
+      const result = parseLedger(content, "deep-nest.md");
+
+      expect(result.errors).toEqual([]);
+      expect(result.challenges[0]?.taskPlan).toBe(
+        ["1. 親タスク", "  - 子の補足", "2. 次の親タスク"].join("\n"),
+      );
+    });
+
+    it("承認チェックボックス行はインデント行だがフィールド値に含めず、値を終端もさせない（読み取り規則 4）", () => {
+      const content = [
+        "### [C-801] 承認チェックボックスの扱い",
+        "",
+        "**分類欄（エージェントが記入）**",
+        "- ステータス: 着手中",
+        "- タスク案:",
+        "  1. 実装する",
+        "  - [ ] 計画を承認（FR-13）",
+        "  2. 検証する",
+        "",
+      ].join("\n");
+
+      const result = parseLedger(content, "approval-checkbox.md");
+
+      expect(result.errors).toEqual([]);
+      expect(result.challenges[0]?.taskPlan).toBe(
+        ["1. 実装する", "2. 検証する"].join("\n"),
+      );
+    });
+
+    it("値の終端は空行（読み取り規則 3）: 空行より後のネスト項目は値に含めない", () => {
+      const result = parseContractFixture("continuation-break-variants.md");
+
+      const c603 = result.challenges.find((c) => c.id === "C-603");
+      expect(c603?.taskPlan).toBe(["段階的に進める", "1. 調査する"].join("\n"));
+    });
+  });
+
+  describe("参照フィールド（関連リポジトリ・関連Issue・関連PR）", () => {
+    it("カンマ区切りの複数値を owner/repo/番号に分解する（完全形・短縮形の両方）", () => {
+      const result = parseContractFixture("multiline-and-refs.md");
+
+      const c101 = result.challenges.find((c) => c.id === "C-101");
+      expect(c101?.relatedRepos).toEqual([
+        {
+          raw: "masanami/claude-flywheel",
+          owner: "masanami",
+          repo: "claude-flywheel",
+        },
+        {
+          raw: "masanami/claude-flywheel-board",
+          owner: "masanami",
+          repo: "claude-flywheel-board",
+        },
+      ]);
+      expect(c101?.relatedIssues).toEqual([
+        {
+          raw: "claude-flywheel#87",
+          owner: "masanami",
+          repo: "claude-flywheel",
+          number: 87,
+        },
+        {
+          raw: "masanami/claude-flywheel#89",
+          owner: "masanami",
+          repo: "claude-flywheel",
+          number: 89,
+        },
+      ]);
+      expect(c101?.relatedPrs).toEqual([
+        {
+          raw: "masanami/claude-flywheel#93",
+          owner: "masanami",
+          repo: "claude-flywheel",
+          number: 93,
+        },
+      ]);
+    });
+
+    it("単一値の参照フィールドも配列 1 件として取得する", () => {
+      const result = parseContractFixture("multiline-and-refs.md");
+
+      const c104 = result.challenges.find((c) => c.id === "C-104");
+      expect(c104?.relatedRepos).toHaveLength(1);
+      expect(c104?.relatedIssues).toEqual([
+        {
+          raw: "claude-flywheel#91",
+          owner: "masanami",
+          repo: "claude-flywheel",
+          number: 91,
+        },
+      ]);
+    });
+
+    it("参照フィールドが空欄・不在のエントリは undefined になる（後方互換）", () => {
+      const result = parseContractFixture("multiline-and-refs.md");
+
+      // C-102 は 3 フィールドとも行が無い（契約導入前の既存エントリ）。
+      const c102 = result.challenges.find((c) => c.id === "C-102");
+      expect(c102?.relatedRepos).toBeUndefined();
+      expect(c102?.relatedIssues).toBeUndefined();
+      expect(c102?.relatedPrs).toBeUndefined();
+      // C-103 は 3 フィールドとも行はあるが値が空欄。
+      const c103 = result.challenges.find((c) => c.id === "C-103");
+      expect(c103?.relatedRepos).toBeUndefined();
+      expect(c103?.relatedIssues).toBeUndefined();
+      expect(c103?.relatedPrs).toBeUndefined();
+    });
+
+    it("短縮形の owner は同エントリの 関連リポジトリ から解決し、同名 repo が無ければ raw のみ保持する", () => {
+      const content = readFixture("related-refs-shorthand.md");
+
+      const result = parseLedger(content, "related-refs-shorthand.md");
+
+      expect(result.errors).toEqual([]);
+      const c701 = result.challenges.find((c) => c.id === "C-701");
+      expect(c701?.relatedIssues).toEqual([
+        {
+          raw: "claude-flywheel#87",
+          owner: "masanami",
+          repo: "claude-flywheel",
+          number: 87,
+        },
+        // 同エントリの 関連リポジトリ に other-repo が無いため owner 不明。
+        { raw: "other-repo#12" },
+        {
+          raw: "masanami/other-repo#34",
+          owner: "masanami",
+          repo: "other-repo",
+          number: 34,
+        },
+      ]);
+    });
+
+    it("関連リポジトリが空のエントリでは短縮形の owner を解決できず raw のみ保持する", () => {
+      const content = readFixture("related-refs-shorthand.md");
+
+      const result = parseLedger(content, "related-refs-shorthand.md");
+
+      const c702 = result.challenges.find((c) => c.id === "C-702");
+      expect(c702?.relatedRepos).toBeUndefined();
+      expect(c702?.relatedIssues).toEqual([{ raw: "claude-flywheel#87" }]);
+    });
+  });
+
+  describe("誤例方向: 規定が違反とする形でもクラッシュせず、規定どおりの読み取り結果になる", () => {
+    it("形 F（ネスト項目のインデント欠落）は タスク案 が欠落し、エントリ自体は読める", () => {
+      const result = parseContractFixture("task-plan-dedented.md");
+
+      expect(result.errors).toEqual([]);
+      const c201 = result.challenges.find((c) => c.id === "C-201");
+      expect(c201?.status).toBe("計画承認待ち");
+      expect(c201?.taskPlan).toBeUndefined();
+    });
+
+    it("形 E（太字見出しブロック）は タスク案 が欠落し、エントリ自体は読める", () => {
+      const result = parseContractFixture("task-plan-bold-heading.md");
+
+      expect(result.errors).toEqual([]);
+      const c401 = result.challenges.find((c) => c.id === "C-401");
+      expect(c401?.status).toBe("完了確認待ち");
+      expect(c401?.taskPlan).toBeUndefined();
+    });
+
+    it("結合切れ（行頭ハイフン・アスタリスクのネスト項目）でも例外を投げず、値は欠落する", () => {
+      const result = parseContractFixture("continuation-break-variants.md");
+
+      expect(result.errors).toEqual([]);
+      expect(result.challenges.map((c) => c.id)).toEqual([
+        "C-601",
+        "C-602",
+        "C-603",
+      ]);
+      expect(result.challenges[0]?.taskPlan).toBeUndefined();
+      expect(result.challenges[1]?.taskPlan).toBeUndefined();
+    });
+
+    it("参照フィールドの自由記述・URL・プレースホルダは raw のみ保持し、リンク化の材料を持たない", () => {
+      const result = parseContractFixture("related-refs-freetext.md");
+
+      expect(result.errors).toEqual([]);
+      const c301 = result.challenges.find((c) => c.id === "C-301");
+      expect(c301?.relatedRepos).toEqual([{ raw: "board のリポジトリ" }]);
+      expect(c301?.relatedIssues).toEqual([{ raw: "#87 と #89" }]);
+      expect(c301?.relatedPrs).toEqual([
+        { raw: "https://github.com/masanami/claude-flywheel/pull/93" },
+      ]);
+    });
+  });
+});
+
 describe("parseLedgerFile", () => {
   it("実ファイルパスから読み込み、valid.md の3件を返す", () => {
     const result = parseLedgerFile(`${FIXTURES_ROOT}valid.md`);
