@@ -450,25 +450,194 @@ describe("複数行フィールド・参照フィールド（#151 / #155）", ()
       );
     });
 
-    it("承認チェックボックス行はインデント行だがフィールド値に含めず、値を終端もさせない（読み取り規則 4）", () => {
+    // 読み取り規則 4（承認チェックボックスはフィールド値ではない）は「`- 承認（人間が
+    // チェック）:` の直下にネストされた専用構造」と**構造でスコープ**されている
+    // （§承認プロトコル）。行の形（`- [ ] …`）だけで捨てると、完了条件・タスク案を
+    // タスクリスト記法で書いたときに条件が黙って欠落する（PRレビュー指摘対応）。
+    it("承認フィールド直下のチェックボックスはどのフィールド値にも混入しない（読み取り規則 4）", () => {
+      const result = parseContractFixture("multiline-and-refs.md");
+
+      const c101 = result.challenges.find((c) => c.id === "C-101");
+      expect(c101?.taskPlan).not.toContain("計画を承認");
+      expect(c101?.completionCriteria).not.toContain("完了を承認");
+      // 承認フィールドの後ろに続くフィールドの値にも入らない。
+      expect(c101?.status).toBe("着手中");
+    });
+
+    it("完了条件をタスクリスト記法で書いた場合はチェックボックス行も値として保持する", () => {
       const content = [
-        "### [C-801] 承認チェックボックスの扱い",
+        "### [C-801] 完了条件をタスクリストで書く",
+        "",
+        "**人間記入欄**",
+        "- 完了条件（任意）:",
+        "  - 通常の条件",
+        "  - [ ] チェック形式の条件",
+        "  - もう一つの通常条件",
+        "",
+        "**分類欄（エージェントが記入）**",
+        "- ステータス: 着手中",
+        "",
+      ].join("\n");
+
+      const result = parseLedger(content, "checkbox-criteria.md");
+
+      expect(result.errors).toEqual([]);
+      expect(result.challenges[0]?.completionCriteria).toBe(
+        [
+          "- 通常の条件",
+          "- [ ] チェック形式の条件",
+          "- もう一つの通常条件",
+        ].join("\n"),
+      );
+    });
+
+    // 継続行の収集は規定が複数行の値を定義しているフィールド（説明・完了条件・
+    // タスク案）に限る。語彙・列挙で検証される制御フィールドを複数行化すると、
+    // 正常なエントリが errors へ落ちてカードごと消える（PRレビュー指摘対応）。
+    it("制御フィールド（ステータス・優先度・担当ポジション）の直下のインデント行は値に取り込まない", () => {
+      const content = [
+        "### [C-802] 制御フィールドの直下に注記がある",
+        "",
+        "**分類欄（エージェントが記入）**",
+        "- 担当ポジション: harness",
+        "  （ポジション名の注記）",
+        "- 優先度: P1",
+        "  （優先度の根拠メモ）",
+        "- ステータス: 着手中",
+        "  （2026-08-20 レビュー待ち）",
+        "",
+      ].join("\n");
+
+      const result = parseLedger(content, "control-fields.md");
+
+      expect(result.errors).toEqual([]);
+      expect(result.challenges).toHaveLength(1);
+      const entry = result.challenges[0];
+      expect(entry?.status).toBe("着手中");
+      expect(entry?.priority).toBe("P1");
+      expect(entry?.position).toBe("harness");
+    });
+
+    // 規定 5: フェンス内・HTML コメント内は台帳データではない。値を終端させず
+    // 中身も含めずに読み飛ばし、ブロックが閉じたら同じフィールドの値へ戻る。
+    it("引用ブロック中の複数行 HTML コメントを読み飛ばし、コメント終了後の引用行を値に戻す", () => {
+      const content = [
+        "### [C-803] 説明の途中に複数行コメントがある",
+        "",
+        "**人間記入欄**",
+        "- 説明:（原文引用）",
+        "> ## 背景",
+        "> <!--",
+        "> これはテンプレートのコメント",
+        "> -->",
+        "> 本文のつづき（重要）",
+        "",
+        "**分類欄（エージェントが記入）**",
+        "- ステータス: 着手中",
+        "",
+      ].join("\n");
+
+      const result = parseLedger(content, "comment-in-quote.md");
+
+      expect(result.errors).toEqual([]);
+      expect(result.challenges[0]?.description).toBe(
+        ["（原文引用）", "> ## 背景", "> 本文のつづき（重要）"].join("\n"),
+      );
+      expect(result.challenges[0]?.status).toBe("着手中");
+    });
+
+    it("ネスト項目の途中のフェンスを読み飛ばし、フェンス終了後のネスト項目を値に戻す", () => {
+      const content = [
+        "### [C-804] タスク案の途中にフェンスがある",
         "",
         "**分類欄（エージェントが記入）**",
         "- ステータス: 着手中",
         "- タスク案:",
         "  1. 実装する",
-        "  - [ ] 計画を承認（FR-13）",
+        "  ```",
+        "  fenced sample",
+        "  ```",
         "  2. 検証する",
         "",
       ].join("\n");
 
-      const result = parseLedger(content, "approval-checkbox.md");
+      const result = parseLedger(content, "fence-in-task-plan.md");
 
       expect(result.errors).toEqual([]);
       expect(result.challenges[0]?.taskPlan).toBe(
         ["1. 実装する", "2. 検証する"].join("\n"),
       );
+    });
+
+    // 規定 3: 値の終端条件のうち「次のエントリ見出し」の経路。
+    it("値の終端は次のエントリ見出し（読み取り規則 3）: 空行なしで見出しが続いても両エントリを読む", () => {
+      const content = [
+        "### [C-805] 複数行タスク案で終わるエントリ",
+        "",
+        "**分類欄（エージェントが記入）**",
+        "- ステータス: 着手中",
+        "- タスク案:",
+        "  1. 実装する",
+        "### [C-806] 空行なしで続く次のエントリ",
+        "",
+        "**分類欄（エージェントが記入）**",
+        "- ステータス: 未分類",
+        "",
+      ].join("\n");
+
+      const result = parseLedger(content, "heading-terminates.md");
+
+      expect(result.errors).toEqual([]);
+      expect(result.challenges.map((c) => c.id)).toEqual(["C-805", "C-806"]);
+      expect(result.challenges[0]?.taskPlan).toBe("1. 実装する");
+      expect(result.challenges[1]?.title).toBe("空行なしで続く次のエントリ");
+    });
+
+    it("上流の誤例（見出し直前の空行欠落）でも両エントリを読み、前のエントリの値に吸収しない", () => {
+      const result = parseContractFixture("heading-no-blank-line.md");
+
+      expect(result.errors).toEqual([]);
+      expect(result.challenges.map((c) => c.id)).toEqual(["C-005", "C-006"]);
+      expect(result.challenges[0]?.taskPlan).toBe(
+        ["1. 調査する", "2. 実装する", "3. 検証する"].join("\n"),
+      );
+    });
+
+    it("同一ラベルが重複した場合は先勝ちで、重複側の継続行も先頭の値に取り込まない", () => {
+      const content = [
+        "### [C-807] タスク案が重複している",
+        "",
+        "**分類欄（エージェントが記入）**",
+        "- ステータス: 着手中",
+        "- タスク案: 先に書かれた値",
+        "- タスク案:",
+        "  1. 後から書かれたネスト項目",
+        "",
+      ].join("\n");
+
+      const result = parseLedger(content, "duplicate-label.md");
+
+      expect(result.errors).toEqual([]);
+      expect(result.challenges[0]?.taskPlan).toBe("先に書かれた値");
+    });
+
+    it("アーカイブ（完了エントリの移動先）の形 A タスク案も取得する", () => {
+      const result = parseContractFixture("archive.md");
+
+      expect(result.errors).toEqual([]);
+      const c003 = result.challenges.find((c) => c.id === "C-003");
+      expect(c003?.status).toBe("完了");
+      expect(c003?.taskPlan).toBe("1. 修正 PR を作成する");
+    });
+
+    it("機械生成エントリ（periodic-audit）の複数行ネスト説明を取得する", () => {
+      const result = parseContractFixture("audit-entry.md");
+
+      expect(result.errors).toEqual([]);
+      const c011 = result.challenges.find((c) => c.id === "C-011");
+      expect(c011?.description).toContain("- 抽出: 3 件");
+      expect(c011?.description).toContain("- 要人間判定〔AC-4〕: 1 件");
+      expect(c011?.description?.split("\n")).toHaveLength(5);
     });
 
     it("値の終端は空行（読み取り規則 3）: 空行より後のネスト項目は値に含めない", () => {
@@ -533,6 +702,74 @@ describe("複数行フィールド・参照フィールド（#151 / #155）", ()
           number: 91,
         },
       ]);
+    });
+
+    it("フィールド行の値の一部に参照らしき文字列があってもリンク化の材料にしない（完全一致のみ）", () => {
+      const content = [
+        "### [C-808] 参照フィールドに自由文が混じる",
+        "",
+        "**分類欄（エージェントが記入）**",
+        "- ステータス: 着手中",
+        "- 関連リポジトリ: see masanami/claude-flywheel",
+        "- 関連Issue: 詳細は claude-flywheel#87 を参照",
+        "",
+      ].join("\n");
+
+      const result = parseLedger(content, "ref-anchor.md");
+
+      expect(result.errors).toEqual([]);
+      const entry = result.challenges[0];
+      expect(entry?.relatedRepos).toEqual([
+        { raw: "see masanami/claude-flywheel" },
+      ]);
+      expect(entry?.relatedIssues).toEqual([
+        { raw: "詳細は claude-flywheel#87 を参照" },
+      ]);
+    });
+
+    it("owner 付きの参照が自由文に埋まっている場合もリンク化しない（部分一致で拾わない）", () => {
+      const content = [
+        "### [C-810] 参照フィールドに owner 付きの参照が埋まっている",
+        "",
+        "**分類欄（エージェントが記入）**",
+        "- ステータス: 着手中",
+        "- 関連Issue: 詳細は masanami/claude-flywheel#87 を参照",
+        "- 関連PR: masanami/claude-flywheel#93 と masanami/claude-flywheel#94",
+        "",
+      ].join("\n");
+
+      const result = parseLedger(content, "ref-anchor-owner.md");
+
+      expect(result.errors).toEqual([]);
+      const entry = result.challenges[0];
+      expect(entry?.relatedIssues).toEqual([
+        { raw: "詳細は masanami/claude-flywheel#87 を参照" },
+      ]);
+      // カンマ区切りでない併記も 1 値として扱い、部分一致で先頭だけ拾わない。
+      expect(entry?.relatedPrs).toEqual([
+        { raw: "masanami/claude-flywheel#93 と masanami/claude-flywheel#94" },
+      ]);
+    });
+
+    // 規定は参照フィールドの値の形を「カンマ区切り」としか定めておらず、複数行形式は
+    // 定義していない。したがって参照フィールドは継続行を収集せず、複数行で書かれた
+    // 値は形 E / 形 F と同じく欠落する（PRレビュー指摘対応: 実装とコメントの主張を一致させた）。
+    it("参照フィールドを複数行形式で書いた場合は規定外の形として欠落する（誤ってマーカー付きの値を作らない）", () => {
+      const content = [
+        "### [C-809] 参照フィールドを複数行で書く",
+        "",
+        "**分類欄（エージェントが記入）**",
+        "- ステータス: 着手中",
+        "- 関連リポジトリ:",
+        "  - masanami/claude-flywheel",
+        "  - masanami/claude-flywheel-board",
+        "",
+      ].join("\n");
+
+      const result = parseLedger(content, "ref-multiline.md");
+
+      expect(result.errors).toEqual([]);
+      expect(result.challenges[0]?.relatedRepos).toBeUndefined();
     });
 
     it("参照フィールドが空欄・不在のエントリは undefined になる（後方互換）", () => {

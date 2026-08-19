@@ -90,9 +90,6 @@ const FIELD_LINE_PATTERN = /^- ([^:]+): ?(.*)$/;
 // 規定 3 の終端条件に合流する。
 const INDENT_CONTINUATION_PATTERN = /^\s+\S/;
 const QUOTE_CONTINUATION_PATTERN = /^>/;
-// 承認チェックボックス行（同規則 4）: インデント行だがフィールド値ではない
-// （`- 承認（人間がチェック）:` の直下の専用構造）。値に含めず、値を終端もさせない。
-const APPROVAL_CHECKBOX_PATTERN = /^\s+- \[[ xX]\]/;
 // 規定が定めるネスト項目のインデント幅（半角スペース2個。§複数行フィールドの記入形式）。
 // 継続行はこの幅ぶんだけ取り除いて結合し、さらに深い子項目（スペース4個）の相対的な
 // 階層は残す。
@@ -110,6 +107,34 @@ const CHALLENGE_ID_PATTERN = /^C-\d+(?:-\d+)*$/;
 // FR-B4: テンプレート/実運用台帳で括弧内の注記が揺れる（"完了条件（任意）" /
 // "完了条件（任意・分かれば）" 等）ため、注記を無視して "完了条件" で始まるラベルを一致とみなす。
 const COMPLETION_CRITERIA_LABEL_PREFIX = "完了条件";
+const DESCRIPTION_LABEL = "説明";
+const TASK_PLAN_LABEL = "タスク案";
+
+/**
+ * 継続行を収集する（＝値が複数行になりうる）フィールドかを判定する。
+ *
+ * 規定が複数行の値を定義しているのは次の3フィールドだけ:
+ * - `タスク案` / `完了条件`: §複数行フィールドの記入形式（節タイトルがこの2つに限定）。
+ *   フィールド行の値を空にし、直下に2スペースインデントの箇条書きを続ける（形 A・D）。
+ * - `説明`: §消費側の読み取り規則 2 の引用行。ingest-challenges が
+ *   `- 説明:（原文引用）` の直下にブロック引用で外部 Issue 本文を転記する。
+ *
+ * それ以外のフィールドを収集対象から外すのは、規定が単一行の値しか定義していない
+ * ことに加え、**語彙・列挙で検証される制御フィールド（ステータス・優先度・担当ポジション）
+ * を複数行化すると正常なエントリを失う**ため（`- ステータス: 着手中` の直下に注記が
+ * インデントされているだけで語彙照合を外し、エントリがカードから消えて承認導線ごと
+ * 失われる）。参照フィールドも §関連リポジトリ・関連Issue・関連PR が値の形を
+ * 「カンマ区切り」と定めており、複数行形式は定義していない。
+ *
+ * この限定により、本フィールド以外の読み取り結果は複数行対応の前と完全に一致する。
+ */
+function isMultilineFieldLabel(label: string): boolean {
+  return (
+    label === DESCRIPTION_LABEL ||
+    label === TASK_PLAN_LABEL ||
+    label.startsWith(COMPLETION_CRITERIA_LABEL_PREFIX)
+  );
+}
 
 /**
  * フィールド1件分の行。先頭要素はフィールド行の値（空のこともある）、以降は
@@ -180,15 +205,16 @@ function findFieldByPrefix(
 }
 
 /**
- * 参照フィールドの値を個々の参照へ分割する。規定はカンマ区切りだが、複数行形式で
- * 書かれた場合は継続行の結合により改行が入るため、改行も区切りとして扱う。
+ * 参照フィールドの値を個々の参照へ分割する。区切りはカンマのみ
+ * （§関連リポジトリ・関連Issue・関連PR が定める値の形。複数行形式は定義されていない
+ * ため、参照フィールドは継続行を収集しない＝ isMultilineFieldLabel 参照）。
  */
 function splitRefValues(value: string | undefined): string[] {
   if (value === undefined) {
     return [];
   }
   return value
-    .split(/[,\n]/)
+    .split(",")
     .map((token) => token.trim())
     .filter((token) => token !== "");
 }
@@ -398,13 +424,15 @@ export function parseLedger(
       continue;
     }
 
+    // フェンス・複数行 HTML コメントの中身は台帳データではない（規定 §消費側の
+    // 読み取り規則 5）。**値を終端させず、中身も値に含めずに読み飛ばす**——ブロックが
+    // 閉じたあとに続く継続行は同じフィールドの値へ戻る。GitHub の Issue テンプレートは
+    // 複数行コメントを含み、ingest-challenges 由来の説明（ブロック引用）の途中に
+    // 現れうるため、ここで終端すると説明が黙って打ち切られる（PRレビュー指摘対応）。
     const fenceMatch = line.match(FENCE_LINE_PATTERN);
     if (fenceMatch) {
       const marker = fenceMatch[1] ?? "";
       fence = { char: marker[0] ?? "`", length: marker.length };
-      // フェンス内は台帳データではない（規定 §消費側の読み取り規則 5）ため、
-      // 開いているフィールド値もここで終端する。
-      openField = null;
       continue;
     }
 
@@ -414,13 +442,16 @@ export function parseLedger(
     // 複数行コメントの開始として扱い、この行自体もスキップする。
     if (scanCommentState(line, false)) {
       inComment = true;
-      openField = null;
       continue;
     }
 
     const headerMatch = line.match(HEADER_PATTERN);
     if (headerMatch) {
       flush();
+      // 見出しは値の終端（規定 §消費側の読み取り規則 3）。flush() が値を結合済みの
+      // Challenge にしてから current を捨てるため、この代入を落としても現在の
+      // 実装では出力が変わらない（＝テストでは殺せない防御的な後始末）。
+      // 収集途中の配列を次のエントリまたぎで持ち越さない不変条件をここで明示する。
       openField = null;
       current = {
         line: lineNo,
@@ -437,20 +468,19 @@ export function parseLedger(
       continue;
     }
 
-    // 継続行（規定 §消費側の読み取り規則 2・4）: 直前のフィールド行の値に連結する。
-    // 承認チェックボックスはインデント行だがフィールド値ではないため、
-    // 値に含めず・値を終端もさせずに読み飛ばす。
-    if (openField) {
-      if (APPROVAL_CHECKBOX_PATTERN.test(line)) {
-        continue;
-      }
-      if (
-        INDENT_CONTINUATION_PATTERN.test(line) ||
-        QUOTE_CONTINUATION_PATTERN.test(line)
-      ) {
-        openField.push(dedentContinuation(line));
-        continue;
-      }
+    // 継続行（規定 §消費側の読み取り規則 2）: 直前のフィールド行の値に連結する。
+    // openField は複数行フィールド（isMultilineFieldLabel）でのみ開くため、
+    // 承認チェックボックス（`- 承認（人間がチェック）:` 直下の専用構造。同規則 4）が
+    // 値に混ざることはない。逆に、完了条件・タスク案をタスクリスト記法で書いた場合の
+    // `- [ ] …` は値として保持する（規則 4 は承認フィールド直下の構造を指しており、
+    // 行の形だけで捨てると条件が黙って一部欠落するため。PRレビュー指摘対応）。
+    if (
+      openField &&
+      (INDENT_CONTINUATION_PATTERN.test(line) ||
+        QUOTE_CONTINUATION_PATTERN.test(line))
+    ) {
+      openField.push(dedentContinuation(line));
+      continue;
     }
 
     const fieldMatch = line.match(FIELD_LINE_PATTERN);
@@ -461,7 +491,9 @@ export function parseLedger(
       if (existing === undefined) {
         const lines: FieldLines = [value];
         current.fields.set(key, lines);
-        openField = lines;
+        // 継続行を収集するのは複数行フィールドだけ。それ以外のフィールドの
+        // 直下にインデント行があっても、複数行対応の前と同じく無視する。
+        openField = isMultilineFieldLabel(key) ? lines : null;
       } else {
         // 同一ラベルの重複は先勝ち（既存挙動）。重複側の継続行も取り込まない。
         openField = null;

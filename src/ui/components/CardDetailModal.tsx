@@ -261,18 +261,24 @@ export function CardDetailModal({
         <section className="card-detail-ledger-join" data-testid="ledger-join">
           <h3 className="card-detail-ledger-join-heading">課題台帳</h3>
           <dl className="card-detail-fields">
-            {/* 説明・完了条件・タスク案は複数行になりうる（#151。台帳の正規形は
-             * フィールド行＋直下のネスト箇条書き／ingest 由来の説明はブロック引用）。
-             * パーサが結合した改行・ネストのインデントをそのまま見せるため
-             * card-detail-multiline（white-space: pre-wrap）で描画し、markdown
-             * としての再解釈はしない（board は消費者に徹する。NFR-05。HTML/
-             * スクリプト断片がプレーンテキストのまま表示される AC-8 も維持）。 */}
-            <dt>説明</dt>
+            {/* 表示順は FR-13 の承認対象を先頭に置く（#151・PRレビュー指摘対応）。
+             * 規定 §FR-13 の承認対象は「承認者が見るべき欄」を タスク案・完了条件・
+             * 関連リポジトリ と定めており、説明（ingest 由来だと実データで数千文字の
+             * ブロック引用になる）を先頭に置くと承認対象が初期表示の外へ押し出される。
+             * 説明は文脈情報なので最後に置き、CSS 側で高さを制限する。
+             *
+             * 説明・完了条件・タスク案は複数行になりうる（台帳の正規形はフィールド行＋
+             * 直下のネスト箇条書き／ingest 由来の説明はブロック引用）。パーサが結合した
+             * 改行・ネストのインデントをそのまま見せるため card-detail-multiline
+             * （white-space: pre-wrap）で描画し、markdown としての再解釈はしない
+             * （board は消費者に徹する。NFR-05。HTML/スクリプト断片がプレーンテキスト
+             * のまま表示される AC-8 も維持）。 */}
+            <dt>タスク案</dt>
             <dd
               className="card-detail-multiline"
-              data-testid="ledger-description"
+              data-testid="ledger-task-plan"
             >
-              {challenge.description ?? "-"}
+              {challenge.taskPlan ?? "-"}
             </dd>
             <dt>完了条件</dt>
             <dd
@@ -281,14 +287,10 @@ export function CardDetailModal({
             >
               {challenge.completionCriteria ?? "-"}
             </dd>
-            <dt>タスク案</dt>
-            <dd
-              className="card-detail-multiline"
-              data-testid="ledger-task-plan"
-            >
-              {challenge.taskPlan ?? "-"}
-            </dd>
-            <dt>対象リポジトリ</dt>
+            {/* ラベルは台帳のフィールド名（関連リポジトリ）をそのまま使う。規定は
+             * 関連サービス（ドメイン上のサービス名）と 関連リポジトリ（実リポジトリ）を
+             * 別概念として併存させており、board 側で言い換えない（NFR-05）。 */}
+            <dt>関連リポジトリ</dt>
             <dd data-testid="ledger-related-repos">
               <ChallengeRefs refs={challenge.relatedRepos} kind="repo" />
             </dd>
@@ -299,6 +301,13 @@ export function CardDetailModal({
             <dt>関連PR</dt>
             <dd data-testid="ledger-related-prs">
               <ChallengeRefs refs={challenge.relatedPrs} kind="pull" />
+            </dd>
+            <dt>説明</dt>
+            <dd
+              className="card-detail-multiline card-detail-description"
+              data-testid="ledger-description"
+            >
+              {challenge.description ?? "-"}
             </dd>
           </dl>
         </section>

@@ -858,6 +858,65 @@ describe("CardDetailModal", () => {
     });
   });
 
+  describe("承認対象を先頭に置く表示順（#151・FR-13）", () => {
+    it("台帳セクションは タスク案 → 完了条件 → 関連リポジトリ → 関連Issue → 関連PR → 説明 の順に並ぶ", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+
+      render(
+        <CardDetailModal
+          challenge={challenge()}
+          agentName="medical"
+          onClose={vi.fn()}
+        />,
+      );
+
+      const ledgerJoin = screen.getByTestId("ledger-join");
+      const labels = Array.from(ledgerJoin.querySelectorAll("dt")).map(
+        (dt) => dt.textContent,
+      );
+      expect(labels).toEqual([
+        "タスク案",
+        "完了条件",
+        "関連リポジトリ",
+        "関連Issue",
+        "関連PR",
+        "説明",
+      ]);
+    });
+
+    it("巨大な説明があっても承認対象（タスク案・完了条件・関連リポジトリ）は説明より前に描画される", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+
+      render(
+        <CardDetailModal
+          challenge={challenge({
+            description: Array.from(
+              { length: 60 },
+              (_, i) => `> 引用行 ${i}`,
+            ).join("\n"),
+            taskPlan: "1. 実装する",
+            completionCriteria: "- 条件1",
+          })}
+          agentName="medical"
+          onClose={vi.fn()}
+        />,
+      );
+
+      const description = screen.getByTestId("ledger-description");
+      for (const testId of [
+        "ledger-task-plan",
+        "ledger-completion-criteria",
+        "ledger-related-repos",
+      ]) {
+        // Node.DOCUMENT_POSITION_FOLLOWING: 承認対象の欄が説明より前にある。
+        expect(
+          screen.getByTestId(testId).compareDocumentPosition(description) &
+            Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
+      }
+    });
+  });
+
   describe("参照フィールドの表示（#155）", () => {
     it("対象リポジトリ・関連Issue・関連PR が複数表示され、GitHub のリンクになる", () => {
       vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
@@ -938,6 +997,30 @@ describe("CardDetailModal", () => {
       const issues = screen.getByTestId("ledger-related-issues");
       expect(within(issues).queryByRole("link")).not.toBeInTheDocument();
       expect(within(issues).getByText("other-repo#12")).toBeInTheDocument();
+    });
+
+    it("空配列の参照フィールドも半角ハイフン表示になる（undefined と同じ扱い）", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+
+      render(
+        <CardDetailModal
+          challenge={challenge({
+            relatedRepos: [],
+            relatedIssues: [],
+            relatedPrs: [],
+          })}
+          agentName="medical"
+          onClose={vi.fn()}
+        />,
+      );
+
+      for (const testId of [
+        "ledger-related-repos",
+        "ledger-related-issues",
+        "ledger-related-prs",
+      ]) {
+        expect(screen.getByTestId(testId).textContent).toBe("-");
+      }
     });
 
     it("参照フィールドを持たない既存エントリは 3 行とも半角ハイフン表示になる（後方互換）", () => {
