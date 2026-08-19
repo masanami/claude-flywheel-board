@@ -793,6 +793,257 @@ describe("CardDetailModal", () => {
     });
   });
 
+  // 複数行フィールド（#151）と参照フィールド（#155）。台帳の正規形は
+  // 「フィールド行＋直下のネスト箇条書き」で、承認者（FR-13）が何を承認するのか
+  // 見えるようにするため、パーサが結合した改行をそのまま表示する。
+  describe("複数行フィールドの表示（#151）", () => {
+    it("複数行のタスク案が改行を保ったまま全行表示される", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+      const taskPlan = [
+        "1. docs にフォーマットを規定する",
+        "2. バリデータ・フィクスチャを同期する",
+        "3. ready PR を作成する",
+      ].join("\n");
+
+      render(
+        <CardDetailModal
+          challenge={challenge({ taskPlan })}
+          agentName="medical"
+          onClose={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByTestId("ledger-task-plan").textContent).toBe(taskPlan);
+    });
+
+    it("複数行の完了条件・説明（ブロック引用）も改行を保ったまま表示される", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+      const completionCriteria = ["- 条件1", "- 条件2"].join("\n");
+      const description = ["（原文引用）", "> ## 背景", ">", "> 本文"].join(
+        "\n",
+      );
+
+      render(
+        <CardDetailModal
+          challenge={challenge({ completionCriteria, description })}
+          agentName="medical"
+          onClose={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByTestId("ledger-completion-criteria").textContent).toBe(
+        completionCriteria,
+      );
+      expect(screen.getByTestId("ledger-description").textContent).toBe(
+        description,
+      );
+    });
+
+    it("1 行形式のタスク案は従来どおりそのまま表示される（後方互換）", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+
+      render(
+        <CardDetailModal
+          challenge={challenge({
+            taskPlan: "(1) 調査する (2) 実装する (3) PR を作成する",
+          })}
+          agentName="medical"
+          onClose={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByTestId("ledger-task-plan").textContent).toBe(
+        "(1) 調査する (2) 実装する (3) PR を作成する",
+      );
+    });
+  });
+
+  describe("承認対象を先頭に置く表示順（#151・FR-13）", () => {
+    it("台帳セクションは タスク案 → 完了条件 → 関連リポジトリ → 関連Issue → 関連PR → 説明 の順に並ぶ", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+
+      render(
+        <CardDetailModal
+          challenge={challenge()}
+          agentName="medical"
+          onClose={vi.fn()}
+        />,
+      );
+
+      const ledgerJoin = screen.getByTestId("ledger-join");
+      const labels = Array.from(ledgerJoin.querySelectorAll("dt")).map(
+        (dt) => dt.textContent,
+      );
+      expect(labels).toEqual([
+        "タスク案",
+        "完了条件",
+        "関連リポジトリ",
+        "関連Issue",
+        "関連PR",
+        "説明",
+      ]);
+    });
+
+    it("巨大な説明があっても承認対象（タスク案・完了条件・関連リポジトリ）は説明より前に描画される", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+
+      render(
+        <CardDetailModal
+          challenge={challenge({
+            description: Array.from(
+              { length: 60 },
+              (_, i) => `> 引用行 ${i}`,
+            ).join("\n"),
+            taskPlan: "1. 実装する",
+            completionCriteria: "- 条件1",
+          })}
+          agentName="medical"
+          onClose={vi.fn()}
+        />,
+      );
+
+      const description = screen.getByTestId("ledger-description");
+      for (const testId of [
+        "ledger-task-plan",
+        "ledger-completion-criteria",
+        "ledger-related-repos",
+      ]) {
+        // Node.DOCUMENT_POSITION_FOLLOWING: 承認対象の欄が説明より前にある。
+        expect(
+          screen.getByTestId(testId).compareDocumentPosition(description) &
+            Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
+      }
+    });
+  });
+
+  describe("参照フィールドの表示（#155）", () => {
+    it("対象リポジトリ・関連Issue・関連PR が複数表示され、GitHub のリンクになる", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+
+      render(
+        <CardDetailModal
+          challenge={challenge({
+            relatedRepos: [
+              {
+                raw: "masanami/claude-flywheel",
+                owner: "masanami",
+                repo: "claude-flywheel",
+              },
+              {
+                raw: "masanami/claude-flywheel-board",
+                owner: "masanami",
+                repo: "claude-flywheel-board",
+              },
+            ],
+            relatedIssues: [
+              {
+                raw: "claude-flywheel#87",
+                owner: "masanami",
+                repo: "claude-flywheel",
+                number: 87,
+              },
+            ],
+            relatedPrs: [
+              {
+                raw: "masanami/claude-flywheel#93",
+                owner: "masanami",
+                repo: "claude-flywheel",
+                number: 93,
+              },
+            ],
+          })}
+          agentName="medical"
+          onClose={vi.fn()}
+        />,
+      );
+
+      const repos = screen.getByTestId("ledger-related-repos");
+      expect(within(repos).getAllByRole("link")).toHaveLength(2);
+      expect(
+        within(repos).getByRole("link", { name: "masanami/claude-flywheel" }),
+      ).toHaveAttribute("href", "https://github.com/masanami/claude-flywheel");
+
+      const issues = screen.getByTestId("ledger-related-issues");
+      expect(
+        within(issues).getByRole("link", { name: "claude-flywheel#87" }),
+      ).toHaveAttribute(
+        "href",
+        "https://github.com/masanami/claude-flywheel/issues/87",
+      );
+
+      const prs = screen.getByTestId("ledger-related-prs");
+      expect(
+        within(prs).getByRole("link", { name: "masanami/claude-flywheel#93" }),
+      ).toHaveAttribute(
+        "href",
+        "https://github.com/masanami/claude-flywheel/pull/93",
+      );
+    });
+
+    it("owner を解決できなかった参照はリンクにせず、台帳の記載どおりテキストで表示する", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+
+      render(
+        <CardDetailModal
+          challenge={challenge({
+            relatedIssues: [{ raw: "other-repo#12" }],
+          })}
+          agentName="medical"
+          onClose={vi.fn()}
+        />,
+      );
+
+      const issues = screen.getByTestId("ledger-related-issues");
+      expect(within(issues).queryByRole("link")).not.toBeInTheDocument();
+      expect(within(issues).getByText("other-repo#12")).toBeInTheDocument();
+    });
+
+    it("空配列の参照フィールドも半角ハイフン表示になる（undefined と同じ扱い）", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+
+      render(
+        <CardDetailModal
+          challenge={challenge({
+            relatedRepos: [],
+            relatedIssues: [],
+            relatedPrs: [],
+          })}
+          agentName="medical"
+          onClose={vi.fn()}
+        />,
+      );
+
+      for (const testId of [
+        "ledger-related-repos",
+        "ledger-related-issues",
+        "ledger-related-prs",
+      ]) {
+        expect(screen.getByTestId(testId).textContent).toBe("-");
+      }
+    });
+
+    it("参照フィールドを持たない既存エントリは 3 行とも半角ハイフン表示になる（後方互換）", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+
+      render(
+        <CardDetailModal
+          challenge={challenge()}
+          agentName="medical"
+          onClose={vi.fn()}
+        />,
+      );
+
+      for (const testId of [
+        "ledger-related-repos",
+        "ledger-related-issues",
+        "ledger-related-prs",
+      ]) {
+        expect(screen.getByTestId(testId).textContent).toBe("-");
+      }
+    });
+  });
+
   describe("HTML/スクリプト断片のプレーンテキスト表示（AC-8）", () => {
     it("台帳の説明にHTML/スクリプト断片が含まれてもプレーンテキストとして表示され、実行・解釈されない", () => {
       vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));

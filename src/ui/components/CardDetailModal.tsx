@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import type { Challenge, LogEntry, Run } from "../board-types.ts";
+import type { Challenge, ChallengeRef, LogEntry, Run } from "../board-types.ts";
 import { formatLogTimestamp } from "../lib/format-log-ts.ts";
+import {
+  type GithubRefKind,
+  buildGithubRefUrl,
+} from "../lib/github-ref-url.ts";
 import { END_EVENT_LABEL } from "../lib/provenance-labels.ts";
 import {
   buildResumeCommand,
@@ -41,6 +45,48 @@ type LogState =
   | { status: "loading" }
   | { status: "success"; entries: LogEntry[] }
   | { status: "error" };
+
+/**
+ * 参照フィールド（関連リポジトリ・関連Issue・関連PR。#155）の1行。
+ *
+ * owner を解決できた参照だけ GitHub へのリンクにし、解決できなかった値
+ * （短縮形で owner 不明・自由記述・URL 直書き等）は台帳の記載どおりテキストで出す
+ * （claude-flywheel `docs/challenge-ledger-format.md` §関連リポジトリ・関連Issue・関連PR）。
+ * 値が無いフィールドは他の台帳項目と同じく半角ハイフンを表示する。
+ * board はローカルツールなので、リンクは新規タブで開いてボード側の状態
+ * （ターミナルの WebSocket 接続等）を壊さないようにする。
+ */
+function ChallengeRefs({
+  refs,
+  kind,
+}: {
+  refs: ChallengeRef[] | undefined;
+  kind: GithubRefKind;
+}) {
+  if (refs === undefined || refs.length === 0) {
+    return <>-</>;
+  }
+  return (
+    <ul className="card-detail-ref-list">
+      {refs.map((ref, index) => {
+        const url = buildGithubRefUrl(ref, kind);
+        return (
+          // 同じ参照が重複記入されうる（規定は重複させないと定めるが、消費側は
+          // 壊れた入力でも表示できる必要がある）ため index を key に含める。
+          <li key={`${ref.raw}-${index}`}>
+            {url ? (
+              <a href={url} target="_blank" rel="noreferrer">
+                {ref.raw}
+              </a>
+            ) : (
+              ref.raw
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
 
 // カード詳細モーダル（読み取り専用・NFR-01）: 台帳の全項目と作業ログタイムラインを
 // 表示するのみで、編集・承認・実行等の操作ボタンは一切持たない。作業ログは
@@ -215,12 +261,54 @@ export function CardDetailModal({
         <section className="card-detail-ledger-join" data-testid="ledger-join">
           <h3 className="card-detail-ledger-join-heading">課題台帳</h3>
           <dl className="card-detail-fields">
-            <dt>説明</dt>
-            <dd>{challenge.description ?? "-"}</dd>
-            <dt>完了条件</dt>
-            <dd>{challenge.completionCriteria ?? "-"}</dd>
+            {/* 表示順は FR-13 の承認対象を先頭に置く（#151・PRレビュー指摘対応）。
+             * 規定 §FR-13 の承認対象は「承認者が見るべき欄」を タスク案・完了条件・
+             * 関連リポジトリ と定めており、説明（ingest 由来だと実データで数千文字の
+             * ブロック引用になる）を先頭に置くと承認対象が初期表示の外へ押し出される。
+             * 説明は文脈情報なので最後に置き、CSS 側で高さを制限する。
+             *
+             * 説明・完了条件・タスク案は複数行になりうる（台帳の正規形はフィールド行＋
+             * 直下のネスト箇条書き／ingest 由来の説明はブロック引用）。パーサが結合した
+             * 改行・ネストのインデントをそのまま見せるため card-detail-multiline
+             * （white-space: pre-wrap）で描画し、markdown としての再解釈はしない
+             * （board は消費者に徹する。NFR-05。HTML/スクリプト断片がプレーンテキスト
+             * のまま表示される AC-8 も維持）。 */}
             <dt>タスク案</dt>
-            <dd>{challenge.taskPlan ?? "-"}</dd>
+            <dd
+              className="card-detail-multiline"
+              data-testid="ledger-task-plan"
+            >
+              {challenge.taskPlan ?? "-"}
+            </dd>
+            <dt>完了条件</dt>
+            <dd
+              className="card-detail-multiline"
+              data-testid="ledger-completion-criteria"
+            >
+              {challenge.completionCriteria ?? "-"}
+            </dd>
+            {/* ラベルは台帳のフィールド名（関連リポジトリ）をそのまま使う。規定は
+             * 関連サービス（ドメイン上のサービス名）と 関連リポジトリ（実リポジトリ）を
+             * 別概念として併存させており、board 側で言い換えない（NFR-05）。 */}
+            <dt>関連リポジトリ</dt>
+            <dd data-testid="ledger-related-repos">
+              <ChallengeRefs refs={challenge.relatedRepos} kind="repo" />
+            </dd>
+            <dt>関連Issue</dt>
+            <dd data-testid="ledger-related-issues">
+              <ChallengeRefs refs={challenge.relatedIssues} kind="issue" />
+            </dd>
+            <dt>関連PR</dt>
+            <dd data-testid="ledger-related-prs">
+              <ChallengeRefs refs={challenge.relatedPrs} kind="pull" />
+            </dd>
+            <dt>説明</dt>
+            <dd
+              className="card-detail-multiline card-detail-description"
+              data-testid="ledger-description"
+            >
+              {challenge.description ?? "-"}
+            </dd>
           </dl>
         </section>
 

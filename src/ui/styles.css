@@ -659,6 +659,34 @@ body {
   margin: 0;
 }
 
+/* 複数行フィールド（説明・完了条件・タスク案。#151）: 台帳の改行とネストの
+ * インデントをそのまま見せる。長い引用ブロック（ingest 由来の説明）でも
+ * 横スクロールを出さないよう、途中でも折り返す。 */
+.card-detail-multiline {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* 説明は ingest 由来だと実データで数千文字のブロック引用になる（#151）。
+ * モーダル全体の 1 本スクロールに委ねると、下に続く作業ログまでの距離が伸び、
+ * 説明そのものも読み飛ばしにくくなるため、この欄だけ高さを制限して内部で
+ * スクロールさせる（FR-13 の承認対象は説明より上に並べてある）。 */
+.card-detail-description {
+  max-height: 14rem;
+  overflow-y: auto;
+}
+
+/* 参照フィールド（関連リポジトリ・関連Issue・関連PR。#155）: 1行に複数の
+ * 参照が並ぶため横並び＋折り返し。マーカーは出さない（値そのものが短い参照）。 */
+.card-detail-ref-list {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.75rem;
+  margin: 0;
+  padding: 0;
+}
+
 /* resumebox（#31・FR-12）: 更新なし（stale）の delegate 実行中セッションの
  * 再開コマンドを表示する箱。実行中セクションと同じ青系のアクセントだが、
  * 「未実行のコマンド」であることを視覚的に区別するため破線ボーダーにする。 */
