@@ -1,0 +1,4 @@
+{"date":"2026-08-18","seq":2,"touched_issues":[{"id":"C-010","from":"着手中","to":"着手中"},{"id":"C-018","from":"着手中","to":"完了確認待ち"}],"delegations":[{"repo":"claude-harness","skill":"(direct brief)","session_id":"57030fdb-4c2c-4389-a858-309923c6589f","result":"PR #166 作成（ready・head 9c7f40d）"}],"pr_urls":["https://github.com/masanami/claude-harness/pull/166"],"pending_approvals":[{"gate":"FR-13","issue":"C-020..C-030","summary":"新規11件のタスク起票承認待ち"}],"decisions":["系統分割第1弾のみ委譲し有効性を確認","子の検査位置前倒しを設計上正しい逸脱として受理"]}
+{"date":"2026-08-19","seq":1,"touched_issues":[],"delegations":[],"pr_urls":[],"pending_approvals":[],"decisions":[]}
+{"date":"2028-02-29","seq":1,"touched_issues":[],"delegations":[],"pr_urls":[],"pending_approvals":[],"decisions":["閏年の 02-29 は正規（意味検証が誤って拒否しないことのピン）"]}
+

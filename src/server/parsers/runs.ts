@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { isExistingCalendarDate } from "./calendar-date.ts";
 import type { LogEntry, ParseError } from "./types.ts";
 
 // .flywheel/runs.jsonl のスキーマ（正本: claude-flywheel 側
@@ -105,8 +106,26 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// ts の先頭が YYYY-MM-DD の形をしているかの判定（暦日の実在検証を掛ける対象の絞り込み）。
+const ISO_DATE_PREFIX = /^\d{4}-\d{2}-\d{2}/;
+
 function isValidTimestamp(value: unknown): value is string {
-  return typeof value === "string" && !Number.isNaN(Date.parse(value));
+  if (typeof value !== "string") {
+    return false;
+  }
+  // Date.parse は "2026-02-31T10:00:00+09:00" を 2026-03-03 へ繰り上げて受理する。
+  // 検証を Date.parse だけに委ねると、存在しない日時が**別の実在時刻にすり替わった
+  // まま**経過時間・並び順・stale 判定に流れる（値の取り違えであって、単なる緩さでは
+  // ない）。上流契約が pattern＋format: date-time の二層で拒否している型のため、
+  // 先頭が YYYY-MM-DD の形なら暦日として実在することまで検証する
+  // （正本: claude-flywheel 側 contracts/schemas/runs.schema.json）。
+  if (
+    ISO_DATE_PREFIX.test(value) &&
+    !isExistingCalendarDate(value.slice(0, 10))
+  ) {
+    return false;
+  }
+  return !Number.isNaN(Date.parse(value));
 }
 
 function isOptionalString(value: unknown): value is string | undefined {
@@ -142,7 +161,7 @@ function validateRunEvent(value: unknown): string | undefined {
   const record = value;
 
   if (!isValidTimestamp(record.ts)) {
-    return "ts は Date.parse 可能な ISO 8601 文字列である必要があります";
+    return "ts は暦日として実在する Date.parse 可能な ISO 8601 文字列である必要があります";
   }
   if (!isEventType(record.event)) {
     return `event は ${EVENT_TYPES.join(" | ")} のいずれかである必要があります`;

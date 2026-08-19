@@ -16,6 +16,8 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "typecheck": "tsc --noEmit",
+    "contracts:verify": "node scripts/verify-contract-fixtures.ts",
+    "contracts:update": "node scripts/verify-contract-fixtures.ts --update",
     "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper || true"
   },
   "dependencies": {
@@ -45,6 +47,8 @@
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^6.0.3",
     "@xterm/headless": "^6.0.0",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
     "concurrently": "^9.1.2",
     "jsdom": "^29.1.1",
     "typescript": "^5.7.2",

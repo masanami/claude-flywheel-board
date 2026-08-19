@@ -1,0 +1,2 @@
+{"date":"2026-08-19","seq":1e999,"touched_issues":[],"delegations":[],"pr_urls":[],"pending_approvals":[],"decisions":["seq が構文的に妥当な JSON 数値だが Infinity にオーバーフローする（違反＝exit 1 であって検査不能ではない）"]}
+{"date":"2026-08-19","seq":-1e999,"touched_issues":[],"delegations":[],"pr_urls":[],"pending_approvals":[],"decisions":["負の無限大も同様に型違反"]}

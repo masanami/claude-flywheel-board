@@ -1,0 +1,3 @@
+{"ts":"2026-08-19T10:00:00+09:00","event":"delegate_start","challenge":"C-001","repo":"service-a","session_id":"abc\\def-0000-0000-0000-000000000000"}
+{"ts":"2026-08-19T10:05:00+09:00","event":"adhoc_start","id":"adhoc-\"quoted\"-id","title":"対応付けキーに未エスケープ前提を壊す文字（正本: \" と \\ は使用不可）"}
+{"ts":"2026-08-19T10:10:00+09:00","event":"delegate_end","challenge":"C-001","repo":"service-a","session_id":"abc\ndef\"x","result":"done"}

@@ -50,7 +50,9 @@ export default defineConfig({
         test: {
           name: "server",
           environment: "node",
-          include: ["src/server/**/*.test.ts"],
+          // scripts/ は開発用ツール（vendoring の同期チェック等）。node 環境で
+          // 動かす点は server 側と同じなので、同じプロジェクトで拾う。
+          include: ["src/server/**/*.test.ts", "scripts/**/*.test.ts"],
         },
       },
       {
