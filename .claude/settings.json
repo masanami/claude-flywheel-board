@@ -28,7 +28,7 @@
       "Bash(cd:*)",
       "Bash(npm:*)",
       "Bash(claude-harness-run:*)",
-      "Read(~/.claude/plugins/**)"
+      "Read(~/.claude/plugins/**/skills/**)"
     ],
     "deny": [
       "Bash(rm -rf:*)",
