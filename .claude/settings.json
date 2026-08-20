@@ -26,7 +26,9 @@
       "Bash(gh api:*)",
       "Bash(gh repo view:*)",
       "Bash(cd:*)",
-      "Bash(npm:*)"
+      "Bash(npm:*)",
+      "Bash(claude-harness-run:*)",
+      "Read(~/.claude/plugins/**/skills/**)"
     ],
     "deny": [
       "Bash(rm -rf:*)",
