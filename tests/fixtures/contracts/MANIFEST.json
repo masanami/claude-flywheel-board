@@ -2,8 +2,8 @@
   "upstream": {
     "repo": "masanami/claude-flywheel",
     "path": "contracts/",
-    "commit": "ceb4f46",
-    "retrievedAt": "2026-08-20"
+    "commit": "cfd7af8",
+    "retrievedAt": "2026-08-29"
   },
   "files": [
     {
@@ -44,7 +44,7 @@
     },
     {
       "path": "fixtures/ledger/invalid/double-marker.md",
-      "sha256": "ccd30220e660499445a284201cceedbf4a00139f832063683d91edb91a8f386a"
+      "sha256": "5eada886c7f62a87e022b14beba6b4ca400caf450758c376529670260945849a"
     },
     {
       "path": "fixtures/ledger/invalid/heading-deleted.md",
@@ -79,16 +79,12 @@
       "sha256": "cafe2bb74a19472933b6187215c951e78b86cf0fdd626b1a79f294eac6c48827"
     },
     {
-      "path": "fixtures/ledger/valid/audit-entry.md",
-      "sha256": "95f92350652f028de6c44a5452df3093d98cf2dfe75862bd6967afe4e5b4f049"
-    },
-    {
       "path": "fixtures/ledger/valid/handwritten-and-ingested.md",
       "sha256": "a1b91d9ef92dad987a8da1163faa09cef361875a096220e3166d825f38d0dad0"
     },
     {
       "path": "fixtures/ledger/valid/multiline-and-refs.md",
-      "sha256": "9cac8d9ff94aefe36c77652c46384e3d409de4a83b66c5e237c4df145899ea70"
+      "sha256": "a2fc95e276f2eee6c85dd3199554183281ceefe2235975c3098184397af06ddc"
     },
     {
       "path": "fixtures/runs/invalid/bad-ts.jsonl",
