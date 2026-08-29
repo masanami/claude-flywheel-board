@@ -1,5 +1,9 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+// 実ファイルの中身をそのまま取り込む（jsdom 環境では import.meta.url が file: URL に
+// ならず node:fs で解決できないため、Vite の ?raw で読み込む）。
+import humanHoldLedger from "../../../tests/fixtures/ledger/human-hold.md?raw";
+import { parseLedger } from "../../server/parsers/ledger.ts";
 import type { Challenge } from "../board-types.ts";
 import { CHALLENGE_DRAG_MIME, TaskCard } from "./TaskCard.tsx";
 
@@ -69,6 +73,27 @@ describe("TaskCard", () => {
 
     const dot = container.querySelector(".status-dot");
     expect(dot).toHaveAttribute("data-status", "完了");
+  });
+
+  // 型に足しただけでは「カードとして出る」ことの証明にならないため、実ファイルの台帳を
+  // パーサに通した結果をそのまま描画して確認する（フィクスチャ → parseLedger → TaskCard）。
+  it("人間対応待ちの台帳を実際にパースした結果が、承認待ちマーカーつきのカードとして出る", () => {
+    const parsed = parseLedger(humanHoldLedger, "human-hold.md");
+    expect(parsed.errors).toEqual([]);
+    const held = parsed.challenges.find((c) => c.id === "C-201");
+    if (!held) throw new Error("人間対応待ちの課題がパース結果に無い");
+
+    const { container } = render(
+      <TaskCard challenge={held} agentName="medical" />,
+    );
+
+    const card = container.querySelector(".task-card");
+    expect(card).toHaveAttribute("data-needs-human", "true");
+    expect(container.querySelector(".status-dot")).toHaveAttribute(
+      "data-status",
+      "人間対応待ち",
+    );
+    expect(screen.getByText("人間対応待ち")).toBeInTheDocument();
   });
 
   it("状態を変更する実ボタン（承認・実行等）を一切持たない（観測専用・NFR-01）", () => {

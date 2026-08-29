@@ -17,7 +17,7 @@ import addFormats from "ajv-formats";
 import Ajv2020 from "ajv/dist/2020.js";
 import { describe, expect, it } from "vitest";
 import { parseJournal } from "./journal.ts";
-import { parseLedger } from "./ledger.ts";
+import { LEDGER_STATUSES, parseLedger } from "./ledger.ts";
 import { parseRuns } from "./runs.ts";
 
 const CONTRACTS_ROOT = fileURLToPath(
@@ -296,7 +296,6 @@ describe("上流フォーマット契約（台帳）", () => {
   describe("受理方向: 正例のエントリを 1 件も落とさない", () => {
     const EXPECTED_IDS: Record<string, string[]> = {
       "archive.md": ["C-003", "C-004"],
-      "audit-entry.md": ["C-011"],
       "handwritten-and-ingested.md": ["C-001", "C-002"],
       "multiline-and-refs.md": ["C-101", "C-102", "C-103", "C-104"],
     };
@@ -335,12 +334,15 @@ describe("上流フォーマット契約（台帳）", () => {
   // tests/fixtures/contracts/VENDORING.md「既知の観測限界」に記録した。
   // 以下のテストはその限界の**現状の固定**であって、望ましい姿の宣言ではない。
   describe("拒否方向: 書き手側の違反を board がどう観測するか", () => {
-    it("double-marker.md: マーカー行は読まないため、両エントリが通常どおり見える", () => {
+    // 上流 8ae84c4（periodic-audit / GDD 前提の削除）で、取り込み元と監査元が同居する
+    // C-009 がフィクスチャから消え、C-010（取り込み元マーカーの重複）だけが残った。
+    // 期待値の縮小は**フィクスチャ側の縮小に追随したもの**であって、board の読み取りを
+    // 契約に合わせて緩めたものではない（マーカー行を読まないという性質は変わっていない）。
+    it("double-marker.md: マーカー行は読まないため、エントリが通常どおり見える", () => {
       const result = parseFixture("invalid", "double-marker.md");
 
       expect(result.errors).toEqual([]);
       expect(result.challenges.map((challenge) => challenge.id)).toEqual([
-        "C-009",
         "C-010",
       ]);
     });
@@ -382,5 +384,54 @@ describe("上流フォーマット契約（台帳）", () => {
       ]);
       expect(result.challenges[1]?.status).toBe("着手中");
     });
+  });
+});
+
+// ステータス語彙は上流と board で二重管理されており（正本は上流・NFR-05）、board が
+// 追随を落とすと**そのステータスのエントリがカードごと消える**（未知ステータスは
+// ParseError へ回る）。ズレを機械で見つけるオラクルとして、収録済みスキーマが持つ
+// 語彙の列挙（`touched_issues.to` の enum）を使う——上流の語彙が機械可読な形で
+// vendoring されている唯一の場所。
+describe("上流フォーマット契約（ステータス語彙）", () => {
+  /** 上流スキーマが宣言している台帳ステータスの語彙。 */
+  function schemaStatusVocabulary(): string[] {
+    const schema = JSON.parse(
+      readFileSync(
+        path.join(CONTRACTS_ROOT, "schemas", "journal-index.schema.json"),
+        "utf-8",
+      ),
+    );
+    const values =
+      schema?.properties?.touched_issues?.items?.properties?.to?.enum;
+    if (!Array.isArray(values)) {
+      throw new Error(
+        "journal-index.schema.json の touched_issues.to.enum を読めない（スキーマの形が変わった）",
+      );
+    }
+    return values as string[];
+  }
+
+  // **片方向（上流 ⊆ board）で固定する**。移行期は board が先行して語彙を持つ
+  // （上流の語彙追加より board の追随を先にマージする規律。#116 §6.1）ため、
+  // board にだけ存在する語彙は正常な状態であり、等号では固定できない。
+  // 逆向き（上流にあって board に無い）はカードが消える事故そのものなので落とす。
+  it("上流スキーマが宣言する語彙を board がすべて受理できる", () => {
+    const board = new Set<string>(LEDGER_STATUSES);
+    const missing = schemaStatusVocabulary().filter(
+      (status) => !board.has(status),
+    );
+
+    expect(missing).toEqual([]);
+  });
+
+  it("board 側の先行分は、上流へ渡す実装計画が残っている語彙に限る", () => {
+    // 先行して持っている語彙の棚卸し。上流が追いついたら（PR4 の contracts:update 後に）
+    // この配列は空になり、両者の語彙が一致する。空にし忘れると気づけるよう列挙しておく。
+    const PENDING_UPSTREAM: readonly string[] = ["人間対応待ち"];
+
+    const schema = new Set(schemaStatusVocabulary());
+    const ahead = LEDGER_STATUSES.filter((status) => !schema.has(status));
+
+    expect(ahead).toEqual(PENDING_UPSTREAM);
   });
 });
