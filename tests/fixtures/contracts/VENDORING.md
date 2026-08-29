@@ -9,7 +9,7 @@ board は台帳・journal・runs.jsonl の**消費者**であり、フォーマ�
 | 取得元 repo | `masanami/claude-flywheel` |
 | 取得元パス | `contracts/` |
 | 取得時コミット | `MANIFEST.json` の `upstream.commit`（**手書きしない**。`npm run contracts:update` が書き換える） |
-| ディレクトリ構成 | 上流の `contracts/` をそのまま写す（直下の `*.tsv` ・ `schemas/` ・ `fixtures/<type>/{valid,invalid}/`） |
+| ディレクトリ構成 | 上流の `contracts/` のうち**収録対象だけ**を同じ配置で写す（直下の `*.tsv` ・ `schemas/` ・ `fixtures/<type>/{valid,invalid}/`。どれが収録・除外かは下記「収録範囲と判断」と `MANIFEST.json` の `files` / `excluded` が正本——直下の `*.tsv` も `fixtures/<type>/` も**全件ではない**） |
 
 **このディレクトリのファイルを board 側で編集しない**。編集すると複製の自己検査（後述）が落ちる。
 
