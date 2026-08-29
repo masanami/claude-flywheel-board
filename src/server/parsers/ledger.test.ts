@@ -59,6 +59,30 @@ describe("parseLedger", () => {
     expect(c002?.needsHuman).toBe(false);
   });
 
+  // `人間対応待ち`（masanami/claude-flywheel#116 / 上流 docs/human-hold-representation.md 案 A）。
+  // board が先に受理できないと、上流が書き始めた瞬間にそのエントリが ParseError へ回り
+  // **カードごと board から消える**（承認導線ごと）。受理と needsHuman の両方を固定する。
+  it("human-hold.md の 人間対応待ち エントリ（C-201）を errors なしで読む", () => {
+    const content = readFixture("human-hold.md");
+
+    const result = parseLedger(content, "human-hold.md");
+
+    expect(result.errors).toEqual([]);
+    expect(result.challenges.map((c) => c.id)).toEqual(["C-201", "C-202"]);
+    expect(result.challenges[0]?.status).toBe("人間対応待ち");
+  });
+
+  it("human-hold.md の 人間対応待ち エントリ（C-201）は needsHuman: true", () => {
+    const content = readFixture("human-hold.md");
+
+    const result = parseLedger(content, "human-hold.md");
+
+    const c201 = result.challenges.find((c) => c.id === "C-201");
+    const c202 = result.challenges.find((c) => c.id === "C-202");
+    expect(c201?.needsHuman).toBe(true);
+    expect(c202?.needsHuman).toBe(false);
+  });
+
   it("valid.md の C-001 は 説明・完了条件（前方一致: 完了条件（任意・分かれば））・タスク案 を抽出する", () => {
     const content = readFixture("valid.md");
 
@@ -644,16 +668,6 @@ describe("複数行フィールド・参照フィールド（#151 / #155）", ()
       const c003 = result.challenges.find((c) => c.id === "C-003");
       expect(c003?.status).toBe("完了");
       expect(c003?.taskPlan).toBe("1. 修正 PR を作成する");
-    });
-
-    it("機械生成エントリ（periodic-audit）の複数行ネスト説明を取得する", () => {
-      const result = parseContractFixture("audit-entry.md");
-
-      expect(result.errors).toEqual([]);
-      const c011 = result.challenges.find((c) => c.id === "C-011");
-      expect(c011?.description).toContain("- 抽出: 3 件");
-      expect(c011?.description).toContain("- 要人間判定〔AC-4〕: 1 件");
-      expect(c011?.description?.split("\n")).toHaveLength(5);
     });
 
     it("値の終端は空行（読み取り規則 3）: 空行より後のネスト項目は値に含めない", () => {

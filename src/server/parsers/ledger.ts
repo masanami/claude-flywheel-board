@@ -5,23 +5,45 @@ import type { ParseError } from "./types.ts";
 // 単一定義は ./types.ts（セルフレビュー指摘対応: ParseError 三重定義の解消）。
 export type { ParseError } from "./types.ts";
 
-export type LedgerStatus =
-  | "未分類"
-  | "分類済"
-  | "計画承認待ち"
-  | "着手中"
-  | "検証中"
-  | "完了確認待ち"
-  | "完了";
-
-const VALID_STATUSES: ReadonlySet<string> = new Set<LedgerStatus>([
+/**
+ * 台帳のステータス語彙（正本は claude-flywheel 側・NFR-05）。board は**消費者**として
+ * 追随するだけで、独自に語彙を足さない。**型と実行時の集合はここ 1 箇所から導出する**
+ * （union と Set を別々に書くと必ずずれる）。
+ *
+ * `人間対応待ち` は「親エージェントが人間へ問いを上げて保留中」を表す側道の状態
+ * （上流 `docs/human-hold-representation.md` 案 A。masanami/claude-flywheel#116）。
+ * **board が先に受理できるようになっている必要がある**——上流が書き始めてから追随すると、
+ * 未知ステータスは `ParseError` へ回されて**そのエントリがカードごと消える**（承認導線ごと）。
+ */
+export const LEDGER_STATUSES = [
   "未分類",
   "分類済",
   "計画承認待ち",
   "着手中",
+  "人間対応待ち",
   "検証中",
   "完了確認待ち",
   "完了",
+] as const;
+
+export type LedgerStatus = (typeof LEDGER_STATUSES)[number];
+
+const VALID_STATUSES: ReadonlySet<string> = new Set<LedgerStatus>(
+  LEDGER_STATUSES,
+);
+
+/**
+ * 🔔承認待ち（`needsHuman`）として集約するステータス。
+ *
+ * `人間対応待ち` を含めるのは人間の決定（上流 `docs/human-hold-representation.md` §7 Q2）。
+ * 含めないと「人間の入力を待っている」課題が承認待ちフィルタに出ず、運用者が保留に
+ * 気付けない。FR-04 の「承認待ちの集約」はチェックボックス承認に限らず
+ * **人間の入力待ち**を集める面として読む。
+ */
+const NEEDS_HUMAN_STATUSES: ReadonlySet<LedgerStatus> = new Set<LedgerStatus>([
+  "計画承認待ち",
+  "人間対応待ち",
+  "完了確認待ち",
 ]);
 
 /**
@@ -386,7 +408,7 @@ export function parseLedger(
       status,
       priority,
       position,
-      needsHuman: status === "計画承認待ち" || status === "完了確認待ち",
+      needsHuman: NEEDS_HUMAN_STATUSES.has(status),
       summary: undefined,
       description,
       completionCriteria,
