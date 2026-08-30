@@ -2,7 +2,7 @@
   "upstream": {
     "repo": "masanami/claude-flywheel",
     "path": "contracts/",
-    "commit": "cfd7af8",
+    "commit": "a0de9b5",
     "retrievedAt": "2026-08-29"
   },
   "files": [
@@ -83,6 +83,10 @@
       "sha256": "a1b91d9ef92dad987a8da1163faa09cef361875a096220e3166d825f38d0dad0"
     },
     {
+      "path": "fixtures/ledger/valid/human-hold.md",
+      "sha256": "22d6d93e3c45da3c006932411a9299ef03d78e09fea1ee9f3bff3dc70d22a547"
+    },
+    {
       "path": "fixtures/ledger/valid/multiline-and-refs.md",
       "sha256": "a2fc95e276f2eee6c85dd3199554183281ceefe2235975c3098184397af06ddc"
     },
@@ -115,8 +119,12 @@
       "sha256": "708a4453f2126e14d930f018d14310afd79e191448ecbbf72fffd7cff2334041"
     },
     {
+      "path": "ledger-status-vocabulary.tsv",
+      "sha256": "e7d9886f12d4d58f80503ae1dbf806578094fd05c05be11a70b83cb7dc3fff73"
+    },
+    {
       "path": "schemas/journal-index.schema.json",
-      "sha256": "c120ba3c22e8d0c1640083e77e870b318f8630b702b8d00a1ce3d7973b6ee42f"
+      "sha256": "f9795f51151d8b0545ae1effa44a35536d264a7140a40c608fdb35c9ccaa7bb8"
     },
     {
       "path": "schemas/runs.schema.json",
@@ -129,8 +137,16 @@
       "reason": "上流の散文 README（契約の全体像）。board のテストが固定できる対象ではなく、コピーすると散文の二重管理になる。読むときは常に上流の最新を読む（VENDORING.md「散文正本をコピーしない理由」）"
     },
     {
+      "path": "cycle-commit-paths.txt",
+      "reason": "サイクルコミットが触れてよいパス集合＝書き手側の規定。board は状態ファイルへ書き込まない（NFR-01）ため対応する挙動が無く、収録しても固定できる board の挙動が存在しない"
+    },
+    {
       "path": "fixtures/journal-md/",
       "reason": "journal/YYYY-MM-DD-cycle.md の定型 5 セクション。board には現時点でこの構造を解釈するパーサが無く（マークダウンプレビューは任意の .md を不透明に描画するだけ）、収録しても固定できる board の挙動が存在しない。P4 journal タイムライン（requirements.md OQ-03）でセクション構造を読むようになった時点で収録する"
+    },
+    {
+      "path": "ledger-read-scope.tsv",
+      "reason": "run-cycle が「その周にどこまで台帳を開くか」を決める書き手側の規定（ステータスごとの読み込み範囲）。board は台帳全体を常に読む消費者であり、この表が変わっても board の読み取り結果に差が出ない（VENDORING.md「収録可否の基準」）。語彙の増減自体は ledger-status-vocabulary.tsv の収録分で固定する"
     }
   ]
 }

@@ -297,6 +297,7 @@ describe("上流フォーマット契約（台帳）", () => {
     const EXPECTED_IDS: Record<string, string[]> = {
       "archive.md": ["C-003", "C-004"],
       "handwritten-and-ingested.md": ["C-001", "C-002"],
+      "human-hold.md": ["C-101", "C-102"],
       "multiline-and-refs.md": ["C-101", "C-102", "C-103", "C-104"],
     };
 
@@ -389,11 +390,36 @@ describe("上流フォーマット契約（台帳）", () => {
 
 // ステータス語彙は上流と board で二重管理されており（正本は上流・NFR-05）、board が
 // 追随を落とすと**そのステータスのエントリがカードごと消える**（未知ステータスは
-// ParseError へ回る）。ズレを機械で見つけるオラクルとして、収録済みスキーマが持つ
-// 語彙の列挙（`touched_issues.to` の enum）を使う——上流の語彙が機械可読な形で
-// vendoring されている唯一の場所。
+// ParseError へ回る）。閉じた語彙の複製は「検査する箇所」ではなく**列挙する箇所**
+// （union 型・Set・スキーマの enum）に潜み、1 語の grep では出ない——だからここで
+// 機械的に突き合わせる。
+//
+// オラクルは収録済みの `ledger-status-vocabulary.tsv`（上流の語彙の**正本**。#116 で
+// templates のステータス行から分離された）。スキーマの `touched_issues.to` の enum は
+// その複製で、board は ajv オラクルとして実行するため両者の一致もここで固定する。
 describe("上流フォーマット契約（ステータス語彙）", () => {
-  /** 上流スキーマが宣言している台帳ステータスの語彙。 */
+  /**
+   * 上流の語彙の正本（`ledger-status-vocabulary.tsv` の status 列）。
+   * 形式はタブ区切りで `status / track / order` の 3 列。`#` 始まりはコメント。
+   */
+  function upstreamStatusVocabulary(): string[] {
+    const rows = readFileSync(
+      path.join(CONTRACTS_ROOT, "ledger-status-vocabulary.tsv"),
+      "utf-8",
+    )
+      .split("\n")
+      .filter((line) => line.trim() !== "" && !line.startsWith("#"))
+      .map((line) => line.split("\t"));
+    const malformed = rows.filter((columns) => columns.length !== 3);
+    if (rows.length === 0 || malformed.length > 0) {
+      throw new Error(
+        "ledger-status-vocabulary.tsv を読めない（表の形が変わった）",
+      );
+    }
+    return rows.map((columns) => columns[0] as string);
+  }
+
+  /** 上流スキーマが宣言している台帳ステータスの語彙（正本の複製）。 */
   function schemaStatusVocabulary(): string[] {
     const schema = JSON.parse(
       readFileSync(
@@ -411,13 +437,22 @@ describe("上流フォーマット契約（ステータス語彙）", () => {
     return values as string[];
   }
 
-  // **片方向（上流 ⊆ board）で固定する**。移行期は board が先行して語彙を持つ
-  // （上流の語彙追加より board の追随を先にマージする規律。#116 §6.1）ため、
-  // board にだけ存在する語彙は正常な状態であり、等号では固定できない。
-  // 逆向き（上流にあって board に無い）はカードが消える事故そのものなので落とす。
-  it("上流スキーマが宣言する語彙を board がすべて受理できる", () => {
+  // 収録した 2 つの列挙の突き合わせ。board は正本（tsv）をパーサの語彙の照合に、
+  // 複製（スキーマの enum）を journal の ajv オラクルに使っており、両者がずれると
+  // **board 自身のパーサとオラクルが食い違う**（正規の journal 行をオラクルが拒否する）。
+  it("上流の語彙の正本と、それを複製したスキーマ enum が一致している", () => {
+    expect([...schemaStatusVocabulary()].sort()).toEqual(
+      [...upstreamStatusVocabulary()].sort(),
+    );
+  });
+
+  // 双方向で固定するが、**向きごとに意味が違う**ので 2 本に分ける。
+  // 上流 ⊆ board（この it）はカードが消える事故そのものなので無条件に落とす。
+  // board ⊆ 上流（次の it）は移行期に board が先行して語彙を持つ規律（#116 §6.1）が
+  // あるため等号では固定できず、先行分を明示的に列挙して固定する。
+  it("上流が宣言する語彙を board がすべて受理できる", () => {
     const board = new Set<string>(LEDGER_STATUSES);
-    const missing = schemaStatusVocabulary().filter(
+    const missing = upstreamStatusVocabulary().filter(
       (status) => !board.has(status),
     );
 
@@ -425,12 +460,13 @@ describe("上流フォーマット契約（ステータス語彙）", () => {
   });
 
   it("board 側の先行分は、上流へ渡す実装計画が残っている語彙に限る", () => {
-    // 先行して持っている語彙の棚卸し。上流が追いついたら（PR4 の contracts:update 後に）
-    // この配列は空になり、両者の語彙が一致する。空にし忘れると気づけるよう列挙しておく。
-    const PENDING_UPSTREAM: readonly string[] = ["人間対応待ち"];
+    // 先行して持っている語彙の棚卸し。`人間対応待ち`（#116 / PR2 で board が先行）は
+    // PR4 の contracts:update で上流が追いついたため空になった。次に board が先行する
+    // ときはここへ列挙する——空にし忘れ・戻し忘れのどちらでも落ちる。
+    const PENDING_UPSTREAM: readonly string[] = [];
 
-    const schema = new Set(schemaStatusVocabulary());
-    const ahead = LEDGER_STATUSES.filter((status) => !schema.has(status));
+    const upstream = new Set(upstreamStatusVocabulary());
+    const ahead = LEDGER_STATUSES.filter((status) => !upstream.has(status));
 
     expect(ahead).toEqual(PENDING_UPSTREAM);
   });

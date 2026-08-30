@@ -1,0 +1,45 @@
+# ledger-status-vocabulary.tsv — 課題台帳のステータス語彙の**正本**（閉じた集合）。
+#
+# #116 / docs/human-hold-representation.md §2.5 の決定による分離。それまで語彙の正本は
+# templates/challenge-ledger.md のステータス行の全角括弧内にある `→` 連鎖であり、
+# **語彙の列挙と主経路の遷移順が同じ 1 本の文字列に符号化されていた**。この符号化は
+# 直列に並ばない状態（主経路の途中から出入りする側道）を表現できず、無理に並べると
+# 「必須の中間ステップ」という嘘を人間が読む面（テンプレート）に残す。
+# そこで**語彙の列挙をここへ分離**し、遷移列は「主経路の記入例」として残した
+# （両者の一致はテストが順序込みで固定する＝記入例が嘘になったら落ちる）。
+#
+# この表を読む者:
+#   1. scripts/tests/ledger-index.test.sh の T1 / T7 / T10（他の列挙箇所との双方向一致）
+#   2. 語彙を増減する人間・エージェント（**増減するときは、まずこの表を直す**）
+#
+# **語彙を増減したら、次の列挙箇所も同時に直す**。いずれもテストが双方向で固定しており、
+# 直し忘れは fail-closed で落ちる（「2 つのリストを同期させる」散文規定にはしない）:
+#   - contracts/ledger-read-scope.tsv               読み込み範囲の行を足す（T1）
+#   - contracts/schemas/journal-index.schema.json   touched_issues.to の enum（T10）
+#   - templates/journal/README.md の touched_issues  同 enum の散文正本（T10）
+#   - skills/run-cycle/SKILL.md                     各手順の対象条件（T7）
+#   - templates/challenge-ledger.md のステータス行   **track=main のときだけ**（T7）
+#   - docs/challenge-ledger-format.md のステータス行 **track=main のときだけ**（T7）
+#
+# 形式: タブ区切り。# 始まりはコメント。列は status / track / order。
+# track の閉語彙（この 2 値以外は fail）:
+#   main  主経路の状態。order は 1 始まりの連番で、templates/challenge-ledger.md と
+#         docs/challenge-ledger-format.md のステータス行の `→` 連鎖と**順序込みで一致**する
+#   side  側道の状態。主経路の途中から出入りし、直列の遷移列には並ばない。order は `-`
+#         とし、上記 2 ファイルの `→` 連鎖には**並べない**（並べると嘘になる。上記の分離の理由）
+#
+# **現在の side は「人間の入力待ちの保留」だけ**（`人間対応待ち`。#116 / 案 A）。
+# ledger-index.test.sh の T11〜T13 は、この意味を前提に side の全値を保留ステータスとして
+# 扱い、SKILL.md の保留規定（手順3 の対象外・経路表・手順1 の真理値表）との接続を固定する。
+# **これに当てはまらない side を足すときは、まず T11〜T13 の前提を見直すこと**（足すだけだと
+# 保留でない状態にも保留の規定を要求してテストが落ちる＝fail-closed で気付ける）。
+#
+#status	track	order
+未分類	main	1
+分類済	main	2
+計画承認待ち	main	3
+着手中	main	4
+検証中	main	5
+完了確認待ち	main	6
+完了	main	7
+人間対応待ち	side	-

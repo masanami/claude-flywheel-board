@@ -9,7 +9,7 @@ board は台帳・journal・runs.jsonl の**消費者**であり、フォーマ�
 | 取得元 repo | `masanami/claude-flywheel` |
 | 取得元パス | `contracts/` |
 | 取得時コミット | `MANIFEST.json` の `upstream.commit`（**手書きしない**。`npm run contracts:update` が書き換える） |
-| ディレクトリ構成 | 上流の `contracts/` をそのまま写す（`schemas/` ・ `fixtures/<type>/{valid,invalid}/`） |
+| ディレクトリ構成 | 上流の `contracts/` のうち**収録対象だけ**を同じ配置で写す（直下の `*.tsv` ・ `schemas/` ・ `fixtures/<type>/{valid,invalid}/`。どれが収録・除外かは下記「収録範囲と判断」と `MANIFEST.json` の `files` / `excluded` が正本——直下の `*.tsv` も `fixtures/<type>/` も**全件ではない**） |
 
 **このディレクトリのファイルを board 側で編集しない**。編集すると複製の自己検査（後述）が落ちる。
 
@@ -32,6 +32,9 @@ board は台帳・journal・runs.jsonl の**消費者**であり、フォーマ�
 | `fixtures/journal-index/` （正例 2・誤例 6） | **全件** | `parseJournal` が読む |
 | `fixtures/runs/` （正例 2・誤例 5） | **全件** | `parseRuns` が読む |
 | `schemas/journal-index.schema.json`・`schemas/runs.schema.json` | **収録** | パーサテストで**判定オラクル**として実行する（下記「スキーマの使い方」） |
+| `ledger-status-vocabulary.tsv` | **収録** | 台帳ステータス語彙の**正本**（閉じた集合）。board の `LEDGER_STATUSES` はこの複製で、ずれると未知ステータスが `ParseError` へ回り**そのエントリがカードごと消える**——読み取り結果に直接差が出る。`contracts.test.ts` が status 列と `LEDGER_STATUSES` の双方向一致を固定する |
+| `ledger-read-scope.tsv` | **見送り** | run-cycle が「その周にどこまで台帳を開くか」を決める**書き手側**の規定。board は台帳全体を常に読むため、この表が変わっても読み取り結果に差が出ない |
+| `cycle-commit-paths.txt` | **見送り** | サイクルコミットが触れてよいパス集合＝**書き手側**の規定。board は状態ファイルへ書き込まない（NFR-01）ため対応する挙動が無い |
 | `fixtures/journal-md/` （正例 2・誤例 2） | **見送り** | `journal/YYYY-MM-DD-cycle.md` の定型 5 セクションを解釈するパーサが board に無い。マークダウンプレビューは任意の `.md` を不透明に描画するだけで、セクション欠落・順序崩れで挙動が変わらない。**固定できる board の挙動が存在しない**ため収録しても検査がタウトロジーになる。P4 journal タイムライン（`docs/requirements.md` OQ-03）でセクション構造を読むようになった時点で収録する |
 | `README.md`（上流の散文） | **見送り** | 下記「散文正本をコピーしない理由」 |
 
@@ -115,7 +118,7 @@ FLYWHEEL_CONTRACTS_DIR=/path/to/claude-flywheel npm run contracts:verify
 | テスト | 固定する内容 |
 | --- | --- |
 | `scripts/verify-contract-fixtures.test.ts` | vendoring の同期規律そのもの（複製の自己検査・上流差分検査・検査不能の扱い） |
-| `src/server/parsers/contracts.test.ts` | 全収録フィクスチャの**受理方向**（`valid/` を期待どおり読めること）と**拒否方向**（`invalid/` でクラッシュせず、検出できるものは検出すること）。スキーマと board パーサの判定差の棚卸しもここ |
+| `src/server/parsers/contracts.test.ts` | 全収録フィクスチャの**受理方向**（`valid/` を期待どおり読めること）と**拒否方向**（`invalid/` でクラッシュせず、検出できるものは検出すること）。スキーマと board パーサの判定差の棚卸し、**ステータス語彙の双方向一致**（`ledger-status-vocabulary.tsv` ↔ `LEDGER_STATUSES` ↔ スキーマ enum）もここ |
 | `src/server/parsers/ledger.test.ts` | 台帳の複数行フィールド・参照フィールドの値レベルの受理方向（#151 / #155） |
 | `src/server/parsers/calendar-date.test.ts` | 暦日の実在判定（`format: date` / `date-time` の意味検証に相当する部分） |
 
