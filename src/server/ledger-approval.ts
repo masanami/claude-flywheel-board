@@ -47,7 +47,9 @@ export type ApproveChallengeInput = {
 };
 
 export type ApproveChallengeResult =
-  | { ok: true; commit: string; challenge: Challenge }
+  /** `commit` は作成したコミットの SHA。コミット後に SHA を取得できなかった
+   * 場合のみ null（承認自体は成立している。commitLedger の末尾コメント参照）。 */
+  | { ok: true; commit: string | null; challenge: Challenge }
   /**
    * `status` は HTTP のステータスコードにそのまま使う。
    * 409 = 前提条件の不成立（並走ロック・ステータス不一致・既に承認済み）、
@@ -282,7 +284,9 @@ function commitLedger(
   ledgerPath: string,
   challengeId: string,
   kind: ApprovalKind,
-): { ok: true; commit: string } | { ok: false; status: 500; error: string } {
+):
+  | { ok: true; commit: string | null }
+  | { ok: false; status: 500; error: string } {
   const relativeLedger = path.relative(workspacePath, ledgerPath);
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
@@ -322,13 +326,24 @@ function commitLedger(
       "--",
       relativeLedger,
     ]);
-    return { ok: true, commit: run(["rev-parse", "HEAD"]) };
   } catch (error) {
     return {
       ok: false,
       status: 500,
       error: `台帳のコミットに失敗しました（identity: ${identity}）。書き込みは取り消しました: ${toMessage(error)}`,
     };
+  }
+
+  // ここから先はコミット済み。**SHA の取得に失敗しても失敗を返してはならない**
+  // （呼び出し元が書き戻し、HEAD の `[x]` と作業ツリーの `[ ]` が食い違う。
+  // エージェントは作業ツリーを読むため承認は前進せず、利用者にはエラーだけが
+  // 見える——「コミットできなければ書き込みを取り消す」の不変条件が、
+  // 「コミットできたなら取り消さない」の側で破れる）。SHA は報告用の情報に
+  // すぎないため、取れなければ null を返して成功として扱う（PRレビュー指摘対応）。
+  try {
+    return { ok: true, commit: run(["rev-parse", "HEAD"]) };
+  } catch {
+    return { ok: true, commit: null };
   }
 }
 

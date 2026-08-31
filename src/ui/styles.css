@@ -540,6 +540,11 @@ body {
 
 .task-card-approval-confirm {
   background: var(--board-needs-human-border);
+  /* 背景は両テーマとも暖色系（light #e8b93f / dark #caa03a）。color: inherit の
+     ままだとダークテーマで前景が #e7e7ea になりコントラスト比が約 2.1:1 に落ち、
+     0.72rem の小さいラベルが読めなくなる（WCAG AA の 4.5:1 未満）。承認は
+     誤操作の影響が大きい操作なので、文字色を暗色に固定して両テーマで読めるようにする。 */
+  color: #1c1c1f;
 }
 
 .task-card-approval-question {

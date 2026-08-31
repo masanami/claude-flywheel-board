@@ -1031,6 +1031,25 @@ ${approvalBlock}
     });
   });
 
+  it("承認フィールドが重複していても、2 個目のチェックボックスを拾わない（先勝ち）", () => {
+    // 重複フィールドでも有効にすると、最初のフィールドに項目が無い場合に
+    // 2 個目のチェックボックスが承認の書き込み対象になる（PRレビュー指摘）。
+    const result = parseLedger(
+      `### [C-001] テスト課題
+
+**分類欄（エージェントが記入）**
+- ステータス: 計画承認待ち
+- 承認（人間がチェック）:
+- 承認（人間がチェック）:
+  - [ ] 計画を承認（FR-13）
+- 備考:
+`,
+      "challenge-ledger.md",
+    );
+
+    expect(result.challenges[0]?.approvals).toBeUndefined();
+  });
+
   it("上流契約フィクスチャの承認行を規定どおり読み取る（行番号込み）", () => {
     const contractPath = `${CONTRACT_LEDGER_ROOT}valid/multiline-and-refs.md`;
     const result = parseLedgerFile(contractPath);

@@ -629,7 +629,11 @@ export function parseLedger(
         // 同一ラベルの重複は先勝ち（既存挙動）。重複側の継続行も取り込まない。
         openField = null;
       }
-      inApprovalField = key === APPROVAL_FIELD_LABEL;
+      // 承認フィールドも通常のフィールドと同じく**先勝ち**にする。重複した
+      // `- 承認（人間がチェック）:` でも有効にすると、最初のフィールドに項目が
+      // 無い場合に 2 個目のチェックボックスが approvals に入り、**その行が
+      // 承認の書き込み対象になる**（PRレビュー指摘対応）。
+      inApprovalField = existing === undefined && key === APPROVAL_FIELD_LABEL;
       continue;
     }
 

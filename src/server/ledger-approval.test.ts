@@ -168,6 +168,46 @@ describe("approveChallenge", () => {
     expect(result.ok && result.commit).toBe(git("rev-parse", "HEAD"));
   });
 
+  it("コミット後に SHA を取得できなくても成功として扱い、書き戻さない", () => {
+    // commit と rev-parse を同じ try に入れると、commit 成功後に rev-parse が
+    // 失敗した場合に書き戻しが走り、HEAD の [x] と作業ツリーの [ ] が食い違う。
+    // エージェントは作業ツリーを読むため承認は前進せず、利用者にはエラーだけが
+    // 見える（PRレビュー指摘）。SHA は報告用の情報にすぎない。
+    //
+    // rev-parse だけを失敗させるため、PATH の先頭に「commit は本物へ委譲し
+    // rev-parse だけ失敗する git ラッパ」を置く。
+    // ラッパは workspace の**外**に置く（中に置くと未追跡ファイルとして
+    // git status に現れ、作業ツリーの清潔さの検証と混ざる）。
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "board-fake-git-"));
+    const realGit = execFileSync("which", ["git"], {
+      encoding: "utf-8",
+    }).trim();
+    fs.writeFileSync(
+      path.join(binDir, "git"),
+      `#!/bin/sh\nfor a in "$@"; do [ "$a" = "rev-parse" ] && exit 42; done\nexec ${realGit} "$@"\n`,
+      { mode: 0o755 },
+    );
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${binDir}:${savedPath}`;
+
+    try {
+      const result = approve();
+
+      expect(result.ok).toBe(true);
+      expect(result.ok && result.commit).toBeNull();
+      // 書き戻していない＝作業ツリーにも [x] が入っている。
+      expect(fs.readFileSync(ledgerPath, "utf-8")).toContain(
+        "  - [x] 計画を承認",
+      );
+    } finally {
+      restoreEnv("PATH", savedPath);
+      fs.rmSync(binDir, { recursive: true, force: true });
+    }
+    // コミットも実際に入っている（HEAD と作業ツリーが食い違わない）。
+    expect(git("status", "--porcelain")).toBe("");
+    expect(git("log", "--oneline").split("\n")).toHaveLength(2);
+  });
+
   it("成功時に cycle.lock を解放する", () => {
     expect(approve().ok).toBe(true);
 
