@@ -387,8 +387,10 @@ describe("AgentColumn", () => {
       );
 
       const dataTransfer = makeDataTransfer();
-      const draggedCard = screen.getByText("移動対象").closest(".task-card");
-      if (!draggedCard) throw new Error("task-card が見つかりません");
+      const draggedCard = screen
+        .getByText("移動対象")
+        .closest(".task-card-body");
+      if (!draggedCard) throw new Error("task-card-body が見つかりません");
       fireEvent.dragStart(draggedCard, { dataTransfer });
       fireEvent.drop(screen.getByTestId("agent-column-row-C-044"), {
         dataTransfer,
@@ -413,8 +415,8 @@ describe("AgentColumn", () => {
       );
 
       const dataTransfer = makeDataTransfer();
-      const draggedCard = screen.getByText("1番目").closest(".task-card");
-      if (!draggedCard) throw new Error("task-card が見つかりません");
+      const draggedCard = screen.getByText("1番目").closest(".task-card-body");
+      if (!draggedCard) throw new Error("task-card-body が見つかりません");
       fireEvent.dragStart(draggedCard, { dataTransfer });
       fireEvent.drop(screen.getByTestId("agent-column-row-C-002"), {
         dataTransfer,
@@ -434,8 +436,8 @@ describe("AgentColumn", () => {
       );
 
       const dataTransfer = makeDataTransfer();
-      const draggedCard = screen.getByText("対象").closest(".task-card");
-      if (!draggedCard) throw new Error("task-card が見つかりません");
+      const draggedCard = screen.getByText("対象").closest(".task-card-body");
+      if (!draggedCard) throw new Error("task-card-body が見つかりません");
       fireEvent.dragStart(draggedCard, { dataTransfer });
       fireEvent.drop(screen.getByTestId("agent-column-row-C-001"), {
         dataTransfer,
@@ -456,8 +458,8 @@ describe("AgentColumn", () => {
       const dataTransfer = makeDataTransfer();
       const draggedCard = screen
         .getByText("medical のタスク")
-        .closest(".task-card");
-      if (!draggedCard) throw new Error("task-card が見つかりません");
+        .closest(".task-card-body");
+      if (!draggedCard) throw new Error("task-card-body が見つかりません");
       fireEvent.dragStart(draggedCard, { dataTransfer });
       unmountA();
 
@@ -512,8 +514,10 @@ describe("AgentColumn", () => {
       );
 
       const dataTransfer = makeDataTransfer();
-      const draggedCard = screen.getByText("移動対象").closest(".task-card");
-      if (!draggedCard) throw new Error("task-card が見つかりません");
+      const draggedCard = screen
+        .getByText("移動対象")
+        .closest(".task-card-body");
+      if (!draggedCard) throw new Error("task-card-body が見つかりません");
       fireEvent.dragStart(draggedCard, { dataTransfer });
       fireEvent.drop(screen.getByTestId("agent-column-bottom-drop-zone"), {
         dataTransfer,
@@ -1333,8 +1337,8 @@ describe("AgentColumn", () => {
 
   describe("キーボードでの並べ替え（#25）", () => {
     function focusCard(title: string): HTMLElement {
-      const card = screen.getByText(title).closest(".task-card");
-      if (!card) throw new Error("task-card が見つかりません");
+      const card = screen.getByText(title).closest(".task-card-body");
+      if (!card) throw new Error("task-card-body が見つかりません");
       // fireEvent.focus は合成イベントを発火するのみで document.activeElement
       // を実際には更新しない。Escape 後のフォーカス復帰確認（toHaveFocus）に
       // 実フォーカス状態が必要なため、element.focus() で実際にフォーカスする。
@@ -1592,8 +1596,10 @@ describe("AgentColumn", () => {
 
       // 並べ替えモードは終了しているため、Enter は素の詳細モーダルを開く
       // 挙動に戻っているはず。
-      const refreshedCard = screen.getByText("2番目").closest(".task-card");
-      if (!refreshedCard) throw new Error("task-card が見つかりません");
+      const refreshedCard = screen
+        .getByText("2番目")
+        .closest(".task-card-body");
+      if (!refreshedCard) throw new Error("task-card-body が見つかりません");
       fireEvent.keyDown(refreshedCard, { key: "Enter" });
 
       expect(prefill).not.toHaveBeenCalled();
@@ -1631,8 +1637,10 @@ describe("AgentColumn", () => {
         screen.queryByTestId("agent-column-row-C-003"),
       ).not.toHaveAttribute("data-drop-target");
 
-      const refreshedCard = screen.getByText("1番目").closest(".task-card");
-      if (!refreshedCard) throw new Error("task-card が見つかりません");
+      const refreshedCard = screen
+        .getByText("1番目")
+        .closest(".task-card-body");
+      if (!refreshedCard) throw new Error("task-card-body が見つかりません");
       fireEvent.keyDown(refreshedCard, { key: "Enter" });
 
       expect(prefill).not.toHaveBeenCalled();
@@ -1669,8 +1677,10 @@ describe("AgentColumn", () => {
         />,
       );
 
-      const refreshedCard = screen.getByText("1番目").closest(".task-card");
-      if (!refreshedCard) throw new Error("task-card が見つかりません");
+      const refreshedCard = screen
+        .getByText("1番目")
+        .closest(".task-card-body");
+      if (!refreshedCard) throw new Error("task-card-body が見つかりません");
       fireEvent.keyDown(refreshedCard, { key: "Enter" });
 
       // 読み上げた基準（C-003）と異なる課題（D-999）を基準にした指示文が

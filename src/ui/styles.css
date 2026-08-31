@@ -487,24 +487,47 @@ body {
 }
 
 .task-card {
-  /* TaskCard は <button> 要素（詳細モーダルを開く読み取り専用の唯一の操作）。
-   * ブラウザ既定のボタン装飾をリセットし、既存カードの見た目を保つ。 */
+  /* カードの見た目を持つコンテナ（#169）。承認ボタンをカードの中へ置くため、
+   * 対話要素ではない <div> にしてある。クリック・ドラッグ・キーボード並べ替えは
+   * 内側の .task-card-body（<button>）が担う。 */
   display: block;
   width: 100%;
   position: relative;
-  font: inherit;
-  color: inherit;
-  text-align: left;
-  cursor: grab;
   background: var(--board-card-bg);
   border: 1px solid var(--board-card-border);
   border-radius: 6px;
   padding: 0.5rem 0.65rem;
 }
 
-.task-card:focus-visible {
+/* フォーカスリングはカード全体に出す（#169）。内側のクリック領域と承認ボタンの
+ * どちらにフォーカスが入っても、輪郭は 1 枚のカードとして描かれる。
+ * :focus-within ではなく :has(:focus-visible) にしているのは、マウスクリックでは
+ * リングを出さない従来の挙動（.task-card:focus-visible）をそのまま保つため。
+ * :has() は Baseline widely available（Chrome 105 / Safari 15.4 / Firefox 121）で、
+ * board はローカル起動の GUI なので後方互換フォールバックは置かない。 */
+.task-card:has(:focus-visible) {
   outline: 2px solid var(--board-needs-human-border);
   outline-offset: 1px;
+}
+
+.task-card-body {
+  /* 内側のクリック領域。ブラウザ既定のボタン装飾をリセットし、コンテナ側の
+   * 見た目をそのまま透かす。パディングはコンテナが持つのでここでは 0。 */
+  display: block;
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: grab;
+  background: none;
+  border: 0;
+  padding: 0;
+}
+
+/* リングはコンテナ側（.task-card:has(:focus-visible)）が描くため、
+ * 内側では出さない（輪郭が二重になるのを防ぐ）。 */
+.task-card-body:focus-visible {
+  outline: none;
 }
 
 .task-card[data-needs-human="true"] {
@@ -512,8 +535,9 @@ body {
   border-left: 3px solid var(--board-needs-human-border);
 }
 
-/* 承認導線（#165・FR-20）。カード本体（<button>）の入れ子にならないよう、
-   兄弟要素として直下に置く。 */
+/* 承認導線（#165・FR-20）。カード（.task-card）の中・本文（.task-card-body）の
+   下に置く（#169）。カードを「コンテナ＋内側のクリック領域」に分けたことで、
+   <button> の入れ子を作らずにカードの内側へ収められる。 */
 .task-card-approval {
   display: flex;
   flex-wrap: wrap;

@@ -79,13 +79,13 @@ type TooltipPosition =
   | { left: number; top: number; bottom?: undefined }
   | { left: number; bottom: number; top?: undefined };
 
-function computeTooltipPosition(trigger: HTMLElement): TooltipPosition {
-  const rect = trigger.getBoundingClientRect();
+function computeTooltipPosition(card: HTMLElement): TooltipPosition {
+  const rect = card.getBoundingClientRect();
   // カード内padding（0.65rem）に合わせて左端を揃える。
   const left = rect.left + 10;
   // 上出しが収まる下限はカラム本体の上端。ここを越えるとカラムヘッダー
   //（"<エージェント名> idle ＋差し込み"）に被るので下出しへ回す（#41）。
-  const columnBody = trigger.closest(".agent-column-body");
+  const columnBody = card.closest(".agent-column-body");
   const boundaryTop = columnBody ? columnBody.getBoundingClientRect().top : 0;
   if (rect.top - TOOLTIP_GAP - TOOLTIP_ESTIMATED_HEIGHT >= boundaryTop) {
     return { left, bottom: window.innerHeight - rect.top + TOOLTIP_GAP };
@@ -129,6 +129,12 @@ export function TaskCard({
   // カードがフォーカス中のみ、並べ替えのキー操作ヒントを表示する（#25）。
   // ツールチップ表示（summary の有無に依存）とは独立に管理する。
   const [isFocused, setIsFocused] = useState(false);
+  // ツールチップの位置決めはカード（コンテナ）の矩形を基準にする（#169）。
+  // 内側のクリック領域ではなくコンテナを基準にすることで、承認ブロックを
+  // 含めた高さで上下を判定でき、下出しのときに承認ボタンへ被らない。
+  const cardRef = useRef<HTMLDivElement>(null);
+  // モーダルを閉じたときのフォーカス復帰先。実際にフォーカスを受け取れるのは
+  // 内側のクリック領域（.task-card-body）であってコンテナではない。
   const triggerRef = useRef<HTMLButtonElement>(null);
   const tooltipId = useId();
 
@@ -178,8 +184,8 @@ export function TaskCard({
   };
 
   const updateTooltipPosition = useCallback(() => {
-    if (triggerRef.current) {
-      setTooltipPosition(computeTooltipPosition(triggerRef.current));
+    if (cardRef.current) {
+      setTooltipPosition(computeTooltipPosition(cardRef.current));
     }
   }, []);
 
@@ -219,136 +225,146 @@ export function TaskCard({
 
   return (
     <>
-      <button
-        ref={triggerRef}
-        type="button"
+      {/* カード（#169）: 「見た目のコンテナ」と「内側のクリック領域」に分ける。
+       * 承認ボタンをカードの**中**へ置くために必要な分割で、こうしないと
+       * <button> の入れ子（不正な HTML。キーボード操作と支援技術の挙動が壊れる）
+       * になる。コンテナ自身はクリック不可の <div> で、操作（モーダル・ドラッグ・
+       * キーボード並べ替え）はすべて内側の .task-card-body が持つ。 */}
+      <div
+        ref={cardRef}
         className="task-card"
-        draggable={!readOnly}
         data-needs-human={challenge.needsHuman || undefined}
-        aria-describedby={tooltipVisible ? tooltipId : undefined}
-        onMouseEnter={showTooltip}
-        onMouseLeave={hideTooltip}
-        onFocus={() => {
-          showTooltip();
-          setIsFocused(true);
-        }}
-        onBlur={() => {
-          hideTooltip();
-          setIsFocused(false);
-          // フォーカスを失った時点で並べ替えモード中なら、見えないまま
-          // モードが残留する事故（#25 レビュー指摘）を防ぐため暗黙的に
-          // キャンセルする。ヒント表示は blur で消えるが isReordering は
-          // 呼び出し元（AgentColumn）の状態なので、ここで明示的に知らせる。
-          if (isReordering) {
-            onReorderCancel?.();
-          }
-        }}
-        onDragStart={(event) => {
-          if (readOnly) {
-            return;
-          }
-          event.dataTransfer.setData(CHALLENGE_DRAG_MIME, challenge.id);
-          event.dataTransfer.setData(AGENT_NAME_DRAG_MIME, agentName);
-          event.dataTransfer.effectAllowed = "move";
-        }}
-        onClick={openModal}
-        onKeyDown={(event) => {
-          // キーボードでの並べ替え（#25）: Alt+ArrowUp/Down は isReordering の
-          // 値に関わらず常に通知する（最初の押下がモード開始を兼ねるため、
-          // 開始判定自体は呼び出し元の AgentColumn に委ねる）。
-          // 読み取り専用（アーカイブ）では並べ替え自体を無効化する。
-          if (
-            !readOnly &&
-            event.altKey &&
-            (event.key === "ArrowUp" || event.key === "ArrowDown")
-          ) {
-            event.preventDefault();
-            onReorderMove?.(event.key === "ArrowUp" ? "up" : "down");
-            return;
-          }
-          if (isReordering) {
-            // 並べ替えモード中は、素の Enter を「モーダルを開く」処理へ
-            // 発火させてはならない（既存の openModal 分岐より先に確定/
-            // キャンセルへ振り分ける）。
+      >
+        <button
+          ref={triggerRef}
+          type="button"
+          className="task-card-body"
+          draggable={!readOnly}
+          aria-describedby={tooltipVisible ? tooltipId : undefined}
+          onMouseEnter={showTooltip}
+          onMouseLeave={hideTooltip}
+          onFocus={() => {
+            showTooltip();
+            setIsFocused(true);
+          }}
+          onBlur={() => {
+            hideTooltip();
+            setIsFocused(false);
+            // フォーカスを失った時点で並べ替えモード中なら、見えないまま
+            // モードが残留する事故（#25 レビュー指摘）を防ぐため暗黙的に
+            // キャンセルする。ヒント表示は blur で消えるが isReordering は
+            // 呼び出し元（AgentColumn）の状態なので、ここで明示的に知らせる。
+            if (isReordering) {
+              onReorderCancel?.();
+            }
+          }}
+          onDragStart={(event) => {
+            if (readOnly) {
+              return;
+            }
+            event.dataTransfer.setData(CHALLENGE_DRAG_MIME, challenge.id);
+            event.dataTransfer.setData(AGENT_NAME_DRAG_MIME, agentName);
+            event.dataTransfer.effectAllowed = "move";
+          }}
+          onClick={openModal}
+          onKeyDown={(event) => {
+            // キーボードでの並べ替え（#25）: Alt+ArrowUp/Down は isReordering の
+            // 値に関わらず常に通知する（最初の押下がモード開始を兼ねるため、
+            // 開始判定自体は呼び出し元の AgentColumn に委ねる）。
+            // 読み取り専用（アーカイブ）では並べ替え自体を無効化する。
+            if (
+              !readOnly &&
+              event.altKey &&
+              (event.key === "ArrowUp" || event.key === "ArrowDown")
+            ) {
+              event.preventDefault();
+              onReorderMove?.(event.key === "ArrowUp" ? "up" : "down");
+              return;
+            }
+            if (isReordering) {
+              // 並べ替えモード中は、素の Enter を「モーダルを開く」処理へ
+              // 発火させてはならない（既存の openModal 分岐より先に確定/
+              // キャンセルへ振り分ける）。
+              if (event.key === "Enter") {
+                event.preventDefault();
+                onReorderConfirm?.();
+                return;
+              }
+              if (event.key === "Escape") {
+                event.preventDefault();
+                onReorderCancel?.();
+                return;
+              }
+            }
             if (event.key === "Enter") {
               event.preventDefault();
-              onReorderConfirm?.();
-              return;
+              openModal();
             }
-            if (event.key === "Escape") {
-              event.preventDefault();
-              onReorderCancel?.();
-              return;
-            }
-          }
-          if (event.key === "Enter") {
-            event.preventDefault();
-            openModal();
-          }
-        }}
-      >
-        <div className="task-card-title">{challenge.title}</div>
-        <div className="task-card-meta">
-          <span className="status-dot" data-status={challenge.status} />
-          <span className="task-card-id">{challenge.id}</span>
-          <span className="task-card-status">{challenge.status}</span>
-          {challenge.position && (
-            <span
-              className="task-card-position"
-              data-testid="task-card-position"
-            >
-              {challenge.position}
-            </span>
-          )}
-        </div>
-        {isFocused && !readOnly && (
-          <div className="task-card-reorder-hint">Alt+↑/↓ で並べ替え</div>
-        )}
-      </button>
-      {canApprove && approvalKind !== undefined && (
-        <div className="task-card-approval">
-          {approvalPhase === "confirming" ? (
-            <>
-              <span className="task-card-approval-question">
-                {APPROVAL_BUTTON_LABEL[approvalKind]}？
+          }}
+        >
+          <div className="task-card-title">{challenge.title}</div>
+          <div className="task-card-meta">
+            <span className="status-dot" data-status={challenge.status} />
+            <span className="task-card-id">{challenge.id}</span>
+            <span className="task-card-status">{challenge.status}</span>
+            {challenge.position && (
+              <span
+                className="task-card-position"
+                data-testid="task-card-position"
+              >
+                {challenge.position}
               </span>
+            )}
+          </div>
+          {isFocused && !readOnly && (
+            <div className="task-card-reorder-hint">Alt+↑/↓ で並べ替え</div>
+          )}
+        </button>
+        {canApprove && approvalKind !== undefined && (
+          <div className="task-card-approval">
+            {approvalPhase === "confirming" ? (
+              <>
+                <span className="task-card-approval-question">
+                  {APPROVAL_BUTTON_LABEL[approvalKind]}？
+                </span>
+                <button
+                  type="button"
+                  className="task-card-approval-confirm"
+                  onClick={() => void submitApproval(approvalKind)}
+                >
+                  承認する
+                </button>
+                <button
+                  type="button"
+                  className="task-card-approval-cancel"
+                  onClick={() => setApprovalPhase("idle")}
+                >
+                  やめる
+                </button>
+              </>
+            ) : (
               <button
                 type="button"
-                className="task-card-approval-confirm"
-                onClick={() => void submitApproval(approvalKind)}
+                className="task-card-approval-start"
+                disabled={approvalPhase === "submitting"}
+                onClick={() => {
+                  setApprovalError(null);
+                  setApprovalPhase("confirming");
+                }}
               >
-                承認する
+                {approvalPhase === "submitting"
+                  ? "承認中…"
+                  : APPROVAL_BUTTON_LABEL[approvalKind]}
               </button>
-              <button
-                type="button"
-                className="task-card-approval-cancel"
-                onClick={() => setApprovalPhase("idle")}
-              >
-                やめる
-              </button>
-            </>
-          ) : (
-            <button
-              type="button"
-              className="task-card-approval-start"
-              disabled={approvalPhase === "submitting"}
-              onClick={() => {
-                setApprovalError(null);
-                setApprovalPhase("confirming");
-              }}
-            >
-              {approvalPhase === "submitting"
-                ? "承認中…"
-                : APPROVAL_BUTTON_LABEL[approvalKind]}
-            </button>
-          )}
-          {approvalError !== null && (
-            <p className="task-card-approval-error" role="alert">
-              {approvalError}
-            </p>
-          )}
-        </div>
-      )}
+            )}
+            {approvalError !== null && (
+              <p className="task-card-approval-error" role="alert">
+                {approvalError}
+              </p>
+            )}
+          </div>
+        )}
+      </div>
       {tooltipVisible &&
         tooltipPosition &&
         createPortal(

@@ -117,7 +117,7 @@ describe("TaskCard", () => {
     it("draggable 属性を持つ", () => {
       render(<TaskCard challenge={challenge()} agentName="medical" />);
 
-      const card = screen.getByText("課題タイトル").closest(".task-card");
+      const card = screen.getByText("課題タイトル").closest(".task-card-body");
       expect(card).toHaveAttribute("draggable", "true");
     });
 
@@ -126,8 +126,8 @@ describe("TaskCard", () => {
         <TaskCard challenge={challenge({ id: "C-042" })} agentName="medical" />,
       );
 
-      const card = screen.getByText("課題タイトル").closest(".task-card");
-      if (!card) throw new Error("task-card が見つかりません");
+      const card = screen.getByText("課題タイトル").closest(".task-card-body");
+      if (!card) throw new Error("task-card-body が見つかりません");
 
       const setData = vi.fn();
       fireEvent.dragStart(card, {
@@ -147,8 +147,8 @@ describe("TaskCard", () => {
         />,
       );
 
-      const card = screen.getByText("課題タイトル").closest(".task-card");
-      if (!card) throw new Error("task-card が見つかりません");
+      const card = screen.getByText("課題タイトル").closest(".task-card-body");
+      if (!card) throw new Error("task-card-body が見つかりません");
 
       expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
 
@@ -169,8 +169,8 @@ describe("TaskCard", () => {
         />,
       );
 
-      const card = screen.getByText("課題タイトル").closest(".task-card");
-      if (!card) throw new Error("task-card が見つかりません");
+      const card = screen.getByText("課題タイトル").closest(".task-card-body");
+      if (!card) throw new Error("task-card-body が見つかりません");
 
       fireEvent.focus(card);
 
@@ -189,8 +189,8 @@ describe("TaskCard", () => {
         />,
       );
 
-      const card = screen.getByText("課題タイトル").closest(".task-card");
-      if (!card) throw new Error("task-card が見つかりません");
+      const card = screen.getByText("課題タイトル").closest(".task-card-body");
+      if (!card) throw new Error("task-card-body が見つかりません");
 
       fireEvent.mouseEnter(card);
 
@@ -205,8 +205,8 @@ describe("TaskCard", () => {
         />,
       );
 
-      const card = screen.getByText("課題タイトル").closest(".task-card");
-      if (!card) throw new Error("task-card が見つかりません");
+      const card = screen.getByText("課題タイトル").closest(".task-card-body");
+      if (!card) throw new Error("task-card-body が見つかりません");
 
       expect(card).not.toHaveAttribute("aria-describedby");
 
@@ -238,8 +238,8 @@ describe("TaskCard", () => {
 
       render(<TaskCard challenge={challenge()} agentName="medical" />);
 
-      const card = screen.getByText("課題タイトル").closest(".task-card");
-      if (!card) throw new Error("task-card が見つかりません");
+      const card = screen.getByText("課題タイトル").closest(".task-card-body");
+      if (!card) throw new Error("task-card-body が見つかりません");
 
       fireEvent.keyDown(card, { key: "Enter" });
 
@@ -262,8 +262,8 @@ describe("TaskCard", () => {
 
       render(<TaskCard challenge={challenge()} agentName="medical" />);
 
-      const card = screen.getByText("課題タイトル").closest(".task-card");
-      if (!card) throw new Error("task-card が見つかりません");
+      const card = screen.getByText("課題タイトル").closest(".task-card-body");
+      if (!card) throw new Error("task-card-body が見つかりません");
 
       fireEvent.click(card);
       fireEvent.click(screen.getByRole("button", { name: "閉じる" }));
@@ -276,8 +276,8 @@ describe("TaskCard", () => {
 
       render(<TaskCard challenge={challenge()} agentName="medical" />);
 
-      const card = screen.getByText("課題タイトル").closest(".task-card");
-      if (!card) throw new Error("task-card が見つかりません");
+      const card = screen.getByText("課題タイトル").closest(".task-card-body");
+      if (!card) throw new Error("task-card-body が見つかりません");
 
       fireEvent.click(card);
       fireEvent.keyDown(document, { key: "Escape" });
@@ -290,8 +290,8 @@ describe("TaskCard", () => {
 
       render(<TaskCard challenge={challenge()} agentName="medical" />);
 
-      const card = screen.getByText("課題タイトル").closest(".task-card");
-      if (!card) throw new Error("task-card が見つかりません");
+      const card = screen.getByText("課題タイトル").closest(".task-card-body");
+      if (!card) throw new Error("task-card-body が見つかりません");
 
       fireEvent.click(card);
 
@@ -307,8 +307,8 @@ describe("TaskCard", () => {
     it("フォーカス中のみ「Alt+↑/↓ で並べ替え」ヒントを表示する", () => {
       render(<TaskCard challenge={challenge()} agentName="medical" />);
 
-      const card = screen.getByText("課題タイトル").closest(".task-card");
-      if (!card) throw new Error("task-card が見つかりません");
+      const card = screen.getByText("課題タイトル").closest(".task-card-body");
+      if (!card) throw new Error("task-card-body が見つかりません");
 
       expect(screen.queryByText("Alt+↑/↓ で並べ替え")).not.toBeInTheDocument();
 
@@ -331,8 +331,8 @@ describe("TaskCard", () => {
         />,
       );
 
-      const card = screen.getByText("課題タイトル").closest(".task-card");
-      if (!card) throw new Error("task-card が見つかりません");
+      const card = screen.getByText("課題タイトル").closest(".task-card-body");
+      if (!card) throw new Error("task-card-body が見つかりません");
 
       fireEvent.keyDown(card, { key: "ArrowUp", altKey: true });
 
@@ -349,8 +349,8 @@ describe("TaskCard", () => {
         />,
       );
 
-      const card = screen.getByText("課題タイトル").closest(".task-card");
-      if (!card) throw new Error("task-card が見つかりません");
+      const card = screen.getByText("課題タイトル").closest(".task-card-body");
+      if (!card) throw new Error("task-card-body が見つかりません");
 
       fireEvent.keyDown(card, { key: "ArrowDown", altKey: true });
 
@@ -367,8 +367,8 @@ describe("TaskCard", () => {
         />,
       );
 
-      const card = screen.getByText("課題タイトル").closest(".task-card");
-      if (!card) throw new Error("task-card が見つかりません");
+      const card = screen.getByText("課題タイトル").closest(".task-card-body");
+      if (!card) throw new Error("task-card-body が見つかりません");
 
       fireEvent.keyDown(card, { key: "ArrowUp" });
       fireEvent.keyDown(card, { key: "ArrowDown" });
@@ -387,8 +387,8 @@ describe("TaskCard", () => {
         />,
       );
 
-      const card = screen.getByText("課題タイトル").closest(".task-card");
-      if (!card) throw new Error("task-card が見つかりません");
+      const card = screen.getByText("課題タイトル").closest(".task-card-body");
+      if (!card) throw new Error("task-card-body が見つかりません");
 
       fireEvent.keyDown(card, { key: "Enter" });
 
@@ -407,8 +407,8 @@ describe("TaskCard", () => {
         />,
       );
 
-      const card = screen.getByText("課題タイトル").closest(".task-card");
-      if (!card) throw new Error("task-card が見つかりません");
+      const card = screen.getByText("課題タイトル").closest(".task-card-body");
+      if (!card) throw new Error("task-card-body が見つかりません");
 
       fireEvent.keyDown(card, { key: "Escape" });
 
@@ -426,8 +426,8 @@ describe("TaskCard", () => {
         />,
       );
 
-      const card = screen.getByText("課題タイトル").closest(".task-card");
-      if (!card) throw new Error("task-card が見つかりません");
+      const card = screen.getByText("課題タイトル").closest(".task-card-body");
+      if (!card) throw new Error("task-card-body が見つかりません");
 
       fireEvent.blur(card);
 
@@ -444,8 +444,8 @@ describe("TaskCard", () => {
         />,
       );
 
-      const card = screen.getByText("課題タイトル").closest(".task-card");
-      if (!card) throw new Error("task-card が見つかりません");
+      const card = screen.getByText("課題タイトル").closest(".task-card-body");
+      if (!card) throw new Error("task-card-body が見つかりません");
 
       fireEvent.blur(card);
 
@@ -464,8 +464,8 @@ describe("TaskCard", () => {
         />,
       );
 
-      const card = screen.getByText("課題タイトル").closest(".task-card");
-      if (!card) throw new Error("task-card が見つかりません");
+      const card = screen.getByText("課題タイトル").closest(".task-card-body");
+      if (!card) throw new Error("task-card-body が見つかりません");
 
       fireEvent.keyDown(card, { key: "Enter" });
 
@@ -651,9 +651,11 @@ describe("TaskCard の承認ボタン（Issue #165・FR-20）", () => {
     );
   });
 
-  it("承認ボタンはカード本体の <button> の入れ子にならない", () => {
-    // カード本体は <button>（詳細モーダルを開く）。その内側にボタンを置くと
-    // 不正な HTML になり、クリックが親へ伝播して意図しないモーダルが開く。
+  it("承認ボタンはカードの中に描画される（#169）", () => {
+    // 人間からの要望: 承認ボタンはカードの外（直下の兄弟）ではなくカードの中に
+    // 置く。#168 の時点では兄弟に出していたが、#169 でカードを
+    // 「コンテナ（.task-card）＋内側のクリック領域（.task-card-body）」に
+    // 分けたことで、入れ子を作らずに中へ収められるようになった。
     render(
       <TaskCard
         challenge={approvable()}
@@ -663,7 +665,41 @@ describe("TaskCard の承認ボタン（Issue #165・FR-20）", () => {
     );
 
     const approveButton = screen.getByRole("button", { name: "計画を承認" });
-    expect(approveButton.closest(".task-card")).toBeNull();
+    expect(approveButton.closest(".task-card")).not.toBeNull();
+  });
+
+  it("インタラクティブ要素の入れ子が無い（<button> の中に <button> を置かない）", () => {
+    // #168 から引き継いだ意図。<button> の入れ子は不正な HTML で、キーボード
+    // 操作・支援技術の挙動が壊れ、クリックが親へ伝播して意図しないモーダルが
+    // 開く。#169 でカードをコンテナ＋クリック領域に分けたため、「承認ボタンが
+    // カードの外にある」ことではなく「入れ子が無い」ことを直接固定する。
+    // 承認の 2 段階（確認中）も入れ子を作らないことを、両フェーズで確認する。
+    const { container } = render(
+      <TaskCard
+        challenge={approvable()}
+        agentName="medical"
+        onApprove={vi.fn()}
+      />,
+    );
+
+    const assertNoNestedButtons = () => {
+      const buttons = [...container.querySelectorAll("button")];
+      expect(buttons.length).toBeGreaterThan(1);
+      for (const button of buttons) {
+        expect(button.querySelector("button")).toBeNull();
+      }
+      // カード本文のクリック領域（詳細モーダルを開く <button>）の中に
+      // 承認導線が紛れ込んでいないことも直接確認する。
+      expect(
+        container.querySelector(".task-card-body .task-card-approval"),
+      ).toBeNull();
+    };
+
+    assertNoNestedButtons();
+
+    fireEvent.click(screen.getByRole("button", { name: "計画を承認" }));
+
+    assertNoNestedButtons();
   });
 
   it("承認ボタンを押しても詳細モーダルは開かない", () => {
