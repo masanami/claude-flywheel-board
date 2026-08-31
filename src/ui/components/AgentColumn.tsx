@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type {
   AgentBoard,
   AgentCycleStatus,
+  ApprovalKind,
   PriorityPolicy,
   Run,
   RunProvenance,
@@ -23,6 +24,7 @@ import { prefill } from "../terminal-control.ts";
 import { ErrorCard } from "./ErrorCard.tsx";
 import {
   AGENT_NAME_DRAG_MIME,
+  type ApproveSubmitResult,
   CHALLENGE_DRAG_MIME,
   type ReorderDirection,
   TaskCard,
@@ -225,6 +227,18 @@ type AgentColumnProps = {
    * ファイルパスの組み立てを知らない）。
    */
   onOpenPriorityPolicy?: (agentName: string) => void;
+  /**
+   * 承認ボタン（#165・FR-20）の送信ハンドラ。Board.tsx が
+   * `POST /api/challenges/:agent/:id/approve` を叩く実処理を渡す。エージェント名は
+   * このカラムが知っているためここで束縛し、TaskCard へは課題 ID と承認種別だけを
+   * 渡す（TaskCard がエンドポイントの組み立てを知らないようにする）。
+   * アーカイブビューでは結線しない（読み取り専用）。
+   */
+  onApprove?: (
+    agentName: string,
+    challengeId: string,
+    kind: ApprovalKind,
+  ) => Promise<ApproveSubmitResult>;
 };
 
 // ゴーストカードのドラッグを識別する dataTransfer キー
@@ -296,6 +310,7 @@ export function AgentColumn({
   agent,
   archiveMode,
   onOpenPriorityPolicy,
+  onApprove,
 }: AgentColumnProps) {
   const firstNeedsHumanIndex = agent.challenges.findIndex((c) => c.needsHuman);
   const [isInsertOpen, setIsInsertOpen] = useState(false);
@@ -743,6 +758,11 @@ export function AgentColumn({
                 }
                 onReorderConfirm={() => handleReorderConfirm(challenge.id)}
                 onReorderCancel={handleReorderCancel}
+                onApprove={
+                  onApprove &&
+                  ((challengeId, kind) =>
+                    onApprove(agent.name, challengeId, kind))
+                }
               />
             </div>
           </div>

@@ -14,6 +14,7 @@
   --board-needs-human-border: #e8b93f;
   --board-error-bg: #fbfbfc;
   --board-error-border: #b8b8bf;
+  --board-error-fg: #b3261e;
   --board-chip-bg: #ffffff;
   --board-chip-active-bg: #1c1c1f;
   --board-chip-active-fg: #ffffff;
@@ -76,6 +77,7 @@
     --board-needs-human-border: #caa03a;
     --board-error-bg: #201f22;
     --board-error-border: #45454d;
+    --board-error-fg: #f2b8b5;
     --board-chip-bg: #24252b;
     --board-chip-active-bg: #e7e7ea;
     --board-chip-active-fg: #17181c;
@@ -508,6 +510,48 @@ body {
 .task-card[data-needs-human="true"] {
   background: var(--board-needs-human-bg);
   border-left: 3px solid var(--board-needs-human-border);
+}
+
+/* 承認導線（#165・FR-20）。カード本体（<button>）の入れ子にならないよう、
+   兄弟要素として直下に置く。 */
+.task-card-approval {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.3rem;
+}
+
+.task-card-approval button {
+  font: inherit;
+  font-size: 0.72rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  border: 1px solid var(--board-needs-human-border);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.task-card-approval button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.task-card-approval-confirm {
+  background: var(--board-needs-human-border);
+}
+
+.task-card-approval-question {
+  font-size: 0.72rem;
+  color: var(--board-muted-fg);
+}
+
+.task-card-approval-error {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 0.7rem;
+  color: var(--board-error-fg);
 }
 
 .task-card-tooltip {

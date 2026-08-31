@@ -1963,3 +1963,60 @@ describe("AgentColumn", () => {
     });
   });
 });
+
+describe("承認導線の結線（Issue #165・FR-20）", () => {
+  const approvable = challenge({
+    id: "C-010",
+    status: "計画承認待ち",
+    needsHuman: true,
+    approvals: {
+      plan: { checked: false, line: 9, label: "計画を承認（FR-13）" },
+    },
+  });
+
+  it("承認時にこのカラムのエージェント名を束ねて呼び出す", () => {
+    // 課題IDはエージェント内でのみ一意（architecture.md §3.3）。エージェント名を
+    // 取り違えると別エージェントの台帳へ書き込みかねないため、束ね方を固定する。
+    const onApprove = vi.fn().mockResolvedValue({ ok: true });
+    render(
+      <AgentColumn
+        agent={agentBoard({ name: "harness", challenges: [approvable] })}
+        onApprove={onApprove}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "計画を承認" }));
+    fireEvent.click(screen.getByRole("button", { name: "承認する" }));
+
+    expect(onApprove).toHaveBeenCalledWith("harness", "C-010", "plan");
+  });
+
+  it("アーカイブビューでは承認ボタンを描画しない", () => {
+    render(
+      <AgentColumn
+        agent={agentBoard({
+          name: "harness",
+          archivedChallenges: [approvable],
+        })}
+        archiveMode
+        onApprove={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "計画を承認" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("onApprove 未指定なら承認ボタンを描画しない", () => {
+    render(
+      <AgentColumn
+        agent={agentBoard({ name: "harness", challenges: [approvable] })}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "計画を承認" }),
+    ).not.toBeInTheDocument();
+  });
+});

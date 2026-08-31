@@ -1305,4 +1305,116 @@ describe("Board", () => {
       );
     });
   });
+
+  describe("承認の送信（Issue #165・FR-20）", () => {
+    const approvable = {
+      id: "C-010",
+      title: "承認待ちの課題",
+      status: "計画承認待ち" as const,
+      needsHuman: true,
+      approvals: {
+        plan: { checked: false, line: 9, label: "計画を承認（FR-13）" },
+      },
+    };
+
+    async function renderWithApprovable(fetchMock: ReturnType<typeof vi.fn>) {
+      vi.stubGlobal("fetch", fetchMock);
+      const { Board } = await import("./Board.tsx");
+      render(<Board />);
+      act(() => {
+        latestOptions().onSnapshot(
+          snapshot([
+            agentBoard({
+              name: "harness",
+              path: "/agents/harness",
+              challenges: [approvable],
+            }),
+          ]),
+        );
+      });
+      await act(async () => {
+        screen.getByRole("button", { name: "計画を承認" }).click();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        screen.getByRole("button", { name: "承認する" }).click();
+        await Promise.resolve();
+      });
+    }
+
+    it("POST /api/challenges/:agent/:id/approve を kind 付きで呼ぶ", async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ commit: "abc1234" }),
+      });
+
+      await renderWithApprovable(fetchMock);
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/challenges/harness/C-010/approve",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ kind: "plan" }),
+        }),
+      );
+    });
+
+    it("エージェント名・課題 ID を URL エンコードする", async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ commit: "abc1234" }),
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const { Board } = await import("./Board.tsx");
+      render(<Board />);
+      act(() => {
+        latestOptions().onSnapshot(
+          snapshot([
+            agentBoard({
+              name: "a/b",
+              path: "/agents/ab",
+              challenges: [approvable],
+            }),
+          ]),
+        );
+      });
+      await act(async () => {
+        screen.getByRole("button", { name: "計画を承認" }).click();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        screen.getByRole("button", { name: "承認する" }).click();
+        await Promise.resolve();
+      });
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/challenges/a%2Fb/C-010/approve",
+        expect.anything(),
+      );
+    });
+
+    it("サーバのエラーメッセージをカードへ伝える", async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 409,
+        json: () => Promise.resolve({ error: "run-cycle が実行中です" }),
+      });
+
+      await renderWithApprovable(fetchMock);
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "run-cycle が実行中です",
+      );
+    });
+
+    it("通信エラーでもカードへ理由を伝える（例外を投げない）", async () => {
+      const fetchMock = vi.fn().mockRejectedValue(new Error("offline"));
+
+      await renderWithApprovable(fetchMock);
+
+      expect(await screen.findByRole("alert")).toHaveTextContent("通信エラー");
+    });
+  });
 });
