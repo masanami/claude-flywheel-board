@@ -8,6 +8,7 @@ import type { Hono } from "hono";
 import { WebSocket, WebSocketServer } from "ws";
 import type { AgentBoard, BoardCache } from "./cache.ts";
 import { addFleetEntry } from "./fleet-agent-addition.ts";
+import { approveChallenge } from "./ledger-approval.ts";
 import type { FleetEntry, GetFleetEntries } from "./manifest.ts";
 import {
   appendFleetEntry,
@@ -23,6 +24,7 @@ import { IMAGE_CONTENT_TYPES, validateMdPath } from "./md/path-validation.ts";
 import { listMdTree } from "./md/tree.ts";
 import type { MdFileChangedMessage } from "./md/watch.ts";
 import { createMdWatchRegistry, handleMdClientMessage } from "./md/watch.ts";
+import { ledgerPathFor } from "./watcher.ts";
 import type { FleetWatcher } from "./watcher.ts";
 
 /**
@@ -218,6 +220,59 @@ export function registerApiRoutes(
       );
     }
     return c.json(cache.getLog(agent, challenge));
+  });
+
+  // 承認の書き込み（FR-20 / NFR-01 区分②・Issue #165）。
+  //
+  // board 上の操作は人間の操作として扱う。このハンドラは台帳の承認チェック
+  // ボックス 1 行を `[ ]` → `[x]` に書き換え、**人間の git identity でコミット**する
+  // （承認の真正性・経路 1。ledger-approval.ts 冒頭コメントが根拠の正本）。
+  // ステータス行は書かない——遷移はエージェントが次サイクルで代行するのが規定。
+  //
+  // 排他は `<workspace>/.flywheel/cycle.lock`（run-cycle と同じロック）。取得
+  // できなければ 409 を返し、board は何も書かずに諦める（NFR-02）。
+  //
+  // fleetEntries の解決に getFleetEntries を使うのは他の書き込み系
+  // （POST /api/fleet/agents）と同じ理由で、起動時に固定した配列参照ではなく
+  // 呼び出し時点の fleet を見るため（Issue #62）。
+  app.post("/api/challenges/:agent/:id/approve", async (c) => {
+    const agentName = c.req.param("agent");
+    const challengeId = c.req.param("id");
+
+    const entry = getFleetEntries().find((e) => e.name === agentName);
+    if (entry === undefined) {
+      return c.json(
+        { error: `エージェント "${agentName}" が見つかりません` },
+        404,
+      );
+    }
+
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "リクエストボディが不正な JSON です" }, 400);
+    }
+    const kind = (body as { kind?: unknown } | null)?.kind;
+    if (kind !== "plan" && kind !== "completion") {
+      return c.json(
+        {
+          error: 'kind は "plan" | "completion" のいずれかである必要があります',
+        },
+        400,
+      );
+    }
+
+    const result = approveChallenge({
+      workspacePath: entry.path,
+      ledgerPath: ledgerPathFor(entry),
+      challengeId,
+      kind,
+    });
+    if (!result.ok) {
+      return c.json({ error: result.error }, result.status);
+    }
+    return c.json({ commit: result.commit, challenge: result.challenge });
   });
 
   app.get("/api/md/tree", (c) => c.json(listMdTree(getFleetEntries())));

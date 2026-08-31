@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import type { AgentBoard, Challenge, LedgerStatus } from "../board-types.ts";
+import type {
+  AgentBoard,
+  ApprovalKind,
+  Challenge,
+  LedgerStatus,
+} from "../board-types.ts";
 import {
   type MdLiveChannel,
   createNoopMdLiveChannel,
@@ -17,6 +22,7 @@ import type { BoardFilter } from "./FilterBar.tsx";
 import { FilterBar } from "./FilterBar.tsx";
 import type { PreviewPanelOpenRequest } from "./PreviewPanel.tsx";
 import { PreviewPanel } from "./PreviewPanel.tsx";
+import type { ApproveSubmitResult } from "./TaskCard.tsx";
 
 // 完了ステータスのデフォルト非表示（Issue #50 ②）。防波堤としての表示フィルタ
 // であり、台帳の書き込み・パース挙動には一切影響しない（NFR-01）。
@@ -88,6 +94,48 @@ function buildWebSocketUrl(): string {
 // 判定され、稼働中セッションへ claude を誤 prefill しうる）。新しい WS 接続・
 // ポーリングは追加していない（既存の POST /api/fleet/agents 呼び出しに乗せて
 // いるだけ。親 Issue #119 クリティカル設計決定④）。
+// 承認の送信ハンドラ（Issue #165・FR-20）。POST /api/challenges/:agent/:id/approve を
+// 叩くのみで、成功時に agents state を直接更新することはしない（二重更新の防止）。
+// 台帳への `[x]` はサーバ側で書き込まれ、fs-watch → WS agent_update 経由で
+// 既存の onAgentUpdate → upsertAgent 経路が盤面へ反映する（正本はファイル＝NFR-04）。
+//
+// board が実行するのは HTTP 呼び出しのみで、fs への書き込みは行わない。台帳への
+// 書き込みと人間の git identity でのコミットはサーバ側 API の境界内で完結する
+// （src/server/ledger-approval.ts）。NFR-01 の区分②（人間の入力）に限った解禁で
+// あり、区分③（ステータス・分類欄・journal・memory・runs.jsonl）へは書かない。
+async function submitApproval(
+  agentName: string,
+  challengeId: string,
+  kind: ApprovalKind,
+): Promise<ApproveSubmitResult> {
+  const url = `/api/challenges/${encodeURIComponent(agentName)}/${encodeURIComponent(challengeId)}/approve`;
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind }),
+    });
+  } catch {
+    return { ok: false, error: "承認に失敗しました（通信エラー）" };
+  }
+
+  if (response.ok) {
+    return { ok: true };
+  }
+
+  let error = `承認に失敗しました（status: ${response.status}）`;
+  try {
+    const body = (await response.json()) as { error?: unknown };
+    if (typeof body.error === "string" && body.error !== "") {
+      error = body.error;
+    }
+  } catch {
+    // JSON でない応答（プロキシのエラーページ等）は既定の文言のまま返す。
+  }
+  return { ok: false, error };
+}
+
 async function submitAddAgent(
   input: AddAgentInput,
 ): Promise<AddAgentSubmitResult> {
@@ -291,6 +339,7 @@ export function Board() {
               key={agent.name}
               archiveMode={archiveMode}
               onOpenPriorityPolicy={handleOpenPriorityPolicy}
+              onApprove={archiveMode ? undefined : submitApproval}
               agent={
                 archiveMode
                   ? agent

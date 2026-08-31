@@ -96,10 +96,17 @@ describe("TaskCard", () => {
     expect(screen.getByText("人間対応待ち")).toBeInTheDocument();
   });
 
-  it("状態を変更する実ボタン（承認・実行等）を一切持たない（観測専用・NFR-01）", () => {
-    // カード自体は読み取り専用の詳細モーダルを開くための単一の実ボタンとして
-    // 実装される（アクセシビリティ上、キーボード操作可能な要素は <button> が適切）。
-    // 承認・却下・実行など状態を変更する追加のボタンが増えていないことを確認する。
+  it("承認導線を持たないカードは詳細モーダルを開く実ボタン 1 個だけを持つ", () => {
+    // カード自体は詳細モーダルを開くための単一の実ボタンとして実装される
+    // （アクセシビリティ上、キーボード操作可能な要素は <button> が適切）。
+    //
+    // Issue #165 でこのテストの意図を改訂した: 以前は「承認・実行など状態を
+    // 変更するボタンを一切持たない（観測専用・NFR-01）」を固定していたが、
+    // FR-20 の改訂により**承認待ちカードには承認ボタンを置く**ようになった。
+    // 現在このテストが固定しているのは「承認対象でないカードにはボタンが
+    // 増えない」ことであり、承認ボタンの出し分けは別 describe が固定する。
+    // 実行・却下・ステータス変更といった**エージェントの状態機械**への操作
+    // （NFR-01 区分③）を持たないことは、引き続きこのカウントが担保する。
     render(<TaskCard challenge={challenge()} agentName="medical" />);
 
     const buttons = screen.getAllByRole("button");
@@ -465,5 +472,211 @@ describe("TaskCard", () => {
       expect(screen.getByRole("dialog")).toBeInTheDocument();
       expect(onReorderConfirm).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("TaskCard の承認ボタン（Issue #165・FR-20）", () => {
+  const approvable = (overrides: Partial<Challenge> = {}): Challenge =>
+    challenge({
+      id: "C-010",
+      status: "計画承認待ち",
+      needsHuman: true,
+      approvals: {
+        plan: { checked: false, line: 9, label: "計画を承認（FR-13）" },
+        completion: { checked: false, line: 10, label: "完了を承認（FR-32）" },
+      },
+      ...overrides,
+    });
+
+  it("計画承認待ちのカードに「計画を承認」ボタンを出す", () => {
+    render(
+      <TaskCard
+        challenge={approvable()}
+        agentName="medical"
+        onApprove={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "計画を承認" }),
+    ).toBeInTheDocument();
+  });
+
+  it("完了確認待ちのカードには「完了を承認」ボタンを出す", () => {
+    render(
+      <TaskCard
+        challenge={approvable({ status: "完了確認待ち" })}
+        agentName="medical"
+        onApprove={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "完了を承認" }),
+    ).toBeInTheDocument();
+  });
+
+  it("人間対応待ち（回答待ちの保留）には承認ボタンを出さない", () => {
+    // 保留は承認ではなく分類欄の `人間の回答` への記入を待つ状態であり、
+    // チェックボックスを立てても意味を持たない（上流 §保留プロトコル）。
+    render(
+      <TaskCard
+        challenge={approvable({ status: "人間対応待ち" })}
+        agentName="medical"
+        onApprove={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "計画を承認" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("承認済み（[x]）のカードには承認ボタンを出さない", () => {
+    render(
+      <TaskCard
+        challenge={approvable({
+          approvals: {
+            plan: { checked: true, line: 9, label: "計画を承認（FR-13）" },
+          },
+        })}
+        agentName="medical"
+        onApprove={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "計画を承認" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("onApprove が未指定なら承認ボタンを出さない", () => {
+    render(<TaskCard challenge={approvable()} agentName="medical" />);
+
+    expect(
+      screen.queryByRole("button", { name: "計画を承認" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("読み取り専用（アーカイブ）では承認ボタンを出さない", () => {
+    render(
+      <TaskCard
+        challenge={approvable()}
+        agentName="medical"
+        readOnly
+        onApprove={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "計画を承認" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("1 クリック目では送信せず、確認を挟む（誤操作対策）", () => {
+    const onApprove = vi.fn();
+    render(
+      <TaskCard
+        challenge={approvable()}
+        agentName="medical"
+        onApprove={onApprove}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "計画を承認" }));
+
+    expect(onApprove).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("button", { name: "承認する" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "やめる" })).toBeInTheDocument();
+  });
+
+  it("確認後の「承認する」で課題 ID と承認種別を送る", async () => {
+    const onApprove = vi.fn().mockResolvedValue({ ok: true });
+    render(
+      <TaskCard
+        challenge={approvable()}
+        agentName="medical"
+        onApprove={onApprove}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "計画を承認" }));
+    fireEvent.click(screen.getByRole("button", { name: "承認する" }));
+
+    expect(onApprove).toHaveBeenCalledWith("C-010", "plan");
+    // 承認が済んでも board 側の state は書き換えない（正本はファイル。台帳の
+    // [x] は fs-watch → WS agent_update で戻ってくる）。ここでは呼び出し形だけ固定する。
+    await screen.findByRole("button", { name: "計画を承認" });
+  });
+
+  it("「やめる」で送信せず元に戻る", () => {
+    const onApprove = vi.fn();
+    render(
+      <TaskCard
+        challenge={approvable()}
+        agentName="medical"
+        onApprove={onApprove}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "計画を承認" }));
+    fireEvent.click(screen.getByRole("button", { name: "やめる" }));
+
+    expect(onApprove).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("button", { name: "計画を承認" }),
+    ).toBeInTheDocument();
+  });
+
+  it("失敗時はサーバのエラーメッセージをカード上に表示する", async () => {
+    const onApprove = vi.fn().mockResolvedValue({
+      ok: false,
+      error: "このエージェントで run-cycle が実行中です",
+    });
+    render(
+      <TaskCard
+        challenge={approvable()}
+        agentName="medical"
+        onApprove={onApprove}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "計画を承認" }));
+    fireEvent.click(screen.getByRole("button", { name: "承認する" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "このエージェントで run-cycle が実行中です",
+    );
+  });
+
+  it("承認ボタンはカード本体の <button> の入れ子にならない", () => {
+    // カード本体は <button>（詳細モーダルを開く）。その内側にボタンを置くと
+    // 不正な HTML になり、クリックが親へ伝播して意図しないモーダルが開く。
+    render(
+      <TaskCard
+        challenge={approvable()}
+        agentName="medical"
+        onApprove={vi.fn()}
+      />,
+    );
+
+    const approveButton = screen.getByRole("button", { name: "計画を承認" });
+    expect(approveButton.closest(".task-card")).toBeNull();
+  });
+
+  it("承認ボタンを押しても詳細モーダルは開かない", () => {
+    render(
+      <TaskCard
+        challenge={approvable()}
+        agentName="medical"
+        onApprove={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "計画を承認" }));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 });

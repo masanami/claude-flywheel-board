@@ -10,6 +10,8 @@ export type {
   BoardSnapshot,
 } from "../server/cache.ts";
 export type {
+  ApprovalCheckbox,
+  ApprovalKind,
   Challenge,
   ChallengeRef,
   LedgerStatus,

@@ -899,6 +899,176 @@ describe("複数行フィールド・参照フィールド（#151 / #155）", ()
   });
 });
 
+describe("承認チェックボックス（§承認プロトコル）", () => {
+  const ENTRY = (approvalBlock: string, status = "計画承認待ち") =>
+    `### [C-001] テスト課題
+
+**分類欄（エージェントが記入）**
+- ステータス: ${status}
+${approvalBlock}
+- 備考:
+`;
+
+  it("`- 承認（人間がチェック）:` 直下のチェックボックスを種別ごとに読み取る", () => {
+    const result = parseLedger(
+      ENTRY(
+        `- 承認（人間がチェック）:
+  - [x] 計画を承認（FR-13・承認対象＝タスク案）
+  - [ ] 完了を承認（FR-32）`,
+      ),
+      "challenge-ledger.md",
+    );
+
+    expect(result.errors).toEqual([]);
+    expect(result.challenges[0]?.approvals).toEqual({
+      plan: {
+        checked: true,
+        line: 6,
+        label: "計画を承認（FR-13・承認対象＝タスク案）",
+      },
+      completion: { checked: false, line: 7, label: "完了を承認（FR-32）" },
+    });
+  });
+
+  it("旧表記（`計画を承認（FR-13）`）も前方一致で同定する", () => {
+    // 規定: 承認の検出はラベルの前方一致で行い、旧表記のエントリも有効。
+    const result = parseLedger(
+      ENTRY(
+        `- 承認（人間がチェック）:
+  - [ ] 計画を承認（FR-13）
+  - [ ] 完了を承認（FR-32）`,
+      ),
+      "challenge-ledger.md",
+    );
+
+    expect(result.challenges[0]?.approvals?.plan?.checked).toBe(false);
+    expect(result.challenges[0]?.approvals?.plan?.label).toBe(
+      "計画を承認（FR-13）",
+    );
+  });
+
+  it("大文字 [X] も承認済みとして扱う", () => {
+    const result = parseLedger(
+      ENTRY(
+        `- 承認（人間がチェック）:
+  - [X] 計画を承認（FR-13）`,
+      ),
+      "challenge-ledger.md",
+    );
+
+    expect(result.challenges[0]?.approvals?.plan?.checked).toBe(true);
+  });
+
+  it("承認フィールド直下でないチェックボックス（タスク案のタスクリスト記法）を承認として拾わない", () => {
+    // 規定 §消費側の読み取り規則 4 は「承認フィールド直下の専用構造」に限っており、
+    // 行の形（`  - [ ] …`）だけで拾うと完了条件・タスク案の項目を承認と誤認する。
+    const result = parseLedger(
+      `### [C-001] テスト課題
+
+**分類欄（エージェントが記入）**
+- ステータス: 計画承認待ち
+- タスク案:
+  - [ ] 計画を承認 と書かれた紛らわしいタスク
+- 備考:
+`,
+      "challenge-ledger.md",
+    );
+
+    expect(result.challenges[0]?.approvals).toBeUndefined();
+    // タスク案の値としては保持される（既存の受理方向の挙動を壊さない）。
+    expect(result.challenges[0]?.taskPlan).toBe(
+      "- [ ] 計画を承認 と書かれた紛らわしいタスク",
+    );
+  });
+
+  it("承認フィールドが無いエントリでは approvals が undefined になる", () => {
+    const result = parseLedger(
+      `### [C-001] テスト課題
+
+**分類欄（エージェントが記入）**
+- ステータス: 分類済
+- 備考:
+`,
+      "challenge-ledger.md",
+    );
+
+    expect(result.challenges[0]?.approvals).toBeUndefined();
+  });
+
+  it("承認チェックが台帳の値（タスク案）に混入しない", () => {
+    const result = parseLedger(
+      `### [C-001] テスト課題
+
+**分類欄（エージェントが記入）**
+- ステータス: 計画承認待ち
+- タスク案:
+  1. 何かをする
+- 承認（人間がチェック）:
+  - [ ] 計画を承認（FR-13）
+- 備考:
+`,
+      "challenge-ledger.md",
+    );
+
+    expect(result.challenges[0]?.taskPlan).toBe("1. 何かをする");
+    expect(result.challenges[0]?.approvals?.plan?.checked).toBe(false);
+  });
+
+  it("同一種別の重複行は先勝ち（最初の1行を正とする）", () => {
+    const result = parseLedger(
+      ENTRY(
+        `- 承認（人間がチェック）:
+  - [ ] 計画を承認（FR-13）
+  - [x] 計画を承認（重複）`,
+      ),
+      "challenge-ledger.md",
+    );
+
+    expect(result.challenges[0]?.approvals?.plan).toEqual({
+      checked: false,
+      line: 6,
+      label: "計画を承認（FR-13）",
+    });
+  });
+
+  it("承認フィールドが重複していても、2 個目のチェックボックスを拾わない（先勝ち）", () => {
+    // 重複フィールドでも有効にすると、最初のフィールドに項目が無い場合に
+    // 2 個目のチェックボックスが承認の書き込み対象になる（PRレビュー指摘）。
+    const result = parseLedger(
+      `### [C-001] テスト課題
+
+**分類欄（エージェントが記入）**
+- ステータス: 計画承認待ち
+- 承認（人間がチェック）:
+- 承認（人間がチェック）:
+  - [ ] 計画を承認（FR-13）
+- 備考:
+`,
+      "challenge-ledger.md",
+    );
+
+    expect(result.challenges[0]?.approvals).toBeUndefined();
+  });
+
+  it("上流契約フィクスチャの承認行を規定どおり読み取る（行番号込み）", () => {
+    const contractPath = `${CONTRACT_LEDGER_ROOT}valid/multiline-and-refs.md`;
+    const result = parseLedgerFile(contractPath);
+
+    expect(result.errors).toEqual([]);
+    const c102 = result.challenges.find((c) => c.id === "C-102");
+    // C-102 は 計画承認待ち・未承認。board の承認ボタンが対象にするエントリ。
+    expect(c102?.status).toBe("計画承認待ち");
+    expect(c102?.approvals?.plan?.checked).toBe(false);
+    expect(c102?.approvals?.completion?.checked).toBe(false);
+
+    // 行番号は書き込み対象行の特定に使うため、実ファイルの中身と一致していること。
+    const lines = fs.readFileSync(contractPath, "utf-8").split("\n");
+    const planLine = c102?.approvals?.plan?.line;
+    expect(planLine).toBeDefined();
+    expect(lines[(planLine as number) - 1]).toContain("計画を承認");
+  });
+});
+
 describe("parseLedgerFile", () => {
   it("実ファイルパスから読み込み、valid.md の3件を返す", () => {
     const result = parseLedgerFile(`${FIXTURES_ROOT}valid.md`);

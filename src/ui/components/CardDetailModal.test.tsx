@@ -377,7 +377,10 @@ describe("CardDetailModal", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it("編集・承認等の操作ボタンを持たない（読み取り専用・NFR-01）", () => {
+  // Issue #165: 承認の導線はカード（TaskCard）側に置くと決めたため、詳細モーダルは
+  // 読み取り専用のままにする。台帳の編集（ステータス・分類欄）は NFR-01 区分③として
+  // 引き続き board の対象外であり、このテストがモーダル側の入口の不在を固定する。
+  it("編集・承認等の操作ボタンを持たない（読み取り専用）", () => {
     vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
 
     render(

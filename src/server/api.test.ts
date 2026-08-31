@@ -2103,3 +2103,174 @@ describe("POST /api/fleet/agents（Issue #122）", () => {
     ]);
   });
 });
+
+describe("POST /api/challenges/:agent/:id/approve（Issue #165・FR-20）", () => {
+  let tmpDir: string;
+  let agentPath: string;
+  let ledgerPath: string;
+
+  const LEDGER = `# 課題台帳
+
+### [C-010] 承認対象の課題
+
+**分類欄（エージェントが記入）**
+- ステータス: 計画承認待ち
+- タスク案:
+  1. なにかをする
+- 承認（人間がチェック）:
+  - [ ] 計画を承認（FR-13・承認対象＝タスク案）
+  - [ ] 完了を承認（FR-32）
+- 備考:
+`;
+
+  function git(...args: string[]): string {
+    return childProcess
+      .execFileSync("git", ["-C", agentPath, ...args], {
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "pipe"],
+      })
+      .trim();
+  }
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "api-approve-test-"));
+    agentPath = path.join(tmpDir, "agent-a");
+    fs.mkdirSync(agentPath);
+    ledgerPath = path.join(agentPath, "challenge-ledger.md");
+    fs.writeFileSync(ledgerPath, LEDGER);
+    git("init", "-q");
+    git("config", "user.name", "Human Operator");
+    git("config", "user.email", "human@example.com");
+    git("add", "challenge-ledger.md");
+    git("commit", "-q", "-m", "chore: 台帳を追加");
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function buildApp(entries?: FleetEntry[]): Hono {
+    const app = new Hono();
+    registerApiRoutes(
+      app,
+      createMemoryBoardCache(),
+      () => entries ?? [{ name: "agent-a", path: agentPath }],
+    );
+    return app;
+  }
+
+  async function post(
+    app: Hono,
+    url: string,
+    body: unknown,
+  ): Promise<Response> {
+    return await app.request(url, {
+      method: "POST",
+      headers: { host: "localhost:5173", "Content-Type": "application/json" },
+      body: typeof body === "string" ? body : JSON.stringify(body),
+    });
+  }
+
+  it("承認を書き込み、コミット SHA を返す", async () => {
+    const response = await post(
+      buildApp(),
+      "/api/challenges/agent-a/C-010/approve",
+      { kind: "plan" },
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { commit: string };
+    expect(body.commit).toBe(git("rev-parse", "HEAD"));
+    expect(fs.readFileSync(ledgerPath, "utf-8")).toContain(
+      "  - [x] 計画を承認",
+    );
+    // 承認の真正性（経路 1）: 人間の identity でコミットされていること。
+    expect(git("log", "-1", "--format=%an <%ae>")).toBe(
+      "Human Operator <human@example.com>",
+    );
+  });
+
+  it("未知のエージェント名は 404 を返す", async () => {
+    const response = await post(
+      buildApp(),
+      "/api/challenges/unknown/C-010/approve",
+      { kind: "plan" },
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it("kind が語彙外なら 400 を返し、書き込まない", async () => {
+    const before = fs.readFileSync(ledgerPath, "utf-8");
+
+    const response = await post(
+      buildApp(),
+      "/api/challenges/agent-a/C-010/approve",
+      { kind: "ステータスを進める" },
+    );
+
+    expect(response.status).toBe(400);
+    expect(fs.readFileSync(ledgerPath, "utf-8")).toBe(before);
+  });
+
+  it("不正な JSON ボディは 400 を返す", async () => {
+    const response = await post(
+      buildApp(),
+      "/api/challenges/agent-a/C-010/approve",
+      "{",
+    );
+
+    expect(response.status).toBe(400);
+  });
+
+  it("存在しない課題 ID は 404 を返す", async () => {
+    const response = await post(
+      buildApp(),
+      "/api/challenges/agent-a/C-999/approve",
+      { kind: "plan" },
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it("ステータス前提を満たさない承認は 409 を返す", async () => {
+    const response = await post(
+      buildApp(),
+      "/api/challenges/agent-a/C-010/approve",
+      { kind: "completion" },
+    );
+
+    expect(response.status).toBe(409);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain("完了確認待ち");
+  });
+
+  it("cycle.lock が取得できないときは 409 を返し、書き込まない", async () => {
+    fs.mkdirSync(path.join(agentPath, ".flywheel", "cycle.lock"), {
+      recursive: true,
+    });
+    const before = fs.readFileSync(ledgerPath, "utf-8");
+
+    const response = await post(
+      buildApp(),
+      "/api/challenges/agent-a/C-010/approve",
+      { kind: "plan" },
+    );
+
+    expect(response.status).toBe(409);
+    expect(fs.readFileSync(ledgerPath, "utf-8")).toBe(before);
+  });
+
+  it("localhost 以外の Host は既存の検証で 403 になる（書き込み系も同じ扱い）", async () => {
+    const response = await buildApp().request(
+      "/api/challenges/agent-a/C-010/approve",
+      {
+        method: "POST",
+        headers: { host: "evil.example.com" },
+        body: JSON.stringify({ kind: "plan" }),
+      },
+    );
+
+    expect(response.status).toBe(403);
+  });
+});

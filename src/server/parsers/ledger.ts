@@ -93,6 +93,12 @@ export type Challenge = {
   relatedIssues?: ChallengeRef[];
   /** 関連PR。値が無い場合は undefined */
   relatedPrs?: ChallengeRef[];
+  /**
+   * 分類欄の承認チェックボックス（§承認プロトコル）。該当行が台帳に無い場合は
+   * そのキーが欠ける（雛形の補完前・旧エントリ）。承認ボタン（FR-20）の
+   * 表示可否と、書き込み対象行の特定に使う。
+   */
+  approvals?: Partial<Record<ApprovalKind, ApprovalCheckbox>>;
 };
 
 const HEADER_PATTERN = /^###\s*\[([^\]]*)\]\s*(.*)$/;
@@ -170,7 +176,21 @@ type PendingEntry = {
   idRaw: string;
   title: string;
   fields: Map<string, FieldLines>;
+  approvals: Partial<Record<ApprovalKind, ApprovalCheckbox>>;
 };
+
+/**
+ * 承認チェックボックス行のラベルから種別を同定する（前方一致。規定 §承認プロトコル）。
+ * どちらにも一致しないラベル（人間が独自に足した項目）は undefined を返し、無視する。
+ */
+function approvalKindFor(label: string): ApprovalKind | undefined {
+  for (const [kind, prefix] of Object.entries(APPROVAL_LABEL_PREFIX)) {
+    if (label.startsWith(prefix)) {
+      return kind as ApprovalKind;
+    }
+  }
+  return undefined;
+}
 
 /**
  * 継続行から、規定のネスト幅（スペース2個）ぶんの先頭インデントを取り除く。
@@ -280,6 +300,61 @@ function parseIssueRefs(
   });
 }
 
+/**
+ * 承認チェックボックス1件（challenge-ledger-format.md §承認プロトコル）。
+ *
+ * 対象は分類欄の `- 承認（人間がチェック）:` の**直下にネストされた 2 スペース
+ * インデントのチェックボックス行**（同 §消費側の読み取り規則 4 が「インデント行だが
+ * フィールド値ではない専用構造」と定める行）。**同定はラベルの前方一致**
+ * （`計画を承認` / `完了を承認` まで）で行い、ラベル後半の注記（`（FR-13・承認対象＝タスク案）` 等）は
+ * 表示上のものとして無視する——規定が旧表記 `計画を承認（FR-13）` のままのエントリも
+ * 有効と定めているため、注記込みの完全一致で照合すると有効な承認行を取り落とす。
+ *
+ * `line` は台帳ファイル内の 1 始まりの行番号。承認の書き込み（FR-20）が
+ * **この 1 行だけ**を置換対象として特定するために持つ（本文の再走査で行を探し直すと、
+ * 同一ラベルが複数エントリに現れる台帳で対象を取り違えるため）。
+ */
+export type ApprovalCheckbox = {
+  /** `[x]` なら承認済み、`[ ]` なら未承認（規定: 承認の成立はチェック状態が `[x]` であること）。 */
+  checked: boolean;
+  /** 台帳ファイル内の行番号（1 始まり）。 */
+  line: number;
+  /** チェックボックス以降のラベル文字列（台帳の記載どおり。表示に使う）。 */
+  label: string;
+};
+
+/**
+ * 承認チェックボックスの種別。台帳のラベル前方一致キーと 1:1 で対応する。
+ * `plan` = `計画を承認`（FR-13・`計画承認待ち` から）、
+ * `completion` = `完了を承認`（FR-32・`完了確認待ち` から）。
+ */
+export type ApprovalKind = "plan" | "completion";
+
+/** 承認種別ごとのラベル前方一致キー（規定 §承認プロトコル）。 */
+export const APPROVAL_LABEL_PREFIX: Readonly<Record<ApprovalKind, string>> = {
+  plan: "計画を承認",
+  completion: "完了を承認",
+};
+
+/**
+ * 承認種別ごとに、承認が意味を持つステータス（規定 §承認プロトコルの
+ * 「ステータス前提」列）。board が承認を書き込む前の事前条件検証に使う。
+ */
+export const APPROVAL_REQUIRED_STATUS: Readonly<
+  Record<ApprovalKind, LedgerStatus>
+> = {
+  plan: "計画承認待ち",
+  completion: "完了確認待ち",
+};
+
+/** 承認フィールドのラベル（分類欄）。旧ラベル `承認` は上流の正規化で改名済み。 */
+const APPROVAL_FIELD_LABEL = "承認（人間がチェック）";
+// 承認チェックボックス行: 2 スペース以上のインデント ＋ `- [ ] ` / `- [x] ` ＋ ラベル。
+// 規定のネスト幅は 2 スペースだが、より深いインデントも受理する（受理方向に寛容。
+// 逆に行頭インデント無しの `- [ ] …` を拾わないことが重要で、そちらは
+// FIELD_LINE_PATTERN 以前にタスク案・完了条件の値として扱われる行と衝突する）。
+const APPROVAL_CHECKBOX_PATTERN = /^ {2,}- \[([ xX])\]\s*(.*)$/;
+
 /** 参照が1件も無いフィールドは他の任意フィールドと同じく undefined（未設定）に寄せる。 */
 function refsOrUndefined(refs: ChallengeRef[]): ChallengeRef[] | undefined {
   return refs.length > 0 ? refs : undefined;
@@ -343,6 +418,13 @@ export function parseLedger(
   // 継続行の追記先（直前に読んだフィールド行の FieldLines）。フィールド行でも
   // 継続行でもない行に達したら null に戻す＝値の終端（規定 §消費側の読み取り規則 3）。
   let openField: FieldLines | null = null;
+  // 直前に読んだフィールド行が `- 承認（人間がチェック）:` かどうか。規定 §消費側の
+  // 読み取り規則 4 が「承認チェックボックスはインデント行だがフィールド値ではなく、
+  // このフィールドの直下の専用構造」と定めるため、**このフラグが立っている間だけ**
+  // インデントされた `- [ ] …` をチェックボックスとして解釈する。フラグ無しで
+  // 行の形だけを見て拾うと、タスクリスト記法で書かれた完了条件・タスク案の項目
+  // （`  - [ ] …`）を承認と誤認しうる。
+  let inApprovalField = false;
 
   const flush = () => {
     if (!current) {
@@ -416,6 +498,8 @@ export function parseLedger(
       relatedRepos: refsOrUndefined(relatedRepos),
       relatedIssues: refsOrUndefined(relatedIssues),
       relatedPrs: refsOrUndefined(relatedPrs),
+      approvals:
+        Object.keys(entry.approvals).length > 0 ? entry.approvals : undefined,
     });
   };
 
@@ -481,7 +565,9 @@ export function parseLedger(
         idRaw: headerMatch[1] ?? "",
         title: (headerMatch[2] ?? "").trim(),
         fields: new Map(),
+        approvals: {},
       };
+      inApprovalField = false;
       continue;
     }
 
@@ -505,6 +591,29 @@ export function parseLedger(
       continue;
     }
 
+    // 承認チェックボックス（規定 §消費側の読み取り規則 4）: `- 承認（人間がチェック）:`
+    // の直下に連続するインデント行のうち、`- [ ] …` / `- [x] …` の形のものだけを
+    // 承認として収集する。値ではないため openField には積まない。
+    if (inApprovalField) {
+      const checkboxMatch = line.match(APPROVAL_CHECKBOX_PATTERN);
+      if (checkboxMatch) {
+        const label = (checkboxMatch[2] ?? "").trim();
+        const kind = approvalKindFor(label);
+        // 同一種別の重複はフィールド行と同じく先勝ち（最初の 1 行を正とする）。
+        if (kind !== undefined && current.approvals[kind] === undefined) {
+          current.approvals[kind] = {
+            checked: (checkboxMatch[1] ?? " ").toLowerCase() === "x",
+            line: lineNo,
+            label,
+          };
+        }
+        continue;
+      }
+      // チェックボックス以外の行に達したら承認フィールドの直下構造は終わり。
+      // 以降は通常のフィールド行判定・終端判定へ落とす。
+      inApprovalField = false;
+    }
+
     const fieldMatch = line.match(FIELD_LINE_PATTERN);
     if (fieldMatch) {
       const key = (fieldMatch[1] ?? "").trim();
@@ -520,12 +629,18 @@ export function parseLedger(
         // 同一ラベルの重複は先勝ち（既存挙動）。重複側の継続行も取り込まない。
         openField = null;
       }
+      // 承認フィールドも通常のフィールドと同じく**先勝ち**にする。重複した
+      // `- 承認（人間がチェック）:` でも有効にすると、最初のフィールドに項目が
+      // 無い場合に 2 個目のチェックボックスが approvals に入り、**その行が
+      // 承認の書き込み対象になる**（PRレビュー指摘対応）。
+      inApprovalField = existing === undefined && key === APPROVAL_FIELD_LABEL;
       continue;
     }
 
     // フィールド行でも継続行でもない行（空行・`**分類欄**` 見出し・区切り線など）は
     // 開いているフィールド値の終端（規定 §消費側の読み取り規則 3）。
     openField = null;
+    inApprovalField = false;
   }
   flush();
 
