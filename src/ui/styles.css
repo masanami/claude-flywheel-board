@@ -489,14 +489,16 @@ body {
 .task-card {
   /* カードの見た目を持つコンテナ（#169）。承認ボタンをカードの中へ置くため、
    * 対話要素ではない <div> にしてある。クリック・ドラッグ・キーボード並べ替えは
-   * 内側の .task-card-body（<button>）が担う。 */
+   * 内側の .task-card-body（<button>）が担う。
+   * 余白はここでは持たない — コンテナ側に持たせると、外周の帯が「見た目はカード
+   * なのにクリックもドラッグも効かない」死に領域になる（#169 レビュー指摘）。
+   * 本文の余白は .task-card-body、承認領域の余白は .task-card-approval が持つ。 */
   display: block;
   width: 100%;
   position: relative;
   background: var(--board-card-bg);
   border: 1px solid var(--board-card-border);
   border-radius: 6px;
-  padding: 0.5rem 0.65rem;
 }
 
 /* フォーカスリングはカード全体に出す（#169）。内側のクリック領域と承認ボタンの
@@ -512,7 +514,9 @@ body {
 
 .task-card-body {
   /* 内側のクリック領域。ブラウザ既定のボタン装飾をリセットし、コンテナ側の
-   * 見た目をそのまま透かす。パディングはコンテナが持つのでここでは 0。 */
+   * 見た目をそのまま透かす。カード本文の余白はこの要素が持つ——そうすることで
+   * カード外周までがクリック領域／ドラッグ起点になる（D&D はこの board の
+   * 主要操作。#169 レビュー指摘）。 */
   display: block;
   width: 100%;
   font: inherit;
@@ -521,7 +525,14 @@ body {
   cursor: grab;
   background: none;
   border: 0;
-  padding: 0;
+  padding: 0.5rem 0.65rem;
+}
+
+/* 承認ブロックがあるときは、本文の下余白を「本文と承認領域の間隔」に詰める。
+ * カード下端の余白は承認ブロック側が持つため、合算しても見た目は
+ * 承認ブロックがカードの外にあった頃と同じ（本文との間隔 0.3rem・下端 0.5rem）。 */
+.task-card:has(.task-card-approval) .task-card-body {
+  padding-bottom: 0.3rem;
 }
 
 /* リングはコンテナ側（.task-card:has(:focus-visible)）が描くため、
@@ -543,7 +554,9 @@ body {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.35rem;
-  margin-top: 0.3rem;
+  /* 左右はカード本文と揃え、下はカード下端の余白を兼ねる（.task-card は
+     余白を持たないため。上の間隔は .task-card-body の padding-bottom が担う）。 */
+  padding: 0 0.65rem 0.5rem;
 }
 
 .task-card-approval button {

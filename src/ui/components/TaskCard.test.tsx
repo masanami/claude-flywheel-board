@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 // 実ファイルの中身をそのまま取り込む（jsdom 環境では import.meta.url が file: URL に
@@ -714,5 +716,51 @@ describe("TaskCard の承認ボタン（Issue #165・FR-20）", () => {
     fireEvent.click(screen.getByRole("button", { name: "計画を承認" }));
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+});
+
+describe("カードの余白の持ち主（#169 レビュー指摘）", () => {
+  // カード（.task-card）は非対話の <div>、クリック／ドラッグを持つのは内側の
+  // <button>（.task-card-body）。余白をコンテナ側に持たせると、カード外周の帯が
+  // 「見た目はカードなのにクリックもドラッグも効かない」死に領域になる。D&D は
+  // この board の主要操作なので、余白の持ち主をここで固定する。
+  //
+  // jsdom は外部 CSS を適用せずレイアウトも持たないため算出スタイルは使えない。
+  // また Vitest は既定（css: false）で CSS インポートを空文字にするため `?raw`
+  // でも読めない。実際に出荷される CSS ファイルをそのまま読んで宣言を検査する。
+  // パスはプロジェクトルート基準（vite.config.ts の test.root）で解決する
+  // ——このファイルでは import.meta.url が file: URL にならないため（冒頭の
+  // フィクスチャ読み込みが `?raw` を使っているのと同じ事情）。
+  const boardStyles = readFileSync(
+    resolve(process.cwd(), "src/ui/styles.css"),
+    "utf-8",
+  );
+
+  function declarationsFor(selector: string): string {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const declarations = new RegExp(
+      `(?:^|\\n)${escaped}\\s*\\{([^}]*)\\}`,
+    ).exec(boardStyles)?.[1];
+    if (declarations === undefined) {
+      throw new Error(`CSS ルール ${selector} が styles.css に見つかりません`);
+    }
+    // コメント中の "padding" を宣言と取り違えないよう取り除く。
+    return declarations.replace(/\/\*[\s\S]*?\*\//g, "");
+  }
+
+  it("カード本文のクリック領域が余白を持つ（カード外周までクリック・ドラッグが効く）", () => {
+    expect(declarationsFor(".task-card-body")).toMatch(
+      /padding:\s*0\.5rem\s+0\.65rem\s*;/,
+    );
+  });
+
+  it("非対話のコンテナ側は余白を持たない（死に領域を作らない）", () => {
+    expect(declarationsFor(".task-card")).not.toMatch(/(?:^|[\s;])padding[-:]/);
+  });
+
+  it("承認ブロックはカード下端・左右の余白を自分で持つ（コンテナの余白に頼らない）", () => {
+    expect(declarationsFor(".task-card-approval")).toMatch(
+      /padding:\s*0\s+0\.65rem\s+0\.5rem\s*;/,
+    );
   });
 });
