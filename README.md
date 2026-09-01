@@ -63,10 +63,33 @@ npm run dev
 npm run start
 ```
 
-- **開発（`npm run dev`）**: Vite 開発サーバ（http://127.0.0.1:5173）で HMR が効く。UI(5173) と API/WS サーバ(4317) は別オリジンだが、`vite.config.ts` の dev proxy が `/api`・`/ws`・`/ws/terminal` を 4317 へ転送するため、5173 をブラウザで開くだけで動く
+- **開発（`npm run dev`）**: Vite 開発サーバ（http://127.0.0.1:5173）で HMR が効く。UI(5173) と API/WS サーバ(既定 4317) は別オリジンだが、`vite.config.ts` の dev proxy が `/api`・`/ws`・`/ws/terminal` をサーバ側へ転送するため、5173 をブラウザで開くだけで動く
 - **利用（`npm run start`）**: `vite build` → `node src/server/index.ts` を1コマンドにまとめたもの（`npm run build && node src/server/index.ts` と同義）。ビルド済み UI を Hono が http://127.0.0.1:4317 で単一オリジン配信する
 - ブラウザで開発時は http://127.0.0.1:5173、利用時は http://127.0.0.1:4317 を開く（サーバは常に 127.0.0.1 にのみバインドされます）
 - マニフェストのパスは環境変数 `FLYWHEEL_FLEET_MANIFEST` で上書きできます
+- 待受ポートは環境変数 `FLYWHEEL_BOARD_PORT` で上書きできます（既定 4317）。`npm run dev` の dev proxy も同じ値を見ます
+
+### 同一マシンで複数アカウントが board を並走させる場合
+
+`127.0.0.1` は OS アカウント間で共有されるループバックです。既定ポートのままでは2つ目の
+board が `EADDRINUSE` で起動できず、さらにブラウザで `http://127.0.0.1:4317` を開くと
+**先に起動していた別アカウントの board に繋がります**（agent 一覧が身に覚えのないものに
+なっていたら、まずこれを疑ってください）。アカウントごとにポートを分けてください:
+
+```bash
+# 例: 2人目のアカウント
+FLYWHEEL_BOARD_PORT=4318 npm run start   # → http://127.0.0.1:4318
+```
+
+どちらの board を見ているかは以下で確認できます:
+
+```bash
+curl -s http://127.0.0.1:4317/api/board | grep -o '"path":"[^"]*"' | sort -u
+```
+
+> **注意**: ポートを分けるのは**衝突の回避**であって、アカウント間の分離ではありません。
+> 同一マシンの他アカウントは相手のポートへそのまま接続でき、その board 上の操作
+> （承認等）は board を動かしているアカウントの git identity でコミットされます。
 
 ## WSL2 での運用（手順・制約・トラブルシュート）
 
