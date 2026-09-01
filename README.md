@@ -63,10 +63,35 @@ npm run dev
 npm run start
 ```
 
-- **開発（`npm run dev`）**: Vite 開発サーバ（http://127.0.0.1:5173）で HMR が効く。UI(5173) と API/WS サーバ(4317) は別オリジンだが、`vite.config.ts` の dev proxy が `/api`・`/ws`・`/ws/terminal` を 4317 へ転送するため、5173 をブラウザで開くだけで動く
-- **利用（`npm run start`）**: `vite build` → `node src/server/index.ts` を1コマンドにまとめたもの（`npm run build && node src/server/index.ts` と同義）。ビルド済み UI を Hono が http://127.0.0.1:4317 で単一オリジン配信する
-- ブラウザで開発時は http://127.0.0.1:5173、利用時は http://127.0.0.1:4317 を開く（サーバは常に 127.0.0.1 にのみバインドされます）
+- **開発（`npm run dev`）**: Vite 開発サーバ（http://127.0.0.1:5173）で HMR が効く。UI(5173) と API/WS サーバ(既定 4317) は別オリジンだが、`vite.config.ts` の dev proxy が `/api`・`/ws`・`/ws/terminal` をサーバ側へ転送するため、5173 をブラウザで開くだけで動く
+- **利用（`npm run start`）**: `vite build` → `node src/server/index.ts` を1コマンドにまとめたもの（`npm run build && node src/server/index.ts` と同義）。ビルド済み UI を Hono が http://127.0.0.1:4317 （既定ポート。`FLYWHEEL_BOARD_PORT` で変更可）で単一オリジン配信する
+- ブラウザで開発時は http://127.0.0.1:5173 、利用時は**起動時に待受けたポート**（既定 4317。`FLYWHEEL_BOARD_PORT` を設定したならその値。起動ログの `listening on ...` が正）を開く（サーバは常に 127.0.0.1 にのみバインドされます）
 - マニフェストのパスは環境変数 `FLYWHEEL_FLEET_MANIFEST` で上書きできます
+- 待受ポートは環境変数 `FLYWHEEL_BOARD_PORT` で上書きできます（既定 4317）。`npm run dev` の dev proxy も同じ値を見ます
+
+### 同一マシンで複数アカウントが board を並走させる場合
+
+`127.0.0.1` は OS アカウント間で共有されるループバックです。既定ポートのままでは2つ目の
+board が `EADDRINUSE` で起動できず、さらにブラウザで `http://127.0.0.1:4317` を開くと
+**先に起動していた別アカウントの board に繋がります**（agent 一覧が身に覚えのないものに
+なっていたら、まずこれを疑ってください）。アカウントごとにポートを分けてください:
+
+```bash
+# 例: 2人目のアカウント
+FLYWHEEL_BOARD_PORT=4318 npm run start   # → http://127.0.0.1:4318
+```
+
+どのポートがどちらの board かは、**実際に起動したポートをそれぞれ指定して**確認できます
+（返ってくる `path` の prefix が、その board が見ている fleet の持ち主です）:
+
+```bash
+curl -s http://127.0.0.1:4317/api/board | grep -o '"path":"[^"]*"' | sort -u  # 既定ポート側
+curl -s http://127.0.0.1:4318/api/board | grep -o '"path":"[^"]*"' | sort -u  # 2人目側
+```
+
+> **注意**: ポートを分けるのは**衝突の回避**であって、アカウント間の分離ではありません。
+> 同一マシンの他アカウントは相手のポートへそのまま接続でき、その board 上の操作
+> （承認等）は board を動かしているアカウントの git identity でコミットされます。
 
 ## WSL2 での運用（手順・制約・トラブルシュート）
 
@@ -90,7 +115,7 @@ fleet.tsv に登録する各エージェント repo は **Linux FS 側（`~/` �
 
 ### アクセス経路は localhost 経由のみ
 
-Windows 側ブラウザからは **`http://127.0.0.1:4317`**（WSL2 の localhost フォワーディング経由）でアクセスする。WSL の IP 直打ち（`http://172.x.x.x:4317`）は設計上成立しない:
+Windows 側ブラウザからは **`http://127.0.0.1:<board のポート>`**（既定 4317。`FLYWHEEL_BOARD_PORT` を設定したならその値。WSL2 の localhost フォワーディング経由）でアクセスする。WSL の IP 直打ち（`http://172.x.x.x:<port>`）は設計上成立しない:
 
 1. サーバは `127.0.0.1` に固定バインドされており（上書き手段は意図的に無い）、WSL の外向きインターフェースでは接続自体が拒否される。
 2. 仮にポートプロキシ等で到達させても、Host / Origin ヘッダ検証（`localhost` / `127.0.0.1` のみ許可）が 403 で拒否する。
@@ -100,7 +125,7 @@ Windows 側ブラウザからは **`http://127.0.0.1:4317`**（WSL2 の localhos
 
 | 症状 | 原因の見込み | 対処 |
 | --- | --- | --- |
-| Windows ブラウザから `http://127.0.0.1:4317` に繋がらない | WSL2 の localhost フォワーディングはスリープ復帰・VPN 接続後に壊れることがある（既知の癖） | PowerShell で `wsl --shutdown` → WSL を再起動 → board を再起動 |
+| Windows ブラウザから `http://127.0.0.1:<board のポート>` に繋がらない | WSL2 の localhost フォワーディングはスリープ復帰・VPN 接続後に壊れることがある（既知の癖） | PowerShell で `wsl --shutdown` → WSL を再起動 → board を再起動 |
 | ライブ反映されない（手動リロードでは最新が見える） | repo が `/mnt/` 配下にある | repo を Linux FS 側（`~/` 配下）へ移す（上記参照） |
 | スリープ復帰後に ⚠（更新なし）や stale が誤表示される | WSL2 はスリープ復帰後に時計がずれる既知問題があり、実行中 Run の経過時間判定（タイムスタンプ比較）が一時的に狂う | 時計の補正（まず `sudo hwclock -s` で Windows ホスト時刻に即時同期。直らなければ `wsl --shutdown`）で自己回復する。判定は毎回再計算のため補正後 1 分以内に表示も直る。board は表示のみで状態ファイルへ書き込まないため実害は無い |
 | `npm install` が node-pty のビルドで失敗する | `build-essential` / `python3` 不足 | `sudo apt install build-essential python3` |

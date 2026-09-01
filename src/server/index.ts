@@ -11,6 +11,7 @@ import type { BoardCache } from "./cache.ts";
 import { createMemoryBoardCache } from "./cache.ts";
 import { NO_FLEET_ENTRIES, loadFleetManifest } from "./manifest.ts";
 import type { GetFleetEntries } from "./manifest.ts";
+import { DEFAULT_PORT, resolveBoardPort } from "./port.ts";
 import {
   TERMINAL_WS_PATH,
   createTerminalWebSocketServer,
@@ -21,10 +22,9 @@ import { fullScan, startFleetWatcher } from "./watcher.ts";
 import type { FleetWatcher } from "./watcher.ts";
 
 // NFR-03 / クリティカル設計決定: サーバは 127.0.0.1 に固定バインドする。
-// 環境変数・起動引数など、外部からホストを上書きできる口は意図的に作らない。
+// 環境変数・起動引数など、外部から**ホスト**を上書きできる口は意図的に作らない
+// （ポートの上書きは別途 port.ts で許可している。理由はそちらのコメント参照）。
 export const LISTEN_HOSTNAME = "127.0.0.1";
-
-const DEFAULT_PORT = 4317;
 
 // ビルド済み UI（vite build の出力）を静的配信するルート。
 const UI_DIST_ROOT = fileURLToPath(new URL("../../dist/ui", import.meta.url));
@@ -145,9 +145,11 @@ if (isMainModule) {
 
   // HTTP と WS で同一の cache インスタンスを共有する。
   const cache = createMemoryBoardCache();
+  // ポートは FLYWHEEL_BOARD_PORT で上書きできる（同一マシンでの並走用。port.ts）。
+  // 不正な値はここで throw し、既定ポートへ黙って戻らない。
   const server = serve(
     getServeOptions(
-      DEFAULT_PORT,
+      resolveBoardPort(),
       cache,
       getFleetEntries,
       fleetAgentAdditionDeps,

@@ -2,6 +2,13 @@
 import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
+import { resolveBoardPort } from "./src/server/port.ts";
+
+// dev proxy の転送先ポート。サーバ側（src/server/index.ts）と同一の解決ロジックを
+// 共有する。ここを既定ポート決め打ちにすると、FLYWHEEL_BOARD_PORT で別ポート起動
+// したときに proxy だけが既定ポートを向き、同一マシンの別アカウントが動かしている
+// board へ黙って繋がってしまう。
+const BOARD_PORT = resolveBoardPort();
 
 // UI ソースは src/ui/ 配下。ビルド成果物は dist/ui/ にまとめ、
 // 本番時は Hono サーバ (src/server/index.ts) がここを静的配信する。
@@ -11,12 +18,12 @@ export default defineConfig({
   server: {
     // NFR-03: UI 開発サーバも 127.0.0.1 固定。外部から上書きできる口は作らない。
     host: "127.0.0.1",
-    // dev(5173) と Node サーバ(4317) は別オリジンのため、/api・/ws を明示的に
+    // dev(5173) と Node サーバ(既定 4317) は別オリジンのため、/api・/ws を明示的に
     // Node サーバへ転送する（本番ビルド後は Hono が同一オリジン配信するため不要）。
-    // 転送先は常に 127.0.0.1 固定（NFR-03）。
+    // 転送先ホストは常に 127.0.0.1 固定（NFR-03）。ポートのみ BOARD_PORT に従う。
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:4317",
+        target: `http://127.0.0.1:${BOARD_PORT}`,
         changeOrigin: true,
       },
       // WS は正規表現キーで `^/ws$` `^/ws/terminal` にスコープする。
@@ -24,11 +31,11 @@ export default defineConfig({
       // `/ws.ts`（Vite が実際にリクエストするソースモジュールの静的アセットパス）
       // まで巻き込んでしまい、そちらが 404 になって画面が白くなる（既知の落とし穴）。
       "^/ws$": {
-        target: "ws://127.0.0.1:4317",
+        target: `ws://127.0.0.1:${BOARD_PORT}`,
         ws: true,
       },
       "^/ws/terminal": {
-        target: "ws://127.0.0.1:4317",
+        target: `ws://127.0.0.1:${BOARD_PORT}`,
         ws: true,
       },
     },
