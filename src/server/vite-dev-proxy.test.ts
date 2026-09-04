@@ -1,25 +1,59 @@
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { isAllowedHost, isAllowedOrigin } from "./api.ts";
+import { BOARD_PORT_ENV_KEY, DEFAULT_PORT } from "./port.ts";
 
 // vite.config.ts（プロジェクトルート）の dev サーバ proxy 設定を検証する。
 // Issue #43: UI(Vite:5173) と API/WS(Node:4317) が別オリジンのため、
 // proxy が無いと初回スナップショットが届かず board が「読み込み中」のまま固まる。
 // WS の proxy キーは正規表現でなければならない（`Board.tsx` が import する
 // `/ws.ts` というソースモジュール配信パスまで巻き込んで 404 になる既知の落とし穴）。
+//
+// Issue #175: 転送先ポートは実行環境の FLYWHEEL_BOARD_PORT に依存させない。
+// 構造の検証は `buildViteConfig(port)` へ**ポートを注入**して行い、環境変数との
+// 結線は default export（遅延評価される設定ファクトリ）を env スタブ下で呼んで
+// 別途固定する。以前はモジュールスコープで解決した設定を import していたため、
+// FLYWHEEL_BOARD_PORT を設定している開発者だけがここで赤になっていた。
 const CONFIG_PATH = fileURLToPath(
   new URL("../../vite.config.ts", import.meta.url),
 );
 
-async function loadViteConfig() {
-  const mod = await import(CONFIG_PATH);
-  return mod.default as {
-    server?: {
-      host?: string;
-      proxy?: Record<string, unknown>;
-    };
+type ViteConfigShape = {
+  server?: {
+    host?: string;
+    proxy?: Record<string, unknown>;
   };
+};
+
+type ConfigModule = {
+  default: (env: { command: string; mode: string }) => ViteConfigShape;
+  buildViteConfig: (boardPort: number) => ViteConfigShape;
+};
+
+/** 検証用に注入する転送先ポート。既定値とも実行環境の設定値とも別の値を使う。 */
+const INJECTED_PORT = 4321;
+
+async function importConfigModule(): Promise<ConfigModule> {
+  return (await import(CONFIG_PATH)) as unknown as ConfigModule;
 }
+
+/** ポートを注入して設定を組み立てる（実行環境の環境変数を一切参照しない経路）。 */
+async function loadViteConfig(
+  boardPort: number = INJECTED_PORT,
+): Promise<ViteConfigShape> {
+  const { buildViteConfig } = await importConfigModule();
+  return buildViteConfig(boardPort);
+}
+
+/** default export（設定ファクトリ）を呼び出す。env は呼び出し時点で読まれる。 */
+async function loadDefaultConfig(): Promise<ViteConfigShape> {
+  const mod = await importConfigModule();
+  return mod.default({ command: "serve", mode: "development" });
+}
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("vite dev server proxy config (Issue #43)", () => {
   it("keeps the existing 127.0.0.1 固定 host（NFR-03）", async () => {
@@ -27,10 +61,10 @@ describe("vite dev server proxy config (Issue #43)", () => {
     expect(config.server?.host).toBe("127.0.0.1");
   });
 
-  it("proxies /api to the Node server (127.0.0.1:4317)", async () => {
+  it("proxies /api to the Node server on the injected port", async () => {
     const config = await loadViteConfig();
     expect(config.server?.proxy?.["/api"]).toMatchObject({
-      target: "http://127.0.0.1:4317",
+      target: `http://127.0.0.1:${INJECTED_PORT}`,
       changeOrigin: true,
     });
   });
@@ -38,7 +72,7 @@ describe("vite dev server proxy config (Issue #43)", () => {
   it("proxies the /ws WebSocket endpoint via a regex key scoped to exactly /ws", async () => {
     const config = await loadViteConfig();
     expect(config.server?.proxy?.["^/ws$"]).toMatchObject({
-      target: "ws://127.0.0.1:4317",
+      target: `ws://127.0.0.1:${INJECTED_PORT}`,
       ws: true,
     });
   });
@@ -46,7 +80,7 @@ describe("vite dev server proxy config (Issue #43)", () => {
   it("proxies the /ws/terminal WebSocket endpoint via a regex key", async () => {
     const config = await loadViteConfig();
     expect(config.server?.proxy?.["^/ws/terminal"]).toMatchObject({
-      target: "ws://127.0.0.1:4317",
+      target: `ws://127.0.0.1:${INJECTED_PORT}`,
       ws: true,
     });
   });
@@ -95,5 +129,58 @@ describe("dev proxy prerequisite: Origin/Host allowlist is port-independent (Iss
   it("still accepts the backend origin/host on port 4317", () => {
     expect(isAllowedOrigin("http://127.0.0.1:4317")).toBe(true);
     expect(isAllowedHost("127.0.0.1:4317")).toBe(true);
+  });
+});
+
+// Issue #175 の回帰本体。上のブロックはポートを注入して構造を見るため、
+// 「default export が実際に FLYWHEEL_BOARD_PORT を読んでいるか」は担保しない。
+// ここで結線そのものと、注入経路が環境変数から独立していることを固定する。
+describe("dev proxy port resolution is env-driven but test-injectable (Issue #175)", () => {
+  it("default export は呼び出し時点の FLYWHEEL_BOARD_PORT を反映する（遅延評価）", async () => {
+    vi.stubEnv(BOARD_PORT_ENV_KEY, "4318");
+    const config = await loadDefaultConfig();
+    expect(config.server?.proxy?.["/api"]).toMatchObject({
+      target: "http://127.0.0.1:4318",
+    });
+    expect(config.server?.proxy?.["^/ws$"]).toMatchObject({
+      target: "ws://127.0.0.1:4318",
+    });
+    expect(config.server?.proxy?.["^/ws/terminal"]).toMatchObject({
+      target: "ws://127.0.0.1:4318",
+    });
+  });
+
+  it("default export は FLYWHEEL_BOARD_PORT 未設定なら既定ポートへ転送する", async () => {
+    vi.stubEnv(BOARD_PORT_ENV_KEY, "");
+    const config = await loadDefaultConfig();
+    expect(config.server?.proxy?.["/api"]).toMatchObject({
+      target: `http://127.0.0.1:${DEFAULT_PORT}`,
+    });
+  });
+
+  // 同一モジュールを再 import しても env の変化が反映される＝モジュールスコープで
+  // 固定されていないこと（Issue #175 の原因はまさにモジュールスコープ解決だった）。
+  it("同一プロセス内で env を変えると転送先も変わる（モジュールスコープに固定されない）", async () => {
+    vi.stubEnv(BOARD_PORT_ENV_KEY, "4318");
+    const first = await loadDefaultConfig();
+    vi.stubEnv(BOARD_PORT_ENV_KEY, "4322");
+    const second = await loadDefaultConfig();
+    expect(first.server?.proxy?.["/api"]).toMatchObject({
+      target: "http://127.0.0.1:4318",
+    });
+    expect(second.server?.proxy?.["/api"]).toMatchObject({
+      target: "http://127.0.0.1:4322",
+    });
+  });
+
+  // 注入経路は実行環境の env に一切左右されない。この期待が壊れると、
+  // FLYWHEEL_BOARD_PORT を設定している開発者だけがテスト赤になる状態へ逆戻りする。
+  it("注入経路は実行環境の FLYWHEEL_BOARD_PORT を無視する", async () => {
+    vi.stubEnv(BOARD_PORT_ENV_KEY, "4318");
+    const config = await loadViteConfig(INJECTED_PORT);
+    expect(config.server?.proxy?.["/api"]).toMatchObject({
+      target: `http://127.0.0.1:${INJECTED_PORT}`,
+    });
+    expect(config.server?.host).toBe("127.0.0.1");
   });
 });
