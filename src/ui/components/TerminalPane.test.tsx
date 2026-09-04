@@ -30,6 +30,7 @@ type FakeXterm = {
   write: Mock<(data: string) => void>;
   onData: Mock<(callback: (data: string) => void) => void>;
   fit: Mock<() => { cols: number; rows: number }>;
+  focus: Mock<() => void>;
   dispose: Mock<() => void>;
 };
 
@@ -47,6 +48,7 @@ function createFakeXterm(): FakeXterm {
     write: vi.fn(),
     onData: vi.fn(),
     fit: vi.fn(() => ({ cols: 80, rows: 24 })),
+    focus: vi.fn(),
     dispose: vi.fn(),
   };
 }
@@ -225,6 +227,212 @@ describe("TerminalPane", () => {
     expect(harness.socketFor("bi", "shell")).toBeDefined();
     expect(medicalAgentSocket.close).not.toHaveBeenCalled();
     expect(medicalShellSocket.close).not.toHaveBeenCalled();
+  });
+
+  describe("board からターミナルへの受け渡し点でのフォーカス制御（Issue #164: board にはこれまで xterm へフォーカスを渡す手段が無く、フォーカスが board 側の要素に残った状態で ESC を押すと pty へ届かずオーバーレイが閉じられなかった）", () => {
+    it("タブ切替による focus は、対象ペインが可視になった後に呼ばれる（実ブラウザは display:none の要素へフォーカスできないため、setActiveAgent の再レンダーを待たずに同期 focus すると実機では効かない）", async () => {
+      const harness = buildHarness(["medical", "bi"]);
+
+      render(
+        <TerminalPane
+          connect={harness.connect}
+          createXterm={harness.createXterm}
+          fetchAgents={harness.fetchAgents}
+        />,
+      );
+
+      await screen.findByText("medical");
+      await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(2));
+
+      // "bi" を開いてアクティブタブにする（この時点で medical 側の
+      // .terminal-pane-split は display:none になる）。
+      act(() => {
+        fireEvent.click(screen.getByText("bi"));
+      });
+      await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(4));
+
+      const medicalAgentXterm = harness.xtermFor("medical", "agent");
+      medicalAgentXterm.focus.mockClear();
+      let displayAtFocusCall: string | undefined;
+      medicalAgentXterm.focus.mockImplementation(() => {
+        displayAtFocusCall = screen.getByTestId("terminal-panel-medical").style
+          .display;
+      });
+
+      // "medical" へ切り替える。activeAgent の更新（再レンダー）が反映される
+      // 前に同期的に focus() を呼んでしまうと、focus 呼び出し時点ではまだ
+      // 旧レンダーの display:none が DOM に残っている。
+      act(() => {
+        fireEvent.click(screen.getByText("medical"));
+      });
+
+      expect(medicalAgentXterm.focus).toHaveBeenCalledTimes(1);
+      expect(displayAtFocusCall).not.toBe("none");
+    });
+
+    it("まだ開かれていないタブのタブボタンをクリックすると、接続確立後にその agent ペインの xterm の focus が呼ばれる（pendingFocus 経由）", async () => {
+      const harness = buildHarness(["medical", "bi"]);
+
+      render(
+        <TerminalPane
+          connect={harness.connect}
+          createXterm={harness.createXterm}
+          fetchAgents={harness.fetchAgents}
+        />,
+      );
+
+      await screen.findByText("medical");
+      await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(2));
+
+      // "bi" はまだ一度も開かれていない（クリック時点では connectionsRef に
+      // 接続が存在しない）。
+      act(() => {
+        fireEvent.click(screen.getByText("bi"));
+      });
+
+      await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(4));
+      expect(harness.xtermFor("bi", "agent").focus).toHaveBeenCalledTimes(1);
+    });
+
+    it("terminal-control の prefill(agent, command) で、その agent ペインの xterm の focus が呼ばれる", async () => {
+      const harness = buildHarness(["medical", "bi"]);
+
+      render(
+        <TerminalPane
+          connect={harness.connect}
+          createXterm={harness.createXterm}
+          fetchAgents={harness.fetchAgents}
+        />,
+      );
+
+      await screen.findByText("medical");
+      await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(2));
+
+      act(() => {
+        prefill("bi", "echo hi");
+      });
+
+      await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(4));
+      expect(harness.xtermFor("bi", "agent").focus).toHaveBeenCalledTimes(1);
+    });
+
+    it("パネルコンテナ（terminal-panel-{agent}-shell）に mouseDown すると、その shell ペインの xterm の focus が呼ばれる（agent ペイン側も同様に1件）", async () => {
+      const harness = buildHarness(["medical"]);
+
+      render(
+        <TerminalPane
+          connect={harness.connect}
+          createXterm={harness.createXterm}
+          fetchAgents={harness.fetchAgents}
+        />,
+      );
+
+      await screen.findByText("medical");
+      await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(2));
+
+      const shellXterm = harness.xtermFor("medical", "shell");
+      const agentXterm = harness.xtermFor("medical", "agent");
+
+      // コンテナ自身が着弾点＝「`.xterm` が占めない余白」へのクリック。
+      // fireEvent は既定動作がキャンセルされると false を返す。実ブラウザは
+      // mousedown の既定動作としてフォーカス不能要素上のクリックで現在の
+      // フォーカスを解除するため、ここで preventDefault しないと直後の
+      // focus() が打ち消される（この assert が無いと preventDefault の行を
+      // 削っても緑のまま通ってしまう。セルフレビュー指摘）。
+      let shellDefaultAllowed: boolean | undefined;
+      act(() => {
+        shellDefaultAllowed = fireEvent.mouseDown(
+          screen.getByTestId("terminal-panel-medical-shell"),
+        );
+      });
+      expect(shellDefaultAllowed).toBe(false);
+      expect(shellXterm.focus).toHaveBeenCalledTimes(1);
+      expect(agentXterm.focus).not.toHaveBeenCalled();
+
+      act(() => {
+        fireEvent.mouseDown(screen.getByTestId("terminal-panel-medical-agent"));
+      });
+      expect(agentXterm.focus).toHaveBeenCalledTimes(1);
+    });
+
+    it("コンテナの子孫（`.xterm` 要素相当）が着弾点の mousedown では preventDefault しない（xterm.js 自身の mousedown 処理・テキスト選択を壊さないため）", async () => {
+      const harness = buildHarness(["medical"]);
+
+      render(
+        <TerminalPane
+          connect={harness.connect}
+          createXterm={harness.createXterm}
+          fetchAgents={harness.fetchAgents}
+        />,
+      );
+
+      await screen.findByText("medical");
+      await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(2));
+
+      // 本番では xterm.js が terminal.open(container) で `.xterm` 要素を
+      // コンテナ配下に生成する。テストでは createXterm をモックしていて実 DOM が
+      // 生えないため、その位置に相当する子要素を差し込んで着弾点を作る。
+      const container = screen.getByTestId("terminal-panel-medical-shell");
+      const xtermElement = document.createElement("div");
+      container.appendChild(xtermElement);
+
+      let childDefaultAllowed: boolean | undefined;
+      act(() => {
+        childDefaultAllowed = fireEvent.mouseDown(xtermElement);
+      });
+
+      expect(childDefaultAllowed).toBe(true);
+      // フォーカス自体は（xterm 自身の focus と二重になっても無害なので）渡す。
+      expect(harness.xtermFor("medical", "shell").focus).toHaveBeenCalledTimes(
+        1,
+      );
+    });
+
+    it("折りたたみ中にタブをクリックしても、その後の「展開」でターミナルへフォーカスが飛ばない（未消化の予約はトグルで失効する）", async () => {
+      const harness = buildHarness(["medical", "bi"]);
+
+      render(
+        <TerminalPane
+          connect={harness.connect}
+          createXterm={harness.createXterm}
+          fetchAgents={harness.fetchAgents}
+        />,
+      );
+
+      await screen.findByText("medical");
+      await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(2));
+
+      // "bi" の接続を確立させたうえで "medical" をアクティブに戻す。
+      act(() => {
+        fireEvent.click(screen.getByText("bi"));
+      });
+      await waitFor(() => expect(harness.connect).toHaveBeenCalledTimes(4));
+      act(() => {
+        fireEvent.click(screen.getByText("medical"));
+      });
+
+      act(() => {
+        fireEvent.click(screen.getByLabelText("折りたたむ"));
+      });
+
+      const biAgentXterm = harness.xtermFor("bi", "agent");
+      biAgentXterm.focus.mockClear();
+
+      // 折りたたみ中でもタブボタンはヘッダに残るのでクリックできる。この時点で
+      // 対象ペインは不可視なので予約されるだけで消化されない。
+      act(() => {
+        fireEvent.click(screen.getByText("bi"));
+      });
+      expect(biAgentXterm.focus).not.toHaveBeenCalled();
+
+      // 展開はキーボードでも操作できるボタンであり、展開直後にターミナルへ
+      // フォーカスを奪うのは a11y 退行（実装コメント参照）。予約が残っていると
+      // ここで消化されてしまうため、トグル時に失効させている。
+      act(() => {
+        fireEvent.click(screen.getByLabelText("展開"));
+      });
+      expect(biAgentXterm.focus).not.toHaveBeenCalled();
+    });
   });
 
   it("折りたたみボタンでヘッダ以外が非表示になるが、接続は維持される", async () => {

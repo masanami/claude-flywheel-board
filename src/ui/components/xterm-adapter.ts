@@ -17,6 +17,16 @@ export type XtermInstance = {
   onData(callback: (data: string) => void): void;
   /** container にフィットさせ、結果の cols/rows を返す（fit addon 呼び出し）。 */
   fit(): { cols: number; rows: number };
+  /**
+   * xterm.js が内部で保持する隠し textarea（実際のキー入力フォーカス先）に
+   * フォーカスを移す（Issue #164）。xterm 自身は `.xterm` 要素上の mousedown
+   * でのみ `this.focus()` するため、board からタブクリック・prefill 等で
+   * ターミナルへ操作を受け渡す際にフォーカスが board 側の要素に残ってしまう
+   * （その状態で ESC を押すと xterm には届かず、`/plugins`・`/usage` の
+   * オーバーレイが閉じられない）。TerminalPane.tsx 側の各受け渡し点から
+   * 明示的にこれを呼ぶことでその隙間を埋める。
+   */
+  focus(): void;
   dispose(): void;
 };
 
@@ -276,6 +286,9 @@ export const createXtermInstance: CreateXtermInstance = (container) => {
     fit() {
       fitAddon.fit();
       return { cols: terminal.cols, rows: terminal.rows };
+    },
+    focus() {
+      terminal.focus();
     },
     dispose() {
       terminal.dispose();

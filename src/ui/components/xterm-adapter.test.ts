@@ -12,6 +12,9 @@ const selectionChangeCallbacks: Array<() => void> = [];
 // hasSelection/getSelection の戻り値をテストごとに差し替えるための状態。
 let mockHasSelection = false;
 let mockSelectionText = "";
+// terminal.focus() が呼ばれたことを捕捉する（Issue #164: XtermInstance.focus()
+// が terminal.focus() へ委譲することの検証用）。
+const terminalFocusSpy = vi.fn();
 // terminal.loadAddon() に渡されたインスタンスを捕捉し、FitAddon/ClipboardAddon
 // の双方がロードされたことを検証できるようにする（OSC 52 パススルー対応）。
 // ClipboardAddon は `provider`（xterm-adapter.ts が渡すカスタム
@@ -46,6 +49,9 @@ vi.mock("@xterm/xterm", () => ({
     }
     getSelection() {
       return mockSelectionText;
+    }
+    focus() {
+      terminalFocusSpy();
     }
   },
 }));
@@ -109,6 +115,7 @@ describe("createXtermInstance", () => {
     LOADED_ADDONS.length = 0;
     mockHasSelection = false;
     mockSelectionText = "";
+    terminalFocusSpy.mockClear();
   });
 
   afterEach(() => {
@@ -559,5 +566,42 @@ describe("createXtermInstance", () => {
       expect(() => handler(event)).not.toThrow();
       await flushAsync();
     });
+  });
+
+  describe("focus()（Issue #164: board からターミナルへフォーカスを渡す手段が無く、ESC がターミナルの隠し textarea 以外へフォーカスがある間は board 側のフォーカス移動に化ける不具合の対策）", () => {
+    it("XtermInstance.focus() は terminal.focus() へ委譲する", async () => {
+      const { createXtermInstance } = await import("./xterm-adapter.ts");
+      const instance = createXtermInstance(document.createElement("div"));
+
+      instance.focus();
+
+      expect(terminalFocusSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("Escape の keydown を受けても常に true を返す（board 側で ESC を横取りしない。xterm の隠し textarea にフォーカスがある限り ESC は必ず pty へ送られる前提の回帰防止。Issue #164）", async () => {
+    const { createXtermInstance } = await import("./xterm-adapter.ts");
+    createXtermInstance(document.createElement("div"));
+
+    const handler = customKeyEventHandlers[0];
+    if (!handler)
+      throw new Error("attachCustomKeyEventHandler が登録されていません");
+    // 素の Escape。
+    expect(handler(new KeyboardEvent("keydown", { key: "Escape" }))).toBe(true);
+
+    // 「選択あり かつ metaKey」——横取り分岐（Cmd+C コピー）が実際に発火する
+    // 条件を満たした状態でも、Escape はその分岐に入らず true のまま通ること。
+    // 素の Escape だけを見るテストは「どんなキーでも true」を通してしまい、
+    // 条件付きの ESC 横取りが混入しても緑になる（セルフレビュー指摘）。
+    mockHasSelection = true;
+    mockSelectionText = "selected";
+    expect(
+      handler(new KeyboardEvent("keydown", { key: "Escape", metaKey: true })),
+    ).toBe(true);
+    // 同条件の Cmd+C は false（＝横取り分岐そのものは生きている）。これが
+    // 対になっていないと、上の assert は「分岐が死んでいるだけ」でも通る。
+    expect(
+      handler(new KeyboardEvent("keydown", { key: "c", metaKey: true })),
+    ).toBe(false);
   });
 });
