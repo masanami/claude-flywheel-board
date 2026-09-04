@@ -546,20 +546,18 @@ body {
   border-left: 3px solid var(--board-needs-human-border);
 }
 
-/* 承認導線（#165・FR-20）。カード（.task-card）の中・本文（.task-card-body）の
-   下に置く（#169）。カードを「コンテナ＋内側のクリック領域」に分けたことで、
-   <button> の入れ子を作らずにカードの内側へ収められる。 */
-.task-card-approval {
+/* 承認コントロール（#165・FR-20 → #171 で TaskCard / CardDetailModal の共通
+   コンポーネント ApprovalControl.tsx の見た目として抽出）。共通の見た目
+   （レイアウト・ボタン装飾）はここへ集約し、ホスト固有の余白・配置は
+   ホスト側クラス（.task-card-approval / .card-detail-modal-footer）に残す。 */
+.approval-control {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.35rem;
-  /* 左右はカード本文と揃え、下はカード下端の余白を兼ねる（.task-card は
-     余白を持たないため。上の間隔は .task-card-body の padding-bottom が担う）。 */
-  padding: 0 0.65rem 0.5rem;
 }
 
-.task-card-approval button {
+.approval-control button {
   font: inherit;
   font-size: 0.72rem;
   padding: 0.15rem 0.5rem;
@@ -570,12 +568,21 @@ body {
   cursor: pointer;
 }
 
-.task-card-approval button:disabled {
+.approval-control button:disabled {
   cursor: default;
   opacity: 0.6;
 }
 
-.task-card-approval-confirm {
+/* 「承認する」（確認フェーズの確定ボタン）の強調配色。セレクタを
+   `.approval-control button.approval-control-confirm` にしているのは詳細度のため——
+   単独クラス `.approval-control-confirm`（0,1,0）では、直前の
+   `.approval-control button`（0,1,1）が持つ `background: transparent` /
+   `color: inherit` に負けて以下の宣言が一切効かない。#168 でこの配色を
+   `.task-card-approval-confirm` として導入したときから同じ詳細度の取り違えがあり、
+   意図した強調色も下記の WCAG AA 対応も死んでいた。#171 でこのルール自体を
+   `.approval-control*` へ移設し、かつ確定ボタンの露出面がカードとモーダルの
+   2 箇所へ増えるため、移設に合わせてここで直す。 */
+.approval-control button.approval-control-confirm {
   background: var(--board-needs-human-border);
   /* 背景は両テーマとも暖色系（light #e8b93f / dark #caa03a）。color: inherit の
      ままだとダークテーマで前景が #e7e7ea になりコントラスト比が約 2.1:1 に落ち、
@@ -584,16 +591,26 @@ body {
   color: #1c1c1f;
 }
 
-.task-card-approval-question {
+.approval-control-question {
   font-size: 0.72rem;
   color: var(--board-muted-fg);
 }
 
-.task-card-approval-error {
+.approval-control-error {
   flex-basis: 100%;
   margin: 0;
   font-size: 0.7rem;
   color: var(--board-error-fg);
+}
+
+/* カード（.task-card）の中・本文（.task-card-body）の下に置く（#169）。
+   カードを「コンテナ＋内側のクリック領域」に分けたことで、<button> の入れ子を
+   作らずにカードの内側へ収められる。ここに残すのはカード固有の余白だけ
+   （共通の見た目は .approval-control が持つ。#171・D3）。 */
+.task-card-approval {
+  /* 左右はカード本文と揃え、下はカード下端の余白を兼ねる（.task-card は
+     余白を持たないため。上の間隔は .task-card-body の padding-bottom が担う）。 */
+  padding: 0 0.65rem 0.5rem;
 }
 
 .task-card-tooltip {
@@ -708,6 +725,29 @@ body {
   padding: 1rem 1.2rem;
   max-height: 80vh;
   overflow-y: auto;
+}
+
+/* 承認フッター（#171・D3）。モーダル本文（作業ログのタイムラインを含み長く
+ * なりうる）の末尾に置くが、素直に末尾へ置くと承認のたびに最下部まで
+ * スクロールする必要が生じ、Issue が解こうとしている「判断材料を見ながら
+ * 承認する」が達成できない。position: sticky; bottom: 0 で常に手元に留める。
+ * sticky の基準（スクロールポート）は overflow-y: auto を持つ
+ * .card-detail-modal-content で、その「パディングエッジ」（自身の下パディング
+ * を含む見た目の可視領域の外周）が固定先になる——そのため bottom: 0 だけで
+ * 親の下パディング分のスクロール後の隙間は自然に解消される（margin-bottom
+ * を負値にして下方向にも打ち消そうとすると、sticky の制約は margin box に
+ * 対して働くため逆にスクロールポートの外へはみ出し、フッターが見えなくなる
+ * レビュー指摘あり・修正済み）。左右だけは負のマージン＋同量のパディングで
+ * 親の左右パディング（1.2rem）を打ち消し、フッターの背景がスクロール領域の
+ * 左右の端まで届く（＝浮いた余白を残さない）ようにしている。
+ * 背景を敷いて下にスクロールしてきた本文が透けないようにする。 */
+.card-detail-modal-footer {
+  position: sticky;
+  bottom: 0;
+  margin: 0.75rem -1.2rem 0;
+  padding: 0.6rem 1.2rem;
+  background: var(--board-modal-bg);
+  border-top: 1px solid var(--board-modal-border);
 }
 
 .card-detail-modal-header {
