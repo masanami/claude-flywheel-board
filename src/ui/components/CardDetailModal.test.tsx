@@ -377,10 +377,12 @@ describe("CardDetailModal", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  // Issue #165: 承認の導線はカード（TaskCard）側に置くと決めたため、詳細モーダルは
-  // 読み取り専用のままにする。台帳の編集（ステータス・分類欄）は NFR-01 区分③として
-  // 引き続き board の対象外であり、このテストがモーダル側の入口の不在を固定する。
-  it("編集・承認等の操作ボタンを持たない（読み取り専用）", () => {
+  // Issue #171 で承認だけは例外的にモーダルへも導線を持つよう改訂した（詳細は
+  // 下記の「承認導線（Issue #171）」describe）。ただし台帳の編集（ステータス・
+  // 分類欄）は NFR-01 区分③として引き続き board の対象外であり、承認対象外の
+  // 課題（デフォルト fixture は「着手中」・onApprove 未指定）では従来どおり
+  // 閉じるボタン以外の操作ボタンを持たないことをこのテストで固定する。
+  it("承認対象外の課題では編集・承認等の操作ボタンを持たない（読み取り専用）", () => {
     vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
 
     render(
@@ -1090,6 +1092,235 @@ describe("CardDetailModal", () => {
 
       expect(screen.getByText(rawWithScript)).toBeInTheDocument();
       expect(container.querySelector("script")).not.toBeInTheDocument();
+    });
+  });
+
+  // Issue #171: 承認の判断材料（タスク案・完了条件・関連リポジトリ＝FR-13 の
+  // 承認対象）はこのモーダルにしかなく、モーダルを開く→読む→閉じる→カードを
+  // 探して承認、という往復を避けるため、承認だけを例外としてモーダルにも
+  // 導線を持たせる（TaskCard と同じ ApprovalControl・同一の onApprove を共有）。
+  // 判定・2段階フロー・エラー表示自体の網羅的なテストは ApprovalControl.test.tsx
+  // に集約し、ここでは「モーダルへ正しく結線されているか」と D1/D5（クリティカル
+  // 設計決定）の固定に絞る。
+  describe("承認導線（Issue #171）", () => {
+    function approvableChallenge(
+      overrides: Partial<Challenge> = {},
+    ): Challenge {
+      return challenge({
+        id: "C-010",
+        status: "計画承認待ち",
+        needsHuman: true,
+        approvals: {
+          plan: { checked: false, line: 9, label: "計画を承認（FR-13）" },
+          completion: {
+            checked: false,
+            line: 10,
+            label: "完了を承認（FR-32）",
+          },
+        },
+        ...overrides,
+      });
+    }
+
+    it("承認待ちの課題では承認ボタンを表示する（onApprove 指定時）", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+
+      render(
+        <CardDetailModal
+          challenge={approvableChallenge()}
+          agentName="medical"
+          onClose={vi.fn()}
+          onApprove={vi.fn()}
+        />,
+      );
+
+      expect(
+        screen.getByRole("button", { name: "計画を承認" }),
+      ).toBeInTheDocument();
+    });
+
+    it("readOnly（アーカイブビュー）では承認ボタンを表示しない", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+
+      render(
+        <CardDetailModal
+          challenge={approvableChallenge()}
+          agentName="medical"
+          onClose={vi.fn()}
+          onApprove={vi.fn()}
+          readOnly
+        />,
+      );
+
+      expect(
+        screen.queryByRole("button", { name: "計画を承認" }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("onApprove 未指定では承認ボタンを表示しない", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+
+      render(
+        <CardDetailModal
+          challenge={approvableChallenge()}
+          agentName="medical"
+          onClose={vi.fn()}
+        />,
+      );
+
+      expect(
+        screen.queryByRole("button", { name: "計画を承認" }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("人間対応待ち（回答待ちの保留）では承認ボタンを表示しない", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+
+      render(
+        <CardDetailModal
+          challenge={approvableChallenge({ status: "人間対応待ち" })}
+          agentName="medical"
+          onClose={vi.fn()}
+          onApprove={vi.fn()}
+        />,
+      );
+
+      expect(
+        screen.queryByRole("button", { name: "計画を承認" }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("確認後の「承認する」で課題 ID と承認種別を送る（カードと同一の onApprove）", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+      const onApprove = vi.fn().mockResolvedValue({ ok: true });
+
+      render(
+        <CardDetailModal
+          challenge={approvableChallenge()}
+          agentName="medical"
+          onClose={vi.fn()}
+          onApprove={onApprove}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "計画を承認" }));
+      fireEvent.click(screen.getByRole("button", { name: "承認する" }));
+
+      expect(onApprove).toHaveBeenCalledWith("C-010", "plan");
+      // resolve 後の setApprovalPhase("idle") を act() の範囲内で消化してから
+      // テストを終える（act 警告防止）。
+      await screen.findByRole("button", { name: "計画を承認" });
+    });
+
+    it("失敗時はサーバのエラーメッセージを表示する", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+      const onApprove = vi.fn().mockResolvedValue({
+        ok: false,
+        error: "このエージェントで run-cycle が実行中です",
+      });
+
+      render(
+        <CardDetailModal
+          challenge={approvableChallenge()}
+          agentName="medical"
+          onClose={vi.fn()}
+          onApprove={onApprove}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "計画を承認" }));
+      fireEvent.click(screen.getByRole("button", { name: "承認する" }));
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "このエージェントで run-cycle が実行中です",
+      );
+    });
+
+    // D1: 承認成功後もモーダルは閉じない。開いたまま台帳の更新を反映し、
+    // 承認対象でなくなった時点で承認ブロックが消える（#171 クリティカル設計決定）。
+    it("承認しても dialog は閉じない（D1）", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+      const onApprove = vi.fn().mockResolvedValue({ ok: true });
+      const onClose = vi.fn();
+
+      render(
+        <CardDetailModal
+          challenge={approvableChallenge()}
+          agentName="medical"
+          onClose={onClose}
+          onApprove={onApprove}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "計画を承認" }));
+      fireEvent.click(screen.getByRole("button", { name: "承認する" }));
+
+      // resolve 後の setApprovalPhase("idle") を act() の範囲内で消化してから
+      // アサーションへ進む（act 警告防止）。
+      await screen.findByRole("button", { name: "計画を承認" });
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+    });
+
+    it("承認済みへの再レンダーで承認ブロックが消える（D1・正本はファイルなので fs-watch 反映を props 経由で受け取る）", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+
+      const { rerender } = render(
+        <CardDetailModal
+          challenge={approvableChallenge()}
+          agentName="medical"
+          onClose={vi.fn()}
+          onApprove={vi.fn()}
+        />,
+      );
+
+      expect(
+        screen.getByRole("button", { name: "計画を承認" }),
+      ).toBeInTheDocument();
+
+      rerender(
+        <CardDetailModal
+          challenge={approvableChallenge({
+            approvals: {
+              plan: { checked: true, line: 9, label: "計画を承認（FR-13）" },
+            },
+          })}
+          agentName="medical"
+          onClose={vi.fn()}
+          onApprove={vi.fn()}
+        />,
+      );
+
+      expect(
+        screen.queryByRole("button", { name: "計画を承認" }),
+      ).not.toBeInTheDocument();
+      // モーダル自体は閉じない（D1）。
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+    });
+
+    // D5: 承認ボタンはネイティブ dialog の3つの閉じる経路（閉じるボタン / ESC /
+    // オーバーレイクリック）のうち「オーバーレイクリック」判定に使っている
+    // mousedown/click の target 比較へ干渉してはならない（<form method="dialog">
+    // を使わず type="button" にしていること、承認ボタンの target が dialog 自身
+    // ではないことの両方が効いて初めて成立する）。
+    it("承認ボタンを押してもオーバーレイクリック判定は発火しない（D5）", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+      const onClose = vi.fn();
+
+      render(
+        <CardDetailModal
+          challenge={approvableChallenge()}
+          agentName="medical"
+          onClose={onClose}
+          onApprove={vi.fn()}
+        />,
+      );
+
+      const approveButton = screen.getByRole("button", { name: "計画を承認" });
+      fireEvent.mouseDown(approveButton);
+      fireEvent.click(approveButton);
+
+      expect(onClose).not.toHaveBeenCalled();
     });
   });
 });

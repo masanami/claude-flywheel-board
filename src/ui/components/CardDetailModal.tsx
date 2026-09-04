@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import type { Challenge, ChallengeRef, LogEntry, Run } from "../board-types.ts";
+import type {
+  ApprovalKind,
+  Challenge,
+  ChallengeRef,
+  LogEntry,
+  Run,
+} from "../board-types.ts";
 import { formatLogTimestamp } from "../lib/format-log-ts.ts";
 import {
   type GithubRefKind,
@@ -11,6 +17,10 @@ import {
   findStaleDelegateRun,
 } from "../lib/resume-command.ts";
 import { prefill } from "../terminal-control.ts";
+import {
+  ApprovalControl,
+  type ApproveSubmitResult,
+} from "./ApprovalControl.tsx";
 
 type CardDetailModalProps = {
   challenge: Challenge;
@@ -21,6 +31,16 @@ type CardDetailModalProps = {
   // 見つかった場合のみ、resumebox（再開コマンドの表示＋プリフィル導線）を出す。
   // FR-A1（取得元）の対象 run 特定にも同じ配列を参照する。
   runningRuns?: Run[];
+  // 読み取り専用表示（アーカイブビュー等）。TaskCard から中継される（#171）。
+  // true のとき承認導線を出さない（ApprovalControl 側で判定）。
+  readOnly?: boolean;
+  // 承認 POST の送信ハンドラ（#171）。TaskCard が受け取っているものと**同じ
+  // 関数をそのまま中継**するだけで、server 側の呼び出し経路・API は変更しない
+  // （完了条件2）。未指定なら承認導線を出さない。
+  onApprove?: (
+    challengeId: string,
+    kind: ApprovalKind,
+  ) => Promise<ApproveSubmitResult>;
 };
 
 /**
@@ -88,19 +108,41 @@ function ChallengeRefs({
   );
 }
 
-// カード詳細モーダル（読み取り専用・NFR-01）: 台帳の全項目と作業ログタイムラインを
-// 表示するのみで、編集・承認・実行等の操作ボタンは一切持たない。作業ログは
-// GET /api/log?agent&challenge をモーダルを開いたタイミングでオンデマンド取得する。
+// カード詳細モーダル（NFR-01）: 台帳の全項目と作業ログタイムラインを表示する。
+// 台帳の編集・ステータス変更・実行など、board が書き込みを行う操作導線は引き続き
+// 持たない（スコープ外のまま。再開コマンドのプリフィル〔resumebox・FR-12〕は
+// 書き込みではなく該当タブへの挿入に留まるため対象外）。
+//
+// 承認だけは例外（#171）: 承認の判断材料（タスク案・完了条件・関連リポジトリ＝
+// FR-13 の承認対象）はこのモーダルにしかなく、以前は「モーダルを開く→読む→
+// 閉じる→カードを探して承認」という往復が必要だった。TaskCard と同じ
+// ApprovalControl（判定・2段階フロー・エラー表示を1箇所に閉じ込めた共通
+// コンポーネント）をフッターに置き、challenge / readOnly / onApprove を中継する
+// だけにする。承認は board 上のどこから行っても同一経路・同一 API（server 側は
+// 一切変更しない）——board が書いてよいのは NFR-01 の区分②（人間の入力）＝
+// 承認チェックボックスまでで、区分③（ステータス・分類欄・journal・memory・
+// runs.jsonl）には引き続き書かない（担保は server 側 ledger-approval.ts）。
+// 承認成功後もこのモーダルは自ら閉じない（D1）——台帳の `[x]` は fs-watch →
+// WS agent_update → props 経由で戻り、承認対象でなくなった時点で
+// ApprovalControl が自然に消える。読んでいた判断材料を承認直後に奪わないため。
+//
+// 作業ログは GET /api/log?agent&challenge をモーダルを開いたタイミングで
+// オンデマンド取得する。
 //
 // ネイティブ <dialog> + showModal() を採用し、フォーカストラップ・ESC・背景 inert は
 // ブラウザ実装に委ねる（自前実装はしない）。「閉じるボタン」「ESC」「オーバーレイ
 // （dialog 自身）クリック」の3経路はすべて dialog.close() → ネイティブの "close"
-// イベントへ収束させ、そこで一度だけ onClose を呼ぶ。
+// イベントへ収束させ、そこで一度だけ onClose を呼ぶ。承認ボタンは
+// <form method="dialog"> を使わず type="button" にしており、押下してもこの
+// 収束構造やオーバーレイクリック判定（event.target === event.currentTarget）に
+// 干渉しない（D5）。
 export function CardDetailModal({
   challenge,
   agentName,
   onClose,
   runningRuns,
+  readOnly,
+  onApprove,
 }: CardDetailModalProps) {
   const [logState, setLogState] = useState<LogState>({ status: "loading" });
   const [rawRecordExpanded, setRawRecordExpanded] = useState(false);
@@ -410,6 +452,20 @@ export function CardDetailModal({
             )}
           </div>
         )}
+
+        {/* 承認導線（#171）: モーダル本文の末尾に置く。作業ログのタイムラインを
+         * 含めて本文が長くなりうるため、素直に末尾へ置くと承認のたびに最下部まで
+         * スクロールする必要が生じ「判断材料を見ながら承認する」が達成できない。
+         * CSS 側で position: sticky; bottom: 0 にして常に手元に留める（D3）。
+         * ApprovalControl 自体が承認対象外／readOnly／onApprove 未指定のとき
+         * null を返すため、そのときはこの位置に何も描画されない
+         * （空のフッターバーが残らない）。 */}
+        <ApprovalControl
+          challenge={challenge}
+          readOnly={readOnly}
+          onApprove={onApprove}
+          className="card-detail-modal-footer"
+        />
       </div>
     </dialog>
   );

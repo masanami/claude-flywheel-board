@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ApprovalKind, Challenge, Run } from "../board-types.ts";
+import {
+  ApprovalControl,
+  type ApproveSubmitResult,
+} from "./ApprovalControl.tsx";
 import { CardDetailModal } from "./CardDetailModal.tsx";
+
+// ApprovalControl.tsx が正本（#171 で TaskCard から抽出）。既存の import 元
+// （AgentColumn.tsx / Board.tsx / TaskCard.test.tsx 等）を張り替えず、この
+// 再 export で従来どおり "./TaskCard.tsx" から参照できるようにしている。
+export type { ApproveSubmitResult } from "./ApprovalControl.tsx";
 
 // キーボードでの並べ替え（#25）で Alt+ArrowUp/Down が押された向き。
 // AgentColumn 側で +1/-1 のスロット移動量に変換する。
@@ -36,26 +45,6 @@ type TaskCardProps = {
     challengeId: string,
     kind: ApprovalKind,
   ) => Promise<ApproveSubmitResult>;
-};
-
-// 承認 POST の結果型（AddAgentSubmitResult と同じ形）。エラー時はサーバ側の
-// 構造化エラーメッセージ（src/server/api.ts の `{ error: string }`）をそのまま載せる。
-export type ApproveSubmitResult = { ok: true } | { ok: false; error: string };
-
-// 承認ボタンを出せるステータスと、そのとき書き込む承認種別（FR-13 / FR-32）。
-// 正本は claude-flywheel 側 challenge-ledger-format.md §承認プロトコルの
-// 「ステータス前提」列で、server 側の APPROVAL_REQUIRED_STATUS と対になる。
-// `人間対応待ち` は needsHuman だが承認ではなく**回答**を待つ保留（§保留プロトコル）
-// のため、ここには含めない——チェックボックスを立てても意味がなく、人間は
-// 分類欄の `人間の回答` に書く必要がある。
-const APPROVABLE_STATUS: Partial<Record<Challenge["status"], ApprovalKind>> = {
-  計画承認待ち: "plan",
-  完了確認待ち: "completion",
-};
-
-const APPROVAL_BUTTON_LABEL: Record<ApprovalKind, string> = {
-  plan: "計画を承認",
-  completion: "完了を承認",
 };
 
 // D&D 並べ替え（#16）でドラッグ中の課題IDを伝搬するための dataTransfer キー。
@@ -94,8 +83,10 @@ function computeTooltipPosition(card: HTMLElement): TooltipPosition {
 }
 
 // カードの操作（#165 で FR-20 / NFR-01 の線引きを改訂）: ホバー/フォーカスで
-// summary をツールチップ表示し、クリック/Enter で読み取り専用の詳細モーダル
-// （CardDetailModal）を開く（#8）。
+// summary をツールチップ表示し、クリック/Enter で詳細モーダル（CardDetailModal）を
+// 開く（#8）。モーダルは台帳の編集・実行など board が書き込みを行う操作導線を
+// 承認だけを例外として持たない（次項・#171。再開コマンドのプリフィルは書き込み
+// ではなく該当タブへの挿入に留まるため対象外）。
 //
 // 承認ボタン（FR-20 改訂）: **board 上の操作はすべて人間の操作として扱う**ため、
 // 承認待ちカードには承認ボタンを置く。以前この位置には「新規のクリック可能な
@@ -109,6 +100,10 @@ function computeTooltipPosition(card: HTMLElement): TooltipPosition {
 // 誤操作対策: 承認は git コミットを伴い、押した瞬間に台帳へ反映される。カードは
 // draggable でクリック領域が広いため、承認ボタンは**2 段階**（押す → 確認 → 承認）に
 // する。1 クリック目では何も書き込まない。
+//
+// 承認 UI の実体（#171）: 判定・2段階フロー・エラー表示は ApprovalControl.tsx へ
+// 抽出済み。CardDetailModal も同じコンポーネント・同じ onApprove を共有しており、
+// board 上のどこから承認しても同一経路・同一 API（server 側は一切変更しない）。
 //
 // draggable（#16）: ドラッグ操作自体は「並べ替えの指示文生成 → prefill」の
 // 起点にすぎず、台帳を書き換えるものではない（優先度の並べ替えの直接書き込み化は
@@ -143,45 +138,6 @@ export function TaskCard({
   // 置くと z-index に関わらず overflow ボックスに切り取られるため。
   const [tooltipPosition, setTooltipPosition] =
     useState<TooltipPosition | null>(null);
-
-  // 承認ボタン（#165）の状態。"idle" → "confirming"（確認待ち）→ "submitting"。
-  // 誤操作対策の 2 段階（冒頭コメント参照）と、送信中の二重押下防止を兼ねる。
-  const [approvalPhase, setApprovalPhase] = useState<
-    "idle" | "confirming" | "submitting"
-  >("idle");
-  const [approvalError, setApprovalError] = useState<string | null>(null);
-
-  // 承認種別は台帳のステータスから決まる（server 側 APPROVAL_REQUIRED_STATUS と対）。
-  // readOnly（アーカイブ）と onApprove 未指定の呼び出し元では承認導線を出さない。
-  const approvalKind = APPROVABLE_STATUS[challenge.status];
-  // 既に `[x]` が付いているエントリではボタンを出さない（押しても server が 409 を
-  // 返すだけで、利用者には「なぜか押せるが失敗する」ボタンにしか見えないため）。
-  const alreadyApproved =
-    approvalKind !== undefined &&
-    (challenge.approvals?.[approvalKind]?.checked ?? false);
-  const canApprove =
-    !readOnly &&
-    onApprove !== undefined &&
-    approvalKind !== undefined &&
-    !alreadyApproved;
-
-  const submitApproval = async (kind: ApprovalKind) => {
-    if (!onApprove) {
-      return;
-    }
-    setApprovalPhase("submitting");
-    setApprovalError(null);
-    const result = await onApprove(challenge.id, kind);
-    if (result.ok) {
-      // 成功時は idle へ戻す。台帳の `[x]` は fs-watch → WS agent_update 経由で
-      // 反映され、次の描画で canApprove が false になりボタン自体が消える
-      // （board は自分の書き込み結果でキャッシュを直接更新しない＝NFR-04・正本はファイル）。
-      setApprovalPhase("idle");
-      return;
-    }
-    setApprovalPhase("idle");
-    setApprovalError(result.error);
-  };
 
   const updateTooltipPosition = useCallback(() => {
     if (cardRef.current) {
@@ -320,50 +276,12 @@ export function TaskCard({
             <div className="task-card-reorder-hint">Alt+↑/↓ で並べ替え</div>
           )}
         </button>
-        {canApprove && approvalKind !== undefined && (
-          <div className="task-card-approval">
-            {approvalPhase === "confirming" ? (
-              <>
-                <span className="task-card-approval-question">
-                  {APPROVAL_BUTTON_LABEL[approvalKind]}？
-                </span>
-                <button
-                  type="button"
-                  className="task-card-approval-confirm"
-                  onClick={() => void submitApproval(approvalKind)}
-                >
-                  承認する
-                </button>
-                <button
-                  type="button"
-                  className="task-card-approval-cancel"
-                  onClick={() => setApprovalPhase("idle")}
-                >
-                  やめる
-                </button>
-              </>
-            ) : (
-              <button
-                type="button"
-                className="task-card-approval-start"
-                disabled={approvalPhase === "submitting"}
-                onClick={() => {
-                  setApprovalError(null);
-                  setApprovalPhase("confirming");
-                }}
-              >
-                {approvalPhase === "submitting"
-                  ? "承認中…"
-                  : APPROVAL_BUTTON_LABEL[approvalKind]}
-              </button>
-            )}
-            {approvalError !== null && (
-              <p className="task-card-approval-error" role="alert">
-                {approvalError}
-              </p>
-            )}
-          </div>
-        )}
+        <ApprovalControl
+          challenge={challenge}
+          readOnly={readOnly}
+          onApprove={onApprove}
+          className="task-card-approval"
+        />
       </div>
       {tooltipVisible &&
         tooltipPosition &&
@@ -384,6 +302,8 @@ export function TaskCard({
           agentName={agentName}
           onClose={closeModal}
           runningRuns={runningRuns}
+          readOnly={readOnly}
+          onApprove={onApprove}
         />
       )}
     </>
