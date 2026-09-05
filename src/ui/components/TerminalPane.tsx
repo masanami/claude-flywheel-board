@@ -149,6 +149,18 @@ export function TerminalPane({
   // 呼ばれた場合に後勝ちで上書きせず、全件を届いた順番のまま流し込むため。
   // shell 側は prefill の対象にならないため、このキューはエージェント接続専用。
   const pendingPrefillsRef = useRef<Map<string, string[]>>(new Map());
+  // board からターミナルへ操作を受け渡す時点（タブクリック・prefill）では、
+  // (a) まだ接続が確立していない（＝connectionsRef に存在しない）、
+  // (b) 接続はあるが対象ペインがまだ可視でない（タブ切替の setActiveAgent が
+  // まだ再レンダーへ反映されておらず .terminal-pane-split が display:none の
+  // まま）、のいずれかでフォーカスが実際には効かないことがある（Issue #164）。
+  // 「接続確立・可視化のどちらも揃った時点でフォーカスすべき connectionKey」を
+  // 一時的に覚えておくための ref。pendingPrefillsRef と異なり単一値でよい
+  // （後勝ち。フォーカスは「直近の受け渡し点」にだけ効けば十分で、複数の
+  // 受け渡しが連続しても最後の1件だけが実際に表示されているタブになる）。
+  const pendingFocusRef = useRef<{ agent: string; kind: PaneKind } | null>(
+    null,
+  );
   // terminal-control 経由の prefill が、タブ一覧に無い agent 名を受け取った場合に
   // 弾くためのガード（サーバ側 resolveAgentEntry も未登録名を拒否するが、
   // クライアント側で無用な再接続ループを作らないよう二重に防御する）。
@@ -242,8 +254,76 @@ export function TerminalPane({
       }
     }
 
+    // ここでは pendingFocusRef を消化しない（Issue #164）。ref コールバックが
+    // 走るこの時点ではまだ「対象タブが可視か」（activeAgent の再レンダーが
+    // 反映済みか）を判定できないコミット中のタイミングであり、下の
+    // useEffect(flushPendingFocus)（依存配列なし＝毎レンダー後に実行）が
+    // 接続確立後・可視化後のいずれの順序で条件が揃っても確実に拾う。
+
     return connection;
   };
+
+  // 予約されたフォーカス要求（pendingFocusRef）を、(1) 接続が確立済みで
+  // (2) 対象ペインが現在可視（collapsed でなく、対象 agent が activeAgent と
+  // 一致）の両方が揃っている場合にのみ消化する（Issue #164）。
+  //
+  // 【重要】可視判定を DOM の実レイアウト（getBoundingClientRect・
+  // style.display の実測）ではなく React state（collapsed・activeAgent）から
+  // 行っているのは、setActiveAgent 等の state 更新は React の再レンダーが
+  // コミットされるまで DOM に反映されない一方、この関数自身は「state 更新
+  // 直後・再レンダー前」に呼ばれることもあるため（後述）。state を直接見れば
+  // 「これから可視になる」ことを DOM 更新を待たずに判定できる。
+  //
+  // 実ブラウザでは display:none の要素（の子孫である xterm.js の隠し
+  // textarea）へはフォーカスできない。可視判定を入れずに毎回同期
+  // focus() すると、タブ切替（setActiveAgent 直後、まだ再レンダーが
+  // コミットされておらず対象ペインの .terminal-pane-split が旧レンダーの
+  // display:none のままの瞬間）に focus() を呼んでしまい、実ブラウザでは
+  // 効果が無いまま Issue #164 の症状が残る（jsdom はフォーカス時に
+  // 要素の可視性を検証しないためこの不具合を検出できない）。
+  const flushPendingFocus = useCallback(() => {
+    const pending = pendingFocusRef.current;
+    if (pending === null) {
+      return;
+    }
+    const connection = connectionsRef.current.get(
+      connectionKey(pending.agent, pending.kind),
+    );
+    if (!connection) {
+      // 接続がまだ無い。ensureConnection 完了後の次の再レンダーで
+      // このエフェクトが再度走り、その時点で拾われる。
+      return;
+    }
+    if (collapsed || pending.agent !== activeAgent) {
+      // まだ可視でない。activeAgent／collapsed が変わって条件が揃うと
+      // 再レンダーが起き、このエフェクトが再度走って拾われる。
+      return;
+    }
+    pendingFocusRef.current = null;
+    connection.xterm.focus();
+  }, [collapsed, activeAgent]);
+
+  // 毎レンダー後に予約消化を試みる（依存配列なし＝全レンダーで実行）。
+  // requestPaneFocus 自身も呼び出し直後に同期的に一度消化を試みるため
+  // （既に可視な対象への mousedown・既にアクティブなタブへの再クリック等、
+  // 再レンダーを伴わない経路を同期的に救う）、このエフェクトは主に
+  // 「呼び出し時点ではまだ条件が揃っていなかった」ケース（未接続タブの
+  // 初回オープン、非アクティブタブへの切替）を再レンダー後に拾うためのもの。
+  useEffect(() => {
+    flushPendingFocus();
+  });
+
+  // board からターミナルへの受け渡し点（タブクリック・prefill・パネルへの
+  // mousedown）から呼ぶ、フォーカス要求の唯一の入口（Issue #164）。
+  // useCallback で安定した参照にしているのは、下の terminal-control 登録
+  // useEffect の依存配列に含める必要があるため。
+  const requestPaneFocus = useCallback(
+    (agent: string, kind: PaneKind) => {
+      pendingFocusRef.current = { agent, kind };
+      flushPendingFocus();
+    },
+    [flushPendingFocus],
+  );
 
   const getContainerRefCallback = (agent: string, kind: PaneKind) => {
     const key = connectionKey(agent, kind);
@@ -305,6 +385,12 @@ export function TerminalPane({
 
   // 初回、agents 取得後まだ activeAgent が未設定なら先頭のエージェントを
   // 初回アクティブにする（＝最初のタブのみ接続。他は開かれるまで未接続）。
+  //
+  // 【Issue #164・意図的な非スコープ】ここでは requestPaneFocus を呼ばない（＝初回
+  // マウント／初回接続時に自動フォーカスしない）。board 本体（カード一覧）が
+  // 主操作面であり、ページ読み込み直後にターミナルへフォーカスを奪うのは
+  // 有害（例えばキーボードでカード一覧を操作しようとした最初のキー入力が
+  // ターミナルへ吸われてしまう）。
   useEffect(() => {
     if (activeAgent === undefined && agents.length > 0) {
       const first = agents[0];
@@ -371,6 +457,9 @@ export function TerminalPane({
         pending.push(command);
         pendingPrefillsRef.current.set(agent, pending);
       }
+      // prefill の宛先（agent ペイン）と同じ接続へフォーカスする（Issue #164）。
+      // タブクリックと同様、board からターミナルへ操作を受け渡す起点のため。
+      requestPaneFocus(agent, "agent");
     };
 
     const controller: TerminalController = {
@@ -435,7 +524,7 @@ export function TerminalPane({
     return () => {
       unregisterTerminalController(controller);
     };
-  }, [openAgent]);
+  }, [openAgent, requestPaneFocus]);
 
   // 表示中（非 collapsed）の xterm（agent・shell 両ペイン）を re-fit して resize を
   // 伝搬する共通処理。パネルの高さ変更・分割比率変更・折りたたみ解除・タブ切替・
@@ -505,7 +594,37 @@ export function TerminalPane({
   const handleTabClick = (agent: string) => {
     setActiveAgent(agent);
     openAgent(agent);
+    // タブクリックは board からターミナルへ操作を受け渡す代表的な起点。
+    // ここでフォーカスしないと、xterm の隠し textarea にフォーカスが乗らず
+    // ESC が pty へ届かないまま board 側のフォーカス移動に化ける（Issue #164）。
+    // 別タブへの切替の場合、この時点ではまだ activeAgent の更新が再レンダーへ
+    // 反映されておらず対象ペインは display:none のまま（＝現時点で focus()
+    // しても実ブラウザでは効かない）ため、requestPaneFocus が予約し
+    // flushPendingFocus（可視化後の再レンダー時）へ委ねる。
+    requestPaneFocus(agent, "agent");
   };
+
+  // パネルコンテナ（terminal-pane-panel-agent／-shell）への mousedown。対象は
+  // 「FitAddon の rows 切り捨てで残る、`.xterm` 要素が占めない余白」への
+  // クリック（Issue #164）。
+  //
+  // event.target === event.currentTarget（＝コンテナ自身が着弾点。`.xterm` の
+  // 子孫ではない）の場合のみ preventDefault する。実ブラウザは mousedown の
+  // 既定動作として「フォーカス可能でない要素上のクリックでは現在のフォーカスを
+  // 解除する」ため、これを止めないと直後の focus() 呼び出しがブラウザの既定
+  // 動作に打ち消される（design-reviewer 指摘）。`.xterm` 上のクリックでは
+  // xterm 自身の mousedown リスナが先に（同一イベントに対して）preventDefault
+  // 済みのため、この分岐で追加の preventDefault を呼ぶ必要は無い（呼んでも
+  // 同一イベントへの重複呼び出しで無害だが、対象を絞ることで「本当に必要な
+  // 余白クリックの場合にのみ止める」意図をコードで明示する）。
+  const handlePanelMouseDown =
+    (agent: string, kind: PaneKind) =>
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      if (event.target === event.currentTarget) {
+        event.preventDefault();
+      }
+      requestPaneFocus(agent, kind);
+    };
 
   const handleResizeMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
     const startY = event.clientY;
@@ -626,7 +745,24 @@ export function TerminalPane({
           type="button"
           className="terminal-collapse-button"
           aria-label={collapsed ? "展開" : "折りたたむ"}
-          onClick={() => setCollapsed((prev) => !prev)}
+          // 【Issue #164・意図的な非スコープ】展開時に requestPaneFocus を呼ばない。
+          // このボタン自体はキーボード（Enter/Space）でも操作でき、展開直後に
+          // ターミナルへフォーカスを奪うとキーボード操作でのトグル後に
+          // フォーカスが行方不明になる a11y 退行になるため採らない。展開後に
+          // ターミナル内をクリックすれば各パネルの onMouseDown で救済される。
+          onClick={() => {
+            // 未消化のフォーカス予約を破棄する（Issue #164 セルフレビュー指摘）。
+            // 折りたたみ中でもタブボタンはヘッダに残るため、折りたたみ中に
+            // タブをクリックすると予約だけが残る。破棄しないと、その後
+            // 「展開」を押した再レンダーで flushPendingFocus が可視条件を
+            // 満たして消化してしまい、上で「採らない」と決めた a11y 退行
+            // （展開直後にターミナルへフォーカスが飛ぶ）が裏口から発生する。
+            // 人間が明示的にトグルした時点で、それ以前の受け渡し要求は
+            // 失効させる。prefill 経由の展開（deliverPrefill の
+            // setCollapsed(false)）はこのボタンを通らないため影響しない。
+            pendingFocusRef.current = null;
+            setCollapsed((prev) => !prev);
+          }}
         >
           {collapsed ? "▸" : "▾"}
         </button>
@@ -655,6 +791,12 @@ export function TerminalPane({
               data-testid={`terminal-panel-${agent}-agent`}
               style={{ width: `${agentPaneWidth}px` }}
               ref={getContainerRefCallback(agent, "agent")}
+              // FitAddon は rows を切り捨てるため、コンテナ下端に xterm の
+              // `.xterm` 要素が占めない余白（最大1セル分）が残ることがある。
+              // xterm 自身はその余白の mousedown を検知できずフォーカスが
+              // 移らないため、コンテナ側でも明示的にフォーカスする
+              // （handlePanelMouseDown 参照。Issue #164）。
+              onMouseDown={handlePanelMouseDown(agent, "agent")}
             />
             <div
               className="terminal-pane-splitter"
@@ -678,6 +820,11 @@ export function TerminalPane({
               className="terminal-pane-panel terminal-pane-panel-shell"
               data-testid={`terminal-panel-${agent}-shell`}
               ref={getContainerRefCallback(agent, "shell")}
+              // agent 側パネルと同じ理由（上記コメント参照）。shell 側は
+              // prefill の対象外だが、フォーカス制御は agent/shell 両ペインで
+              // 対称に効かせる（#57: 各タブは常時2分割で表示され、どちらの
+              // ペインで操作するかはユーザー次第のため）。
+              onMouseDown={handlePanelMouseDown(agent, "shell")}
             />
           </div>
         ))}
