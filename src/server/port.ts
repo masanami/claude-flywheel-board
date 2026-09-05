@@ -18,18 +18,23 @@ export const BOARD_PORT_ENV_KEY = "FLYWHEEL_BOARD_PORT";
 export const DEFAULT_PORT = 4317;
 
 /**
- * 待受ポートを解決する。未設定（または空文字）なら DEFAULT_PORT。
+ * 生の文字列から待受ポートを解決する。未設定（`undefined`）・空文字・空白のみなら
+ * DEFAULT_PORT。
+ *
+ * この関数は **process.env を読まない純関数**である。環境変数を読む経路は
+ * {@link resolveBoardPortFromEnv} に分離してある。かつては `raw` を
+ * `= process.env[BOARD_PORT_ENV_KEY]` の既定引数にしていたが、JS の既定引数は
+ * **明示的に渡した `undefined` でも発火する**ため、「値が無いこと」を表現しようと
+ * `resolveBoardPort(undefined)` と書いた呼び出しが黙って環境変数へ落ちていた
+ * （Issue #175: `FLYWHEEL_BOARD_PORT` を設定した環境で port.test.ts が落ちた原因）。
+ * 引数を必須にして、この取り違えが型で起きないようにしている。
  *
  * 不正な値は既定へフォールバックせず Error を throw する。フォールバックすると
  * 「別ポートで起動したつもりが 4317 に戻り、先に動いていた別アカウントの board へ
  * ブラウザが繋がる」という**サイレントな取り違え**を招くため（fleet.tsv の不正行を
  * 起動時の致命的エラーとして扱う manifest.ts と同じ方針）。
- *
- * @param raw テスト用の差し替えシーム。本番経路では省略し環境変数を読む。
  */
-export function resolveBoardPort(
-  raw: string | undefined = process.env[BOARD_PORT_ENV_KEY],
-): number {
+export function resolveBoardPort(raw: string | undefined): number {
   if (raw === undefined || raw.trim() === "") {
     return DEFAULT_PORT;
   }
@@ -49,4 +54,16 @@ export function resolveBoardPort(
   }
 
   return port;
+}
+
+/**
+ * 環境変数から待受ポートを解決する。本番経路（サーバ起動・vite dev proxy）はこちらを使う。
+ *
+ * @param env 差し替えシーム。テストは `{}`（＝未設定）や `{ [BOARD_PORT_ENV_KEY]: "4318" }`
+ *   を明示的に渡すことで、実行環境の環境変数に左右されずに検証できる。
+ */
+export function resolveBoardPortFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  return resolveBoardPort(env[BOARD_PORT_ENV_KEY]);
 }

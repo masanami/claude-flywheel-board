@@ -11,7 +11,7 @@ import type { BoardCache } from "./cache.ts";
 import { createMemoryBoardCache } from "./cache.ts";
 import { NO_FLEET_ENTRIES, loadFleetManifest } from "./manifest.ts";
 import type { GetFleetEntries } from "./manifest.ts";
-import { DEFAULT_PORT, resolveBoardPort } from "./port.ts";
+import { DEFAULT_PORT, resolveBoardPortFromEnv } from "./port.ts";
 import {
   TERMINAL_WS_PATH,
   createTerminalWebSocketServer,
@@ -149,7 +149,7 @@ if (isMainModule) {
   // 不正な値はここで throw し、既定ポートへ黙って戻らない。
   const server = serve(
     getServeOptions(
-      resolveBoardPort(),
+      resolveBoardPortFromEnv(),
       cache,
       getFleetEntries,
       fleetAgentAdditionDeps,

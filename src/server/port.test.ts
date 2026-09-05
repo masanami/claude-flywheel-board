@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { BOARD_PORT_ENV_KEY, DEFAULT_PORT, resolveBoardPort } from "./port.ts";
+import { describe, expect, it, vi } from "vitest";
+import {
+  BOARD_PORT_ENV_KEY,
+  DEFAULT_PORT,
+  resolveBoardPort,
+  resolveBoardPortFromEnv,
+} from "./port.ts";
 
 describe("resolveBoardPort", () => {
   it("未設定なら既定ポート（4317）を返す", () => {
@@ -19,29 +24,37 @@ describe("resolveBoardPort", () => {
     expect(resolveBoardPort("65535")).toBe(65535);
   });
 
-  it("環境変数が未設定なら既定ポートを返す（既定引数の経路）", () => {
-    const saved = process.env[BOARD_PORT_ENV_KEY];
-    delete process.env[BOARD_PORT_ENV_KEY];
-    try {
-      expect(resolveBoardPort()).toBe(DEFAULT_PORT);
-    } finally {
-      if (saved !== undefined) {
-        process.env[BOARD_PORT_ENV_KEY] = saved;
-      }
-    }
+  // Issue #175: ここは以前 process.env を直接書き換えて検証していたため、実行環境に
+  // FLYWHEEL_BOARD_PORT が設定されていると別のテストが巻き添えで落ちた。env を引数で
+  // 注入し、実行環境の環境変数から完全に切り離す。
+  it("env に未設定なら既定ポートを返す", () => {
+    expect(resolveBoardPortFromEnv({})).toBe(DEFAULT_PORT);
   });
 
-  it("環境変数から読み取る（既定引数の経路）", () => {
-    const saved = process.env[BOARD_PORT_ENV_KEY];
-    process.env[BOARD_PORT_ENV_KEY] = "4319";
+  it("env から読み取る", () => {
+    expect(resolveBoardPortFromEnv({ [BOARD_PORT_ENV_KEY]: "4319" })).toBe(
+      4319,
+    );
+  });
+
+  it("env の不正値は throw する（既定へ黙って戻さない）", () => {
+    expect(() =>
+      resolveBoardPortFromEnv({ [BOARD_PORT_ENV_KEY]: "abc" }),
+    ).toThrow(BOARD_PORT_ENV_KEY);
+  });
+
+  // 回帰の本体（Issue #175）: 実行環境に FLYWHEEL_BOARD_PORT が設定されていても、
+  // 引数を渡した呼び出しは環境変数へ落ちてはならない。JS の既定引数は「明示的に渡した
+  // undefined」でも発火するため、以前は resolveBoardPort(undefined) が env を読んでいた。
+  it("実行環境の環境変数に左右されない（設定の有無で結果が変わらない）", () => {
+    vi.stubEnv(BOARD_PORT_ENV_KEY, "4318");
     try {
-      expect(resolveBoardPort()).toBe(4319);
+      expect(resolveBoardPort(undefined)).toBe(DEFAULT_PORT);
+      expect(resolveBoardPort("")).toBe(DEFAULT_PORT);
+      expect(resolveBoardPort("8080")).toBe(8080);
+      expect(resolveBoardPortFromEnv({})).toBe(DEFAULT_PORT);
     } finally {
-      if (saved === undefined) {
-        delete process.env[BOARD_PORT_ENV_KEY];
-      } else {
-        process.env[BOARD_PORT_ENV_KEY] = saved;
-      }
+      vi.unstubAllEnvs();
     }
   });
 
