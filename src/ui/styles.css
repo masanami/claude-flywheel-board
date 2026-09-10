@@ -49,6 +49,12 @@
   --terminal-tab-active-fg: #e7e7ea;
   --terminal-resize-handle-bg: #303138;
 
+  /* エージェントカラムのトラック最小幅（#178）。`.board-columns` の
+     `grid-auto-columns` の下限と `min-width` が同じ値に依存するため、実値を
+     1 箇所へ括り出して連動させる（片方だけ更新されて取り残されるのを防ぐ）。
+     テーマではなくレイアウトの定数なので dark 側の上書きは持たない。 */
+  --board-column-min: 320px;
+
   --status-未分類: #9aa0a6;
   --status-分類済: #4a90d9;
   --status-計画承認待ち: #e8b93f;
@@ -214,32 +220,45 @@ body {
    * min-width と同型の問題）。この min-width は「board-columns 自身が
    * board-main-row の flex レイアウトで潰れない」ための下限であり、
    * エージェントカラム1個分のサイズとは独立の防御（Grid 化後も必要）。
-   * padding: 1rem（左右計2rem）を差し引いても最低1カラム分（280px）の
-   * コンテンツ幅を確保できるよう、その分を上乗せする（セルフレビュー
-   * 指摘: 単純な 280px だと極端に狭い環境でコンテンツ幅が248pxしか
-   * 残らず、1カラムすら全幅表示できず二重の横スクロールが生じていた）。
+   * padding: 1rem（左右計2rem）を差し引いても最低1カラム分
+   * （--board-column-min）のコンテンツ幅を確保できるよう、その分を上乗せ
+   * する（セルフレビュー指摘: 下限値をそのまま min-width にすると極端に
+   * 狭い環境でコンテンツ幅が下限に満たず、1カラムすら全幅表示できずに
+   * 二重の横スクロールが生じていた）。
+   * #178 で下限を 280px → 320px へ引き上げたことによる再評価: この
+   * min-width は 312px → 352px になり、PreviewPanel を最大幅 800px で開いた
+   * ときに横スクロールが始まるウィンドウ幅は 1112px → 1152px へ上がる。
+   * 増えた分のはみ出しは従来どおり .board-main-row の overflow-x: auto に
+   * 閉じ込められ、document へは漏れない（#57 / #89 の回帰なし）。閾値が
+   * 動くだけで、「PreviewPanel を最大幅で開いても board-columns が
+   * 1カラム未満へ潰れない」保証は新しい下限でも維持される。
    */
-  min-width: calc(280px + 2rem);
-  /* #89: 以前は display:flex + agent-column 側の flex:1 1 280px で幅を
-   * 配分していたが、.agent-column 自身が overflow: hidden によりスクロール
-   * コンテナとなっていたため、flexbox の automatic minimum size 仕様
-   * （scroll container なアイテムは既定で 0 になる）により、flex-shrink
-   * の比率に応じて 280px を下回るまで比例縮小してしまっていた
+  min-width: calc(var(--board-column-min) + 2rem);
+  /* #89: 以前は display:flex + agent-column 側の flex:1 1 280px（当時の
+   * 下限値）で幅を配分していたが、.agent-column 自身が overflow: hidden に
+   * よりスクロールコンテナとなっていたため、flexbox の automatic minimum
+   * size 仕様（scroll container なアイテムは既定で 0 になる）により、
+   * flex-shrink の比率に応じて下限を下回るまで比例縮小してしまっていた
    * （PreviewPanel を広げるとカラム内カードの折り返しが変わる不具合）。
-   * CSS Grid + grid-auto-columns: minmax(280px, 420px) は明示的な px 値の
-   * トラック最小サイズを厳密に守り、比例縮小が起きない。割り当て幅が
-   * 足りない場合はこのコンテナ内でオーバーフローし、下の overflow-x: auto
-   * による横スクロールに委ねる（この行の外・document へは漏れない）。
-   * トラック自体は 280px〜420px の範囲でコンテナ幅に応じて伸縮するため
-   * （#41由来の意図: 少数時は420pxまで広がり分け合い、多数時は280pxで
-   * 頭打ちして横スクロールに委ねる）、パネル幅の変化に応じてカラム幅は
-   * 280〜420px の間で変動し続ける。「280px を下回らない」ことが本修正の
-   * 保証範囲であり、パネル操作でカラム幅が一切変化しないことまでは
-   * 保証しない（#41 の意図と両立しないトレードオフ）。
+   * CSS Grid + grid-auto-columns: minmax(var(--board-column-min), 420px) は
+   * 明示的な長さのトラック最小サイズを厳密に守り、比例縮小が起きない。
+   * 割り当て幅が足りない場合はこのコンテナ内でオーバーフローし、下の
+   * overflow-x: auto による横スクロールに委ねる（この行の外・document へは
+   * 漏れない）。トラック自体は下限〜420px の範囲でコンテナ幅に応じて伸縮
+   * する（#41由来の意図: 少数時は420pxまで広がり分け合い、多数時は下限で
+   * 頭打ちして横スクロールに委ねる）ため、パネル幅の変化に応じてカラム幅は
+   * その範囲で変動し続ける。「下限を下回らない」ことが保証範囲であり、
+   * パネル操作でカラム幅が一切変化しないことまでは保証しない（#41 の意図と
+   * 両立しないトレードオフ）。
+   * #178: 下限を 280px → 320px（--board-column-min）へ引き上げ、多数時に
+   * 下限へ張り付いたカラムのカード本文の可読幅を上げた。1920px 幅で並ぶ
+   * カラム数は 6 → 5 に留まる（360px だと 4 まで落ち、一覧性の損失が
+   * 大きい）。上限 420px は #41 の「少数時は広がって分け合う」意図を残す
+   * ため据え置き、上下限の幅が狭まることは受け入れる。
    */
   display: grid;
   grid-auto-flow: column;
-  grid-auto-columns: minmax(280px, 420px);
+  grid-auto-columns: minmax(var(--board-column-min), 420px);
   gap: 1rem;
   padding: 1rem;
   overflow-x: auto;
@@ -248,8 +267,8 @@ body {
 }
 
 .agent-column {
-  /* 幅は親 .board-columns の grid-auto-columns（280px〜420px。#41 由来の
-   * 上下限）に一本化する（#89）。以前ここにあった flex: 1 1 280px は
+  /* 幅は親 .board-columns の grid-auto-columns（--board-column-min〜420px。
+   * #41 由来の上下限）に一本化する（#89）。以前ここにあった flex: 1 1 280px は
    * Grid item には効果を持たないため削除。max-width: 420px は Grid item
    * にも適用されるが、親の grid-auto-columns の上限（420px）と冗長な
    * ため削除しても挙動は変わらない。 */
@@ -268,7 +287,7 @@ body {
   justify-content: space-between;
   /* セルフレビュー指摘対応（2周目）: エージェント名・サイクル状態・優先度
    * 方針バッジ・「＋ 差し込み」ボタンが同一行に並ぶため、狭いカラム幅
-   * （280px〜）では折り返しを許容する（.filter-bar の既存対策と同じ方針）。
+   * （320px〜）では折り返しを許容する（.filter-bar の既存対策と同じ方針）。
    * wrap しないと、縮小可能な要素（バッジ）だけが際限なく潰れて読めなく
    * なるか、他要素がクリップされるかの二択になってしまう。 */
   flex-wrap: wrap;
@@ -316,7 +335,7 @@ body {
 .agent-column-priority-policy-badge {
   /* セルフレビュー指摘対応: 長いモード名（例: domain-bootstrap:<domain>）で
      ヘッダが溢れ、右端の「＋ 差し込み」ボタンが押せなくなるのを防ぐため、
-     カラム幅（280px〜）に収まるよう縮小・省略を許可する。狭幅では省略表示
+     カラム幅（320px〜）に収まるよう縮小・省略を許可する。狭幅では省略表示
      になるが、フルテキストは title 属性（クリック時のツールチップ）で
      読める。
      セルフレビュー指摘対応（2周目）: min-width: 0 のみだと、他の兄弟要素
