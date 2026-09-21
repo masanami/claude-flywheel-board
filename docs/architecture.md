@@ -119,6 +119,7 @@ infra	/Users/masami/agents/infra-agent
 | 課題台帳 | `challenge-ledger.md` | `challenge-ledger-format.md`（仕様化済み） | タスクカード・承認待ち（FR-03/04） |
 | 実行イベント | `.flywheel/runs.jsonl` | **仕様化済み: `templates/runtime/README.md`**（claude-flywheel PR #45） | 実行中・更新なし検知（FR-05）、resume 連携（FR-12）、差し込みの可視化（FR-13） |
 | サイクル履歴 | `journal/index.jsonl` | `templates/journal/README.md`（仕様化済み） | カードのホバー要約・作業ログタイムライン（FR-08）、サイクル状態の補完 |
+| 課題の一枚絵（fig） | `figs/<課題ID>.mmd` | **なし（board 側の規約。claude-flywheel の仕様ではない）** | カード詳細の図表示（FR-14・Issue #180）。台帳フォーマットには手を入れず、同じワークスペースに置かれる**任意の追加ファイル**として読む。無くても台帳の解釈は変わらないため NFR-05 に抵触しない。規約は [features/challenge-fig.md](features/challenge-fig.md) |
 | 優先度方針 | `priority-policy.md` | **仕様化済み: claude-flywheel `masanami/claude-flywheel#75` / PR #76 `templates/priority-policy.md`**（2026-08-09 マージ済み。フォーマットが変わった場合は board 側パーサ `src/server/parsers/priority-policy.ts` の追従が必要） | カラムヘッダのアクティブモードバッジ（Issue #135）。§4.2 の working tree 限定の注意点を参照 |
 
 ### 4.1 runs.jsonl（正本参照）

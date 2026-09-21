@@ -21,6 +21,7 @@ import {
   ApprovalControl,
   type ApproveSubmitResult,
 } from "./ApprovalControl.tsx";
+import { ChallengeFig } from "./ChallengeFig.tsx";
 
 type CardDetailModalProps = {
   challenge: Challenge;
@@ -344,6 +345,13 @@ export function CardDetailModal({
             <dd data-testid="ledger-related-prs">
               <ChallengeRefs refs={challenge.relatedPrs} kind="pull" />
             </dd>
+            {/* 課題の一枚絵（fig。Issue #180 / FR-14）。表示位置は**説明の直上**
+             * ——承認対象（タスク案・完了条件・関連リポジトリ）の並びは #151 の
+             * 決定どおり先頭に保ったまま、最も長い散文である説明を読み始める
+             * 直前に全体像を出す。図が無い課題・描画に失敗した課題では
+             * ChallengeFig が null を返し、この dl から dt/dd ごと消える
+             * （従来どおり文章のみの表示になり、レイアウトは変わらない）。 */}
+            <ChallengeFig agentName={agentName} challengeId={challenge.id} />
             <dt>説明</dt>
             <dd
               className="card-detail-multiline card-detail-description"

@@ -2274,3 +2274,82 @@ describe("POST /api/challenges/:agent/:id/approve（Issue #165・FR-20）", () =
     expect(response.status).toBe(403);
   });
 });
+
+describe("GET /api/fig（Issue #180・FR-14）", () => {
+  let tmpDir: string;
+  let agentPath: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "api-fig-test-"));
+    agentPath = path.join(tmpDir, "agent-a");
+    fs.mkdirSync(path.join(agentPath, "figs"), { recursive: true });
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function buildApp(): Hono {
+    const app = new Hono();
+    registerApiRoutes(app, createMemoryBoardCache(), () => [
+      { name: "agent-a", path: agentPath },
+    ]);
+    return app;
+  }
+
+  // app.request の戻り値は `Response | Promise<Response>` のため、同ファイルの
+  // post ヘルパ（approve ブロック）と同じく async + await で Promise に揃える。
+  async function get(url: string): Promise<Response> {
+    return await buildApp().request(url, { headers: { host: "localhost" } });
+  }
+
+  it("figs/<課題ID>.mmd の mermaid ソースを { source } で返す", async () => {
+    fs.writeFileSync(
+      path.join(agentPath, "figs", "C-010.mmd"),
+      "flowchart LR\n  A --> B\n",
+    );
+
+    const response = await get("/api/fig?agent=agent-a&challenge=C-010");
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      source: "flowchart LR\n  A --> B\n",
+    });
+  });
+
+  it("図が無い課題は 404 を返す（不在は正常系・UI 側は図なしとして畳む）", async () => {
+    const response = await get("/api/fig?agent=agent-a&challenge=C-999");
+
+    expect(response.status).toBe(404);
+  });
+
+  it("未知のエージェント名も同じ 404 を返す", async () => {
+    const response = await get("/api/fig?agent=unknown&challenge=C-010");
+
+    expect(response.status).toBe(404);
+  });
+
+  it("課題 ID 形式から外れる値（パス脱出を含む）は 404 を返す", async () => {
+    fs.writeFileSync(path.join(tmpDir, "secret.mmd"), "secret");
+
+    const response = await get(
+      `/api/fig?agent=agent-a&challenge=${encodeURIComponent("../../secret")}`,
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it("クエリパラメータが欠けている場合は 400 を返す", async () => {
+    expect((await get("/api/fig?agent=agent-a")).status).toBe(400);
+    expect((await get("/api/fig?challenge=C-010")).status).toBe(400);
+  });
+
+  it("不正な Host ヘッダは 403 を返す（既存の Host/Origin 検証を継承）", async () => {
+    const response = await buildApp().request(
+      "/api/fig?agent=agent-a&challenge=C-010",
+      { headers: { host: "evil.example.com" } },
+    );
+
+    expect(response.status).toBe(403);
+  });
+});

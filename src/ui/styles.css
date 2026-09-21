@@ -830,6 +830,14 @@ body {
   overflow-y: auto;
 }
 
+/* 課題の一枚絵（fig。#180・FR-14）: dt/dd のラッパ div（dl の子として妥当）は
+ * display: contents にして、中の dt/dd を他のフィールドと同じ親グリッドの
+ * 2 列へ並べる。図が無い課題ではコンポーネントごと描画されないため、この
+ * 行自体が現れず、従来どおりのレイアウトになる。 */
+.card-detail-fig {
+  display: contents;
+}
+
 /* 参照フィールド（関連リポジトリ・関連Issue・関連PR。#155）: 1行に複数の
  * 参照が並ぶため横並び＋折り返し。マーカーは出さない（値そのものが短い参照）。 */
 .card-detail-ref-list {
@@ -1295,7 +1303,7 @@ body {
 }
 
 .preview-panel-markdown-error,
-.preview-panel-mermaid-error {
+.mermaid-diagram-error {
   font-size: 0.8rem;
   color: var(--board-needs-human-border);
 }
@@ -1344,16 +1352,21 @@ body {
   color: var(--board-muted-fg);
 }
 
-.preview-panel-mermaid-wrapper {
+/* mermaid 図（マークダウンプレビューのコードブロックとカード詳細の一枚絵で共用。
+ * コンポーネントは MermaidDiagram.tsx）。 */
+.mermaid-diagram-wrapper {
   margin: 0.5rem 0;
 }
 
-.preview-panel-mermaid svg {
+.mermaid-diagram svg {
   max-width: 100%;
   /* mermaid の SVG は width/height 属性を持つため、max-width で横に縮んだ
    * ときに高さを追従させないと図が縦に引き伸ばされる。 */
   height: auto;
 }
+
+/* mermaid-diagram-error は .preview-panel-markdown-error と同じ規則（上方）で
+ * 色・サイズを与えている。 */
 
 /* 画像プレビュー（#143 / 設計 file-tree-non-md-support.md §3 Phase B）。
  * パネル幅は可変のため、原寸で溢れさせず幅に合わせて縮める（縦横比は維持）。
