@@ -2297,8 +2297,10 @@ describe("GET /api/fig（Issue #180・FR-14）", () => {
     return app;
   }
 
-  function get(url: string): Promise<Response> {
-    return buildApp().request(url, { headers: { host: "localhost" } });
+  // app.request の戻り値は `Response | Promise<Response>` のため、同ファイルの
+  // post ヘルパ（approve ブロック）と同じく async + await で Promise に揃える。
+  async function get(url: string): Promise<Response> {
+    return await buildApp().request(url, { headers: { host: "localhost" } });
   }
 
   it("figs/<課題ID>.mmd の mermaid ソースを { source } で返す", async () => {
