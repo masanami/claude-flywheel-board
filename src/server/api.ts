@@ -7,6 +7,7 @@ import type { ServerType } from "@hono/node-server";
 import type { Hono } from "hono";
 import { WebSocket, WebSocketServer } from "ws";
 import type { AgentBoard, BoardCache } from "./cache.ts";
+import { readChallengeFig } from "./figs.ts";
 import { addFleetEntry } from "./fleet-agent-addition.ts";
 import { approveChallenge } from "./ledger-approval.ts";
 import type { FleetEntry, GetFleetEntries } from "./manifest.ts";
@@ -273,6 +274,40 @@ export function registerApiRoutes(
       return c.json({ error: result.error }, result.status);
     }
     return c.json({ commit: result.commit, challenge: result.challenge });
+  });
+
+  // 課題の一枚絵（fig。Issue #180 / FR-14）。`<workspace>/figs/<課題ID>.mmd` の
+  // mermaid ソースを**読み取るだけ**で返す（NFR-01: この経路に書き込みは無い）。
+  //
+  // 図が無いのは正常系であり、不在・ID 形式違反・エージェント名不明・サイズ超過を
+  // すべて同一の 404 に潰す（readChallengeFig の ok:false をそのまま変換する。
+  // 呼び出し側の UI は 404 を「図が無い」として何も描画しない＝プレースホルダも
+  // エラーも出さない）。
+  //
+  // 取得は板全体のスナップショット（GET /api/board）ではなくモーダルを開いた
+  // タイミングのオンデマンドにする（GET /api/log と同じ方式）。fig は
+  // カード詳細でしか使わず、fleet 全課題ぶんを常時キャッシュ・watch する必要が
+  // ないため（YAGNI・NFR-04）。
+  app.get("/api/fig", (c) => {
+    const agentName = c.req.query("agent");
+    const challengeId = c.req.query("challenge");
+    if (!agentName || !challengeId) {
+      return c.text(
+        "Bad Request: agent, challenge クエリパラメータが必要です",
+        400,
+      );
+    }
+
+    const entry = getFleetEntries().find((e) => e.name === agentName);
+    if (entry === undefined) {
+      return c.json({ error: "図が見つかりません" }, 404);
+    }
+
+    const result = readChallengeFig(entry.path, challengeId);
+    if (!result.ok) {
+      return c.json({ error: "図が見つかりません" }, 404);
+    }
+    return c.json({ source: result.source });
   });
 
   app.get("/api/md/tree", (c) => c.json(listMdTree(getFleetEntries())));

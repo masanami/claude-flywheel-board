@@ -129,7 +129,12 @@ const REPO_REF_PATTERN = /^([\w.-]+)\/([\w.-]+)$/;
 const ISSUE_REF_PATTERN = /^(?:([\w.-]+)\/)?([\w.-]+)#(\d+)$/;
 // 課題ID: "C-<数字>" を基本形とし、"C-002-4" のような枝番（ハイフン区切りの追加数字）も
 // 許可する（claude-flywheel 側 journal サンプルに階層課題IDの実例が存在するため）。
-const CHALLENGE_ID_PATTERN = /^C-\d+(?:-\d+)*$/;
+//
+// 課題 ID をファイル名の一部として組み立てる経路（figs/<課題ID>.mmd の読み取り。
+// src/server/figs.ts）からも参照するため export する。ID の形の判定基準を
+// 複製すると、台帳が受け付ける ID と board が組み立てるパスの前提が静かに
+// ドリフトしうるため、正本はこの 1 箇所に置く。
+export const CHALLENGE_ID_PATTERN = /^C-\d+(?:-\d+)*$/;
 
 // 完了条件フィールドのラベル前方一致に使う接頭辞。
 // FR-B4: テンプレート/実運用台帳で括弧内の注記が揺れる（"完了条件（任意）" /

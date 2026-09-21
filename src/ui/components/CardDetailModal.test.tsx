@@ -16,6 +16,19 @@ vi.mock("../terminal-control.ts", () => ({
   prefill: vi.fn(),
 }));
 
+// 課題の一枚絵（fig。Issue #180）が描画する mermaid は、本ファイルの他の
+// テストのように fetch を未解決の Promise で止めている間は呼ばれない。
+// 描画位置のテスト（末尾の describe）でだけ使うため、PreviewPanel.test.tsx と
+// 同じ方針で mermaid 自体をモックする。
+vi.mock("mermaid", () => ({
+  default: {
+    initialize: vi.fn(),
+    render: vi.fn().mockResolvedValue({
+      svg: '<svg data-testid="mock-fig-svg"></svg>',
+    }),
+  },
+}));
+
 // runs.jsonl 由来のフル ISO タイムスタンプ（表示整形の対象。Issue #152）。
 const TS = "2026-07-16T09:00:00Z";
 
@@ -1322,5 +1335,80 @@ describe("CardDetailModal", () => {
 
       expect(onClose).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("課題の一枚絵（fig。Issue #180・FR-14）", () => {
+  function stubFetchWithFig(source: string | undefined) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        if (url.startsWith("/api/fig")) {
+          return Promise.resolve(
+            source === undefined
+              ? { ok: false, status: 404, json: () => Promise.resolve({}) }
+              : {
+                  ok: true,
+                  status: 200,
+                  json: () => Promise.resolve({ source }),
+                },
+          );
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve([]),
+        });
+      }),
+    );
+  }
+
+  it("図のある課題では説明の直上に図を表示する", async () => {
+    stubFetchWithFig("flowchart LR\n  A --> B\n");
+
+    render(
+      <CardDetailModal
+        challenge={challenge({ description: "説明テキスト" })}
+        agentName="medical"
+        onClose={vi.fn()}
+      />,
+    );
+
+    const fig = await screen.findByTestId("card-detail-fig");
+    // 「説明」の dt が図の直後に来る＝図は説明の直上にある。
+    expect(fig.nextElementSibling?.textContent).toBe("説明");
+    // 承認対象（#151 で先頭に置いたタスク案・完了条件）は図より前のまま。
+    const order = Array.from(
+      screen.getByTestId("ledger-join").querySelectorAll("dt"),
+    ).map((element) => element.textContent ?? "");
+    expect(order).toEqual([
+      "タスク案",
+      "完了条件",
+      "関連リポジトリ",
+      "関連Issue",
+      "関連PR",
+      "図",
+      "説明",
+    ]);
+  });
+
+  it("図が無い課題では図の行が現れず、従来どおり文章のみを表示する", async () => {
+    stubFetchWithFig(undefined);
+
+    render(
+      <CardDetailModal
+        challenge={challenge({ description: "説明テキスト" })}
+        agentName="medical"
+        onClose={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("説明テキスト");
+    await waitFor(() => {
+      expect(screen.queryByTestId("card-detail-fig")).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId("ledger-description")).toHaveTextContent(
+      "説明テキスト",
+    );
   });
 });
