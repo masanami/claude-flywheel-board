@@ -317,6 +317,25 @@ describe("上流フォーマット契約（台帳）", () => {
     }
   });
 
+  // カードの 4 項目（Issue #185）は上流の正例が正規形として固定している。値は
+  // フィクスチャの文言そのもの（board が整形・補完しないこと）を突き合わせる。
+  it("multiline-and-refs.md: C-101 のカードの 4 項目を 1 行の値として読む", () => {
+    const result = parseFixture("valid", "multiline-and-refs.md");
+
+    expect(result.errors).toEqual([]);
+    const c101 = result.challenges.find(
+      (challenge) => challenge.id === "C-101",
+    );
+    expect(c101?.oneLiner).toBe(
+      "台帳のタスク案と完了条件を、1 項目 1 行の箇条書きで書けるようにする",
+    );
+    expect(c101?.positioning).toBe(
+      "台帳を人間が読み、承認する流れを整える計画の最初の段。書き方が 3 通りに分かれて表示が欠けたため、正規の形を 1 つに決める。",
+    );
+    expect(c101?.currentState).toBe("規定とバリデータを直す PR を作っている");
+    expect(c101?.nextHumanAction).toBe("なし（エージェントが進める）");
+  });
+
   describe("拒否方向: 誤例でも例外を投げない", () => {
     for (const name of fixtureNames("ledger", "invalid")) {
       it(`${name} は例外を投げない`, () => {
@@ -371,6 +390,41 @@ describe("上流フォーマット契約（台帳）", () => {
         "C-011",
       ]);
       expect(result.challenges[0]?.status).toBe("分類済");
+    });
+
+    // カードの 4 項目の複数行化・重複（Issue #185）は上流バリデータが書き込み前に止める。
+    // board は 4 項目を単一行フィールドとして読む（継続行は読み捨て・同一ラベルは先勝ち）
+    // ため errors は空で、書かれた内容の一部が黙って表示から落ちる。検出しない判断は
+    // 他の書き手側違反と同じ（NFR-05・VENDORING.md）。以下は現状の観測の固定。
+    it("card-fields-multiline.md: 継続行は読み捨て・重複は先勝ちで、3 件とも errors なしで見える", () => {
+      const result = parseFixture("invalid", "card-fields-multiline.md");
+
+      expect(result.errors).toEqual([]);
+      expect(result.challenges.map((challenge) => challenge.id)).toEqual([
+        "C-401",
+        "C-402",
+        "C-403",
+      ]);
+      const [c401, c402, c403] = result.challenges;
+      // C-401: ネスト項目で続けた 2 文目は落ち、1 行目だけが残る。
+      expect(c401?.positioning).toBe("台帳の表示を整える計画の一部。");
+      // C-402: 値が空のフィールド行の直下のブロック引用は値にならない。
+      expect(c402?.currentState).toBeUndefined();
+      // C-403: 同一ラベルの 2 回目（計画を承認する）は無視される。
+      expect(c403?.nextHumanAction).toBe("なし（エージェントが進める）");
+    });
+
+    // ステータスは語彙との完全一致で照合するため、遷移列・注記・自由記述が付いた値は
+    // 3 件とも ParseError へ回る（カードは出ず、errors で運用者に見える＝4 項目の
+    // 複数行化とは逆に、board が検出する側の違反）。
+    it("status-vocabulary-suffix.md: 語彙に完全一致しないステータスは 3 件とも ParseError になる", () => {
+      const result = parseFixture("invalid", "status-vocabulary-suffix.md");
+
+      expect(result.challenges).toEqual([]);
+      expect(result.errors).toHaveLength(3);
+      for (const error of result.errors) {
+        expect(error.message).toContain("ステータス が仕様外の値です");
+      }
     });
 
     it("missing-note-field.md: 備考行の巻き添え削除は board の読み取り結果を変えない", () => {

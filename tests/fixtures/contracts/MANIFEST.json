@@ -2,8 +2,8 @@
   "upstream": {
     "repo": "masanami/claude-flywheel",
     "path": "contracts/",
-    "commit": "a0de9b5",
-    "retrievedAt": "2026-08-29"
+    "commit": "eac284d",
+    "retrievedAt": "2026-10-08"
   },
   "files": [
     {
@@ -39,6 +39,10 @@
       "sha256": "99b547c295425f9c5d902844e7a08ecc052747198742e1a153530ef5c70318a5"
     },
     {
+      "path": "fixtures/ledger/invalid/card-fields-multiline.md",
+      "sha256": "0ec07e3d6792a118b0455bc896ceb78242149bb3370ccb0d518d67048244b4eb"
+    },
+    {
       "path": "fixtures/ledger/invalid/continuation-break-variants.md",
       "sha256": "232011f1182a4ea86df98eec23e0952afa2a6d5576b1bf68fb9b864ac2d8b2e8"
     },
@@ -64,7 +68,11 @@
     },
     {
       "path": "fixtures/ledger/invalid/related-refs-freetext.md",
-      "sha256": "0088c303ade81ca37b16766e975309b1e119b5f801b74da688dd8b355beab90b"
+      "sha256": "e8cb97517f937d8107c2f4d1f861a155774faf496422947df8b31625671b12ef"
+    },
+    {
+      "path": "fixtures/ledger/invalid/status-vocabulary-suffix.md",
+      "sha256": "a62e18f180e6e27637af8d707ea7b527746604029fcd3ce8dfb7022e918670a0"
     },
     {
       "path": "fixtures/ledger/invalid/task-plan-bold-heading.md",
@@ -88,7 +96,7 @@
     },
     {
       "path": "fixtures/ledger/valid/multiline-and-refs.md",
-      "sha256": "a2fc95e276f2eee6c85dd3199554183281ceefe2235975c3098184397af06ddc"
+      "sha256": "a3a6828851035905cb14a4d6c4e86fd7793ae3299b8a815e5cda1ed6ac760ff3"
     },
     {
       "path": "fixtures/runs/invalid/bad-ts.jsonl",

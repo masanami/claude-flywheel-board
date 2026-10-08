@@ -899,6 +899,99 @@ describe("複数行フィールド・参照フィールド（#151 / #155）", ()
   });
 });
 
+// カードの 4 項目（一言で・位置づけ・いまの状態・次に人間がすること。Issue #185）。
+// 上流 docs/challenge-ledger-format.md §カードの 4 項目: 分類欄の先頭に置く 1 行の任意
+// フィールド。board は単一行フィールドとして読み、継続行は読み捨て、同一ラベルは先勝ち。
+describe("カードの 4 項目（#185）", () => {
+  function parseOne(classificationLines: string[]) {
+    const content = [
+      "### [C-901] カード項目の確認",
+      "",
+      "**分類欄（エージェントが記入）**",
+      ...classificationLines,
+      "- 担当ポジション: harness",
+      "- ステータス: 着手中",
+      "",
+    ].join("\n");
+    const result = parseLedger(content, "card-fields.md");
+    expect(result.errors).toEqual([]);
+    return result.challenges[0];
+  }
+
+  it("4 項目を oneLiner / positioning / currentState / nextHumanAction として読む", () => {
+    const entry = parseOne([
+      "- 一言で: 表示を整える",
+      "- 位置づけ: 台帳の見た目を整える計画の一部。",
+      "- いまの状態: PR を作っている",
+      "- 次に人間がすること: なし（エージェントが進める）",
+    ]);
+
+    expect(entry?.oneLiner).toBe("表示を整える");
+    expect(entry?.positioning).toBe("台帳の見た目を整える計画の一部。");
+    expect(entry?.currentState).toBe("PR を作っている");
+    expect(entry?.nextHumanAction).toBe("なし（エージェントが進める）");
+  });
+
+  it("4 項目を持たないエントリでは 4 つとも undefined", () => {
+    const entry = parseOne([]);
+
+    expect(entry?.oneLiner).toBeUndefined();
+    expect(entry?.positioning).toBeUndefined();
+    expect(entry?.currentState).toBeUndefined();
+    expect(entry?.nextHumanAction).toBeUndefined();
+  });
+
+  it("一部の項目だけを持つエントリでは、無い項目だけが undefined", () => {
+    const entry = parseOne([
+      "- 一言で: 表示を整える",
+      "- 次に人間がすること: 計画を承認する",
+    ]);
+
+    expect(entry?.oneLiner).toBe("表示を整える");
+    expect(entry?.positioning).toBeUndefined();
+    expect(entry?.currentState).toBeUndefined();
+    expect(entry?.nextHumanAction).toBe("計画を承認する");
+  });
+
+  it("値が空のフィールド行は undefined（空文字にしない）", () => {
+    const entry = parseOne(["- 一言で:", "- 位置づけ:   "]);
+
+    expect(entry?.oneLiner).toBeUndefined();
+    expect(entry?.positioning).toBeUndefined();
+  });
+
+  it("同じ項目が 2 回あれば先勝ち", () => {
+    const entry = parseOne([
+      "- 次に人間がすること: なし（エージェントが進める）",
+      "- 次に人間がすること: 計画を承認する",
+    ]);
+
+    expect(entry?.nextHumanAction).toBe("なし（エージェントが進める）");
+  });
+
+  it("直下のインデント行・引用行は値に取り込まない（1 行目だけを読む）", () => {
+    const entry = parseOne([
+      "- 位置づけ: 計画の一部。",
+      "  - 2 文目を改行して続けた",
+      "- いまの状態: 検査を書いている",
+      "> 引用で続けた",
+    ]);
+
+    expect(entry?.positioning).toBe("計画の一部。");
+    expect(entry?.currentState).toBe("検査を書いている");
+  });
+
+  it("ラベルは完全一致で読み、前方一致の別ラベルは拾わない", () => {
+    const entry = parseOne([
+      "- 一言で（補足）: 拾わない",
+      "- いまの状態です: 拾わない",
+    ]);
+
+    expect(entry?.oneLiner).toBeUndefined();
+    expect(entry?.currentState).toBeUndefined();
+  });
+});
+
 describe("承認チェックボックス（§承認プロトコル）", () => {
   const ENTRY = (approvalBlock: string, status = "計画承認待ち") =>
     `### [C-001] テスト課題

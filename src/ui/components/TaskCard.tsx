@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ApprovalKind, Challenge, Run } from "../board-types.ts";
+import { cardFieldItems } from "../lib/card-fields.ts";
 import {
   ApprovalControl,
   type ApproveSubmitResult,
 } from "./ApprovalControl.tsx";
 import { CardDetailModal } from "./CardDetailModal.tsx";
+import { CardFields } from "./CardFields.tsx";
 
 // ApprovalControl.tsx が正本（#171 で TaskCard から抽出）。既存の import 元
 // （AgentColumn.tsx / Board.tsx / TaskCard.test.tsx 等）を張り替えず、この
@@ -163,6 +165,9 @@ export function TaskCard({
   };
 
   const tooltipVisible = isTooltipVisible && Boolean(challenge.summary);
+  // カードの 4 項目（#185）を持つカードは、面に 4 項目を出す代わりに内輪の ID を
+  // 隠す（ID は詳細モーダルに残る）。持たないカードは従来どおり ID を出す。
+  const hasCardFields = cardFieldItems(challenge).length > 0;
 
   // fixed 配置は viewport 基準なので、カラムのスクロールやウィンドウの
   // リサイズで追従させないとカードから離れてしまう。表示中のみ購読する。
@@ -259,9 +264,16 @@ export function TaskCard({
           }}
         >
           <div className="task-card-title">{challenge.title}</div>
+          <CardFields
+            challenge={challenge}
+            className="task-card-fields"
+            testId="task-card-fields"
+          />
           <div className="task-card-meta">
             <span className="status-dot" data-status={challenge.status} />
-            <span className="task-card-id">{challenge.id}</span>
+            {!hasCardFields && (
+              <span className="task-card-id">{challenge.id}</span>
+            )}
             <span className="task-card-status">{challenge.status}</span>
             {challenge.position && (
               <span

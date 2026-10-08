@@ -652,6 +652,29 @@ body {
   margin-bottom: 0.3rem;
 }
 
+/* カードの 4 項目（一言で・位置づけ・いまの状態・次に人間がすること。#185）:
+ * カードの最初に見える部分。10 秒で掴めるよう長文でも省略せず（clamp しない）
+ * 折り返して全文を出す。ラベルは小さく、値の上に積む。 */
+.task-card-fields {
+  margin: 0 0 0.4rem;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.task-card-fields-item + .task-card-fields-item {
+  margin-top: 0.25rem;
+}
+
+.task-card-fields dt {
+  font-size: 0.7rem;
+  color: var(--board-muted-fg);
+}
+
+.task-card-fields dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .task-card-meta {
   display: flex;
   align-items: center;
@@ -811,6 +834,27 @@ body {
 
 .card-detail-fields dd {
   margin: 0;
+}
+
+/* カードの 4 項目（#185）: 詳細の先頭。カードの面と同じく、ラベルを小さく
+ * 値の上に積み、長文は折り返して全文を出す。 */
+.card-detail-card-fields {
+  margin: 0 0 1rem;
+  font-size: 0.85rem;
+}
+
+.card-detail-card-fields-item + .card-detail-card-fields-item {
+  margin-top: 0.4rem;
+}
+
+.card-detail-card-fields dt {
+  font-size: 0.75rem;
+  color: var(--board-muted-fg);
+}
+
+.card-detail-card-fields dd {
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 /* 複数行フィールド（説明・完了条件・タスク案。#151）: 台帳の改行とネストの

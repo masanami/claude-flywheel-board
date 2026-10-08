@@ -3,7 +3,8 @@ import { resolve } from "node:path";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 // 実ファイルの中身をそのまま取り込む（jsdom 環境では import.meta.url が file: URL に
-// ならず node:fs で解決できないため、Vite の ?raw で読み込む）。
+// ならず node:fs で解決できないため、Vite の ?raw で読み込む。次の 2 つの import とも）。
+import multilineAndRefsLedger from "../../../tests/fixtures/contracts/fixtures/ledger/valid/multiline-and-refs.md?raw";
 import humanHoldLedger from "../../../tests/fixtures/ledger/human-hold.md?raw";
 import { parseLedger } from "../../server/parsers/ledger.ts";
 import type { Challenge } from "../board-types.ts";
@@ -96,6 +97,102 @@ describe("TaskCard", () => {
       "人間対応待ち",
     );
     expect(screen.getByText("人間対応待ち")).toBeInTheDocument();
+  });
+
+  // カードの 4 項目（Issue #185）: 最初に見える部分（カードの面）に出し、ID は
+  // 詳細（モーダル）側へ回す。4 項目を持たないエントリは従来と同じ表示のまま。
+  describe("カードの 4 項目（#185）", () => {
+    const FOUR_FIELDS = {
+      oneLiner: "表示を整える",
+      positioning: "台帳の見た目を整える計画の一部。",
+      currentState: "PR を作っている",
+      nextHumanAction: "完了を承認する",
+    };
+
+    it("4 項目を持つカードは、面に 4 項目をラベル付きで定義順に出す", () => {
+      render(
+        <TaskCard challenge={challenge(FOUR_FIELDS)} agentName="medical" />,
+      );
+
+      const fields = screen.getByTestId("task-card-fields");
+      expect(
+        Array.from(fields.querySelectorAll("dt")).map((dt) => dt.textContent),
+      ).toEqual(["一言で", "位置づけ", "いまの状態", "次に人間がすること"]);
+      expect(
+        Array.from(fields.querySelectorAll("dd")).map((dd) => dd.textContent),
+      ).toEqual([
+        "表示を整える",
+        "台帳の見た目を整える計画の一部。",
+        "PR を作っている",
+        "完了を承認する",
+      ]);
+    });
+
+    it("4 項目を持つカードは、面のメタ行から ID を隠し、ステータスとポジションは残す", () => {
+      const { container } = render(
+        <TaskCard
+          challenge={challenge({
+            ...FOUR_FIELDS,
+            id: "C-042",
+            status: "着手中",
+            position: "medical",
+          })}
+          agentName="medical"
+        />,
+      );
+
+      expect(screen.queryByText("C-042")).not.toBeInTheDocument();
+      expect(container.querySelector(".task-card-id")).not.toBeInTheDocument();
+      expect(container.querySelector(".status-dot")).toBeInTheDocument();
+      expect(screen.getByText("着手中")).toBeInTheDocument();
+      expect(screen.getByText("medical")).toBeInTheDocument();
+    });
+
+    it("一部の項目だけを持つカードは、ある項目だけを出し、ID は隠す", () => {
+      render(
+        <TaskCard
+          challenge={challenge({
+            id: "C-043",
+            oneLiner: "表示を整える",
+            nextHumanAction: "計画を承認する",
+          })}
+          agentName="medical"
+        />,
+      );
+
+      const fields = screen.getByTestId("task-card-fields");
+      expect(
+        Array.from(fields.querySelectorAll("dt")).map((dt) => dt.textContent),
+      ).toEqual(["一言で", "次に人間がすること"]);
+      expect(screen.queryByText("位置づけ")).not.toBeInTheDocument();
+      expect(screen.queryByText("C-043")).not.toBeInTheDocument();
+    });
+
+    it("4 項目を持たないカードは従来どおり ID を出し、項目ブロックを出さない", () => {
+      render(
+        <TaskCard challenge={challenge({ id: "C-044" })} agentName="medical" />,
+      );
+
+      expect(screen.getByText("C-044")).toBeInTheDocument();
+      expect(screen.queryByTestId("task-card-fields")).not.toBeInTheDocument();
+    });
+
+    it("実ファイルの台帳（上流の正例 C-101）をパースした結果が 4 項目つきのカードとして出る", () => {
+      const parsed = parseLedger(
+        multilineAndRefsLedger,
+        "multiline-and-refs.md",
+      );
+      expect(parsed.errors).toEqual([]);
+      const c101 = parsed.challenges.find((c) => c.id === "C-101");
+      if (!c101) throw new Error("C-101 がパース結果に無い");
+
+      render(<TaskCard challenge={c101} agentName="medical" />);
+
+      expect(screen.getByTestId("task-card-fields")).toHaveTextContent(
+        "規定とバリデータを直す PR を作っている",
+      );
+      expect(screen.queryByText("C-101")).not.toBeInTheDocument();
+    });
   });
 
   it("承認導線を持たないカードは詳細モーダルを開く実ボタン 1 個だけを持つ", () => {

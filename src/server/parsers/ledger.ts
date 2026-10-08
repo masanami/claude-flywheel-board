@@ -87,6 +87,18 @@ export type Challenge = {
   completionCriteria?: string;
   /** タスク案。ラベル "タスク案" に完全一致するフィールドから抽出 */
   taskPlan?: string;
+  // カードの 4 項目（claude-flywheel `docs/challenge-ledger-format.md` §カードの 4 項目）。
+  // 分類欄の先頭に置かれる 1 行の任意フィールドで、カードの最初に見える部分に出す。
+  // いずれも単一行フィールドとして読む（継続行は読み捨て、同一ラベルの重複は先勝ち。
+  // isMultilineFieldLabel の対象外）。値が無い場合は undefined。
+  /** 一言で（何をする課題か）。ラベル "一言で" に完全一致 */
+  oneLiner?: string;
+  /** 位置づけ（全体計画のどこにあり、なぜ要るか）。ラベル "位置づけ" に完全一致 */
+  positioning?: string;
+  /** いまの状態（進み具合）。ラベル "いまの状態" に完全一致 */
+  currentState?: string;
+  /** 次に人間がすること。ラベル "次に人間がすること" に完全一致 */
+  nextHumanAction?: string;
   /** 関連リポジトリ（作業対象）。値が無い場合は undefined */
   relatedRepos?: ChallengeRef[];
   /** 関連Issue。値が無い場合は undefined */
@@ -475,6 +487,10 @@ export function parseLedger(
       COMPLETION_CRITERIA_LABEL_PREFIX,
     );
     const taskPlan = getField(entry.fields, "タスク案");
+    const oneLiner = getField(entry.fields, "一言で");
+    const positioning = getField(entry.fields, "位置づけ");
+    const currentState = getField(entry.fields, "いまの状態");
+    const nextHumanAction = getField(entry.fields, "次に人間がすること");
     // 参照フィールド（§関連リポジトリ・関連Issue・関連PR）。短縮形の owner 解決に
     // 同エントリの関連リポジトリを使うため、先に関連リポジトリをパースする。
     const relatedRepos = parseRepoRefs(
@@ -500,6 +516,10 @@ export function parseLedger(
       description,
       completionCriteria,
       taskPlan,
+      oneLiner,
+      positioning,
+      currentState,
+      nextHumanAction,
       relatedRepos: refsOrUndefined(relatedRepos),
       relatedIssues: refsOrUndefined(relatedIssues),
       relatedPrs: refsOrUndefined(relatedPrs),
