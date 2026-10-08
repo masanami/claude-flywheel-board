@@ -21,6 +21,7 @@ import {
   ApprovalControl,
   type ApproveSubmitResult,
 } from "./ApprovalControl.tsx";
+import { CardFields } from "./CardFields.tsx";
 import { ChallengeFig } from "./ChallengeFig.tsx";
 
 type CardDetailModalProps = {
@@ -274,6 +275,15 @@ export function CardDetailModal({
             閉じる
           </button>
         </div>
+
+        {/* カードの 4 項目（#185）: カードの面に出している 4 項目を詳細でも先頭に
+         * 再掲する。面では隠した ID・タスク案などの内輪の情報は以降の欄に残る。
+         * 4 項目を持たない課題では何も描画されず、従来の表示のまま。 */}
+        <CardFields
+          challenge={challenge}
+          className="card-detail-card-fields"
+          testId="card-detail-card-fields"
+        />
 
         <dl className="card-detail-fields">
           <dt>ID</dt>

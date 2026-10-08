@@ -28,7 +28,7 @@ board は台帳・journal・runs.jsonl の**消費者**であり、フォーマ�
 
 | 上流の type | 収録 | 判断根拠 |
 | --- | --- | --- |
-| `fixtures/ledger/` （正例 4・誤例 9） | **全件** | `parseLedger` が読む。誤例も board が実際に遭遇する入力——board は「壊れた状態を観測する面」であり、壊れた台帳を読むこと自体が正常な運用状態にある |
+| `fixtures/ledger/` （正例 4・誤例 11） | **全件** | `parseLedger` が読む。誤例も board が実際に遭遇する入力——board は「壊れた状態を観測する面」であり、壊れた台帳を読むこと自体が正常な運用状態にある |
 | `fixtures/journal-index/` （正例 2・誤例 6） | **全件** | `parseJournal` が読む |
 | `fixtures/runs/` （正例 2・誤例 5） | **全件** | `parseRuns` が読む |
 | `schemas/journal-index.schema.json`・`schemas/runs.schema.json` | **収録** | パーサテストで**判定オラクル**として実行する（下記「スキーマの使い方」） |
@@ -118,8 +118,8 @@ FLYWHEEL_CONTRACTS_DIR=/path/to/claude-flywheel npm run contracts:verify
 | テスト | 固定する内容 |
 | --- | --- |
 | `scripts/verify-contract-fixtures.test.ts` | vendoring の同期規律そのもの（複製の自己検査・上流差分検査・検査不能の扱い） |
-| `src/server/parsers/contracts.test.ts` | 全収録フィクスチャの**受理方向**（`valid/` を期待どおり読めること）と**拒否方向**（`invalid/` でクラッシュせず、検出できるものは検出すること）。スキーマと board パーサの判定差の棚卸し、**ステータス語彙の双方向一致**（`ledger-status-vocabulary.tsv` ↔ `LEDGER_STATUSES` ↔ スキーマ enum）もここ |
-| `src/server/parsers/ledger.test.ts` | 台帳の複数行フィールド・参照フィールドの値レベルの受理方向（#151 / #155） |
+| `src/server/parsers/contracts.test.ts` | 全収録フィクスチャの**受理方向**（`valid/` を期待どおり読めること）と**拒否方向**（`invalid/` でクラッシュせず、検出できるものは検出すること）。スキーマと board パーサの判定差の棚卸し、**ステータス語彙の双方向一致**（`ledger-status-vocabulary.tsv` ↔ `LEDGER_STATUSES` ↔ スキーマ enum）もここ。カードの 4 項目の複数行化・重複（`card-fields-multiline.md`）は上流バリデータが止める違反で、board は継続行を読み捨て・重複を先勝ちにして errors なしで読む——この**現状の観測**を固定している（board は検出しない・NFR-05） |
+| `src/server/parsers/ledger.test.ts` | 台帳の複数行フィールド・参照フィールドの値レベルの受理方向（#151 / #155）、カードの 4 項目（一言で・位置づけ・いまの状態・次に人間がすること）の単一行読み取り（#185） |
 | `src/server/parsers/calendar-date.test.ts` | 暦日の実在判定（`format: date` / `date-time` の意味検証に相当する部分） |
 
 ### 既知の観測限界: board から無言で消える台帳エントリ

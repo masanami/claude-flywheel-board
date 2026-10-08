@@ -811,6 +811,75 @@ describe("CardDetailModal", () => {
     });
   });
 
+  // カードの 4 項目（Issue #185）: カードの面に出す 4 項目を、詳細でも先頭に再掲する
+  // （面では隠した ID はこの詳細に残る）。4 項目を持たない課題のモーダルは従来のまま。
+  describe("カードの 4 項目（#185）", () => {
+    it("4 項目を持つ課題は、モーダル先頭（ID を含む基本項目より前）に 4 項目を出す", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+
+      render(
+        <CardDetailModal
+          challenge={challenge({
+            id: "C-077",
+            oneLiner: "表示を整える",
+            positioning: "台帳の見た目を整える計画の一部。",
+            currentState: "PR を作っている",
+            nextHumanAction: "完了を承認する",
+          })}
+          agentName="medical"
+          onClose={vi.fn()}
+        />,
+      );
+
+      const fields = screen.getByTestId("card-detail-card-fields");
+      expect(
+        Array.from(fields.querySelectorAll("dt")).map((dt) => dt.textContent),
+      ).toEqual(["一言で", "位置づけ", "いまの状態", "次に人間がすること"]);
+      expect(fields).toHaveTextContent("台帳の見た目を整える計画の一部。");
+      // 先頭: ID を含む基本項目の dl より文書順で前にある。
+      const idTerm = screen.getByText("ID");
+      expect(
+        fields.compareDocumentPosition(idTerm) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      // ID は詳細に残る。
+      expect(screen.getByText("C-077")).toBeInTheDocument();
+    });
+
+    it("一部の項目だけを持つ課題は、ある項目だけを出す", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+
+      render(
+        <CardDetailModal
+          challenge={challenge({ currentState: "検査を書いている" })}
+          agentName="medical"
+          onClose={vi.fn()}
+        />,
+      );
+
+      const fields = screen.getByTestId("card-detail-card-fields");
+      expect(
+        Array.from(fields.querySelectorAll("dt")).map((dt) => dt.textContent),
+      ).toEqual(["いまの状態"]);
+    });
+
+    it("4 項目を持たない課題は項目ブロックを出さない", () => {
+      vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+
+      render(
+        <CardDetailModal
+          challenge={challenge()}
+          agentName="medical"
+          onClose={vi.fn()}
+        />,
+      );
+
+      expect(
+        screen.queryByTestId("card-detail-card-fields"),
+      ).not.toBeInTheDocument();
+    });
+  });
+
   // 複数行フィールド（#151）と参照フィールド（#155）。台帳の正規形は
   // 「フィールド行＋直下のネスト箇条書き」で、承認者（FR-13）が何を承認するのか
   // 見えるようにするため、パーサが結合した改行をそのまま表示する。
